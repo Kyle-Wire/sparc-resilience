@@ -223,8 +223,9 @@ export function Caveats({ caveats, open }: { caveats: string[]; open?: boolean }
 }
 
 /**
- * What Model details passes to the page of a section: the rail label as its title, `intro: null`
- * (the section's one-line intro is above it), `level: 3` for a second page under that title, and
+ * What Model details passes to the page of a section: the rail label as its title and the
+ * section's one-line intro as its `intro` (rendered under the title; `intro: null` on a second
+ * page, which drops its own), `level: 3` for a second page under that title, and
  * `detailsOnly` to leave out the charts a planner tab already shows. Without props a page renders
  * its full original content.
  */

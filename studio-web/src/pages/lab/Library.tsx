@@ -1,4 +1,5 @@
-// Scenario library (`/r/:rid/lab/library`, SPEC §7.4, §7.8, §7.12), two groups:
+// Scenario library (`/r/:rid/lab/library`, SPEC §7.4, §7.8, §7.12), two groups, each titled
+// with a kicker under the page's own title:
 // - "Set up with this run" (first; phase 2, the canonical home of the run's configured
 //   scenarios, formerly the Scenarios run tab): the scenarios view's sections from
 //   ../runhub/Scenarios (city-mean change per scenario, ladders, the table) with the Lab's row
@@ -245,9 +246,9 @@ export default function Library() {
           />
         </section>
         <section className="composer-section stack" data-group="project" aria-labelledby="library-project">
-          <h2 id="library-project" className="composer-heading">
+          <h3 id="library-project" className="kicker composer-heading">
             Project scenarios
-          </h2>
+          </h3>
           <div className="row" role="search">
             <input type="search" aria-label="Search scenarios" placeholder="Search names, tags, notes" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
             <div className="chips" role="group" aria-label="Status">

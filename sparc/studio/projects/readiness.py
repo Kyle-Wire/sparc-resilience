@@ -239,7 +239,7 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
         else:
             missing = [k for k in STUDY_KINDS if k not in kinds]
             out.append(_row("studies", "warn", (f"done: {', '.join(done)}; " if done else "") +
-                            f"not run: {', '.join(missing)}", _open("Open validation", f"/r/{rid}/validation")))
+                            f"not run: {', '.join(missing)}", _open("See the checks", f"/r/{rid}/trust")))
     return out
 
 

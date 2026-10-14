@@ -1,1 +1,0 @@
-import{E as e}from"./router-C1Q5aTSY.js";import{N as t}from"./EmptyState-07gIsbLj.js";var n=e();function r({tone:e=`neutral`,icon:r,children:i,title:a}){return(0,n.jsxs)(`span`,{className:`pill`,"data-tone":e===`neutral`?void 0:e,title:a,children:[r?(0,n.jsx)(t,{name:r}):null,i]})}export{r as t};

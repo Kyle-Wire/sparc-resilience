@@ -284,13 +284,16 @@ def render_report(result) -> str:
     if m.get("climate"):
         c = m["climate"]
         thr = c["thresholds"][-1]
+        # One header cell per column (a column per adaptation variant, none without any), and the
+        # separator with the same count: a stray empty cell would break the markdown table.
+        head = ["pathway", "period", "warming median (10–90%)", f"share ≥ {thr:g} {u}: no adaptation"]
+        head += [f"with {a}" for a in c["adaptation"]]
         L += ["## Climate projections (CMIP6 delta method)", "",
               f"Change in {'-'.join(str(x) for x in c['months'])} mean daily {c['variable']} vs {c['baseline']}, "
               f"{c['n_models']} CMIP6 models at {c['site']['lat']:.3f}°, {c['site']['lon']:.3f}° "
               f"(land-weighted bilinear).  Future = observed + model warming (+ adaptation Δ).", "",
-              f"| pathway | period | warming median (10–90%) | share ≥ {thr:g} {u}: no adaptation | " +
-              " | ".join(f"with {a}" for a in c["adaptation"]) + " |",
-              "|---|---|---|---|" + "---|" * len(c["adaptation"])]
+              "| " + " | ".join(head) + " |",
+              "|" + "---|" * len(head)]
         L.append(f"| today | — | — | {_f(100 * c['present']['share_at_or_above'][str(float(thr))], 1)}% |" +
                  " — |" * len(c["adaptation"]))
         for p in c["projections"]:

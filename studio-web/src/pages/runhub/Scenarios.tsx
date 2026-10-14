@@ -6,8 +6,9 @@
 // ConfiguredScenarios (the same sections, with the Lab's row actions and the
 // `?configured=<slug>` focus), without what other tabs own: the ladders repeat What cools'
 // dose-response curves (a one-line link instead), and the causal band is How much to trust
-// this's (a small badge per table row instead of the chart's diamonds). The default export (the
-// former run tab) renders them in full (`full`). The Verdict column shows only when a row has one.
+// this's (a small badge per table row instead of the chart's diamonds), and the chart has no
+// table view (the table lists each scenario's numbers once, with its actions). The default export
+// (the former run tab) renders them in full (`full`). The Verdict column shows only when a row has one.
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ScenarioRow, ScenariosSections, Sections } from "../../api/runs";
 import { cloneConfiguredScenario } from "../../api/runs";
@@ -266,6 +267,8 @@ export function ScenarioSections({
               rangeLabel="Likely range"
               outerLabel="10th–90th percentile of cells"
               onRowClick={(slug) => navigate(`/r/${encodeURIComponent(rid)}/map?layer=${encodeURIComponent(`sc:${slug}`)}`)}
+              // In the Lab the table below lists each scenario's numbers with its actions: no second listing here.
+              tableView={full ? undefined : false}
               caption={`${best ? `Strongest: ${best.name}, ${likelyText(best.delta, u)}. ` : ""}${flagged.length ? `The model is outside the causal band for ${flagged.map((r) => r.name).join(", ")}. ` : ""}Select a dot to map that scenario's change.`}
             />
           );
@@ -305,13 +308,14 @@ export default function Scenarios() {
 
 /**
  * Scenario Lab › Library's first group (phase 2, the canonical home of the run's configured
- * scenarios): the run tab's sections under the Library's own title and intro, with the Lab's row
- * actions, and a note when `focus` names no configured scenario of this run.
+ * scenarios): the run tab's sections under the group's title (a kicker under the Library's own
+ * title) and intro, with the Lab's row actions, and a note when `focus` names no configured
+ * scenario of this run. The chart has no table view: the table lists the same numbers once.
  */
 export function ConfiguredScenarios({ title, intro, focus = null, actions }: { title: string; intro?: ReactNode; focus?: string | null; actions?: ScenarioActions }) {
   const rid = useRid();
   return (
-    <ViewPage view="scenarios" title={title} intro={intro}>
+    <ViewPage view="scenarios" title={title} intro={intro} level={3} kicker>
       {(s) => (
         <>
           {focus && s.rows && !s.rows.some((r) => r.slug === focus) ? <p className="callout">This run has no configured scenario “{focus}”.</p> : null}

@@ -808,6 +808,8 @@ def test_studies_row_counts_post_run_outputs(client, ctx, demo, tmp_path):
                            "mode": "full", "created_utc": "2026-10-01T12:00:00Z"})
     row = spine(client, demo["id"])["studies"]
     assert row["state"] == "warn" and "not run: baselines, placebo, multiverse, simcheck, uncertainty" in row["detail"]
+    # the run's checks live on its How much to trust this tab (not the legacy /validation path)
+    assert row["action"]["label"] == "See the checks" and row["action"]["path"] == "/r/20261001-120000-full-e5f6/trust"
     for name in ("baselines.json", "uncertainty.json"):
         (run_dir / name).write_text("{}")
     for i, (kind, status) in enumerate((("placebo", "succeeded"), ("multiverse", "imported"), ("simcheck", "running"))):

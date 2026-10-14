@@ -73,14 +73,17 @@ describe("Library › Set up with this run", () => {
     const groups = [...container.querySelectorAll("[data-group]")].map((g) => g.getAttribute("data-group"));
     expect(groups).toEqual(["configured", "project"]);
     const setUp = container.querySelector('[data-group="configured"]')!;
-    expect(setUp.querySelector("h2")!.textContent).toBe("Set up with this run");
+    // a group under the page's own title: a kicker, not a second h2
+    expect(setUp.querySelector("h2")).toBeNull();
+    expect(setUp.querySelector("h3.kicker")!.textContent).toBe("Set up with this run");
     // the ladders repeat What cools' dose-response curves: a one-line link instead
     expect(setUp.querySelector('figure.chart-frame[data-chart="Scenario ladders"]')).toBeNull();
     expect(setUp.querySelector("[data-ladders-link] a")!.getAttribute("href")).toBe(`/r/${RID}/effects`);
     // the causal band is How much to trust this's: no diamonds or "outside the causal band" caption, a badge per row
     const effects = setUp.querySelector('figure.chart-frame[data-chart="City-mean change per scenario"]')!;
     expect(effects.querySelector("figcaption")!.textContent).not.toMatch(/causal/i);
-    expect(effects.querySelector("details.table-view")!.textContent).not.toMatch(/causal/i);
+    // the numbers are listed once, in the table below: the chart has no table view
+    expect(effects.querySelector("details.table-view")).toBeNull();
     // the configured scenarios are listed once, in this group (the old "Configured in this run" table is gone)
     const tables = [...container.querySelectorAll("table.tbl")].filter((t) => t.querySelector("caption")?.textContent === "Configured scenarios");
     expect(tables.length).toBe(1);
@@ -101,7 +104,7 @@ describe("Library › Set up with this run", () => {
     expect(byText(setUp, "a", "Open in Lab")).toBeNull();
     // the project's own scenarios follow
     const project = container.querySelector('[data-group="project"]')!;
-    expect(project.querySelector("h2")!.textContent).toBe("Project scenarios");
+    expect(project.querySelector("h3.kicker")!.textContent).toBe("Project scenarios");
     expect(byText(project, "a", "Downtown cool corridor")).not.toBeNull();
   });
 

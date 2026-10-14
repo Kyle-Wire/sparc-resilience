@@ -108,7 +108,7 @@ function TrustCell({ run }: { run: RunSummary }) {
   );
 }
 
-/** Labels of server readiness actions that name a run tab which no longer exists (phase 2), in the new words. */
+/** Labels of server readiness actions that name a run tab which no longer exists (phase 2; an older server's), in the new words. */
 const MOVED_ACTION_LABELS: Record<string, string> = { "Open validation": "See the checks" };
 
 /**
