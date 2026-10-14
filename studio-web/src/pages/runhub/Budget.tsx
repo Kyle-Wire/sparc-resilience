@@ -5,10 +5,14 @@
 // empty state, not a missing output.
 // Phase 2: its home is Scenario Lab › Plans, whose first entry "Plan from this run" (read-only)
 // is RunBudgetPlan. The default export (the former run tab) renders the same sections.
+// Plain words (phase 4): places and amounts, "planned" (open loop) and "checked" (closed loop, the
+// full model) from the glossary, each technical term with an ⓘ.
 import type { ReactNode } from "react";
 import type { BudgetSections, Sections } from "../../api/runs";
 import { Pareto } from "../../charts";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Table } from "../../components/ui/Table";
+import { term } from "../../content/glossary";
 import { Link } from "../../router";
 import { fmtInt, fmtNum, fmtValue, unitLabel } from "../../theme/format";
 import { fmtLonLat } from "../../map/grid";
@@ -17,6 +21,9 @@ import { RunLayerMap } from "./RunLayerMap";
 
 type TopCell = NonNullable<BudgetSections["top_cells"]>[number];
 
+/** The ⓘ of the budget's key numbers, by KPI id (the labels are the server's). */
+const KPI_TIPS = { planned: { term: "open_loop" }, realised: { term: "closed_loop" }, cost: { term: "cost_units" }, gini: { term: "gini" } } as const;
+
 /**
  * The sections of a budget ViewModel (inside its ViewPage, for the units): the explained "no
  * allocation" state (with `replan`, its way out), or the key numbers, the Pareto curve, the dose
@@ -24,12 +31,15 @@ type TopCell = NonNullable<BudgetSections["top_cells"]>[number];
  */
 export function BudgetPlanSections({ s, rid, replan }: { s: Sections<BudgetSections>; rid: string; replan?: ReactNode }) {
   const u = unitLabel(useUnits().target);
+  // the amounts in the lever's unit, as the "Average change where treated" key number states it ("pts")
+  const lu = s.kpis?.find((k) => k.id === "mean_dose")?.unit ?? "";
+  const amountUnit = lu === "pp" ? "pts" : lu;
   if (s.status && s.status !== "ok") {
     return (
       <div className="empty" role="status" data-status={s.status}>
         <div className="empty-title">No allocation: {s.status}</div>
         <div className="empty-body">
-          No cell has a positive cooling footprint for this lever, so the optimiser had nothing to buy. Try another lever or objective in the Lab.
+          No place cools anything, on the spot or nearby, with this lever, so the plan had nothing to buy. Try another lever or objective in the Lab.
         </div>
         {replan}
       </div>
@@ -38,42 +48,47 @@ export function BudgetPlanSections({ s, rid, replan }: { s: Sections<BudgetSecti
   return (
     <>
       <Section title="Budget key numbers" data={s.kpis}>
-        {(k) => <KpiTiles kpis={k} label="Budget" />}
+        {(k) => <KpiTiles kpis={k} label="Budget" tips={KPI_TIPS} />}
       </Section>
       <Section title="Pareto" data={s.pareto}>
         {(p) => {
           const sel = p.budget !== null ? p.points.findIndex((q) => q.budget === p.budget) : -1;
           return (
             <Pareto
-              title="Cooling bought per budget (open-loop)"
+              title="How much cooling each budget buys (planned)"
               units={unitLabel(p.unit)}
-              points={p.points.map((q) => ({ x: q.budget, y: q.total_benefit, label: q.n_segments !== null ? `${fmtInt(q.n_segments)} segments` : undefined }))}
+              points={p.points.map((q) => ({ x: q.budget, y: q.total_benefit, label: q.n_segments !== null ? `${fmtInt(q.n_segments)} steps bought` : undefined }))}
               realised={p.realised?.map((q) => ({ x: q.budget, y: q.total_benefit }))}
               selected={sel >= 0 ? sel : null}
               xLabel="Budget"
               xUnit={unitLabel(p.budget_unit)}
-              yLabel="Total cooling"
+              yLabel={term("total_cooling").label}
               yUnit={unitLabel(p.unit)}
-              curveLabel="planned (open-loop)"
-              realisedLabel="realised (closed-loop, spillover non-additivity)"
-              caption={<>{s.caption ?? ""} Each point is a budget; "segments" are the dose steps bought, which can share a cell. The ring marks this run's budget.</>}
+              curveLabel={term("open_loop").label}
+              realisedLabel={`${term("closed_loop").label} (full model)`}
+              caption={
+                <>
+                  {s.caption ?? ""} The ring marks this run&apos;s budget.
+                  <InfoTip term="pareto" />
+                </>
+              }
             />
           );
         }}
       </Section>
-      <Block title="Dose and closed-loop maps">
+      <Block title="Planned amounts and checked cooling, on the map" tip={<InfoTip term="closed_loop" />}>
         <RunLayerMap rid={rid} keys={["alloc_dose", "alloc_delta"]} title="Budget allocation" />
       </Block>
-      <Section title="Top cells" data={s.top_cells}>
+      <Section title="Top places" data={s.top_cells}>
         {(cells) => (
-          <Block title="Top cells">
+          <Block title="Top places">
             <Table<TopCell>
-              caption="Top cells by cooling"
+              caption="Top places by cooling"
               csvName="budget-top-cells"
               rowKey={(r) => r.row}
               columns={[
                 { key: "rank", label: "Rank", align: "right", value: (r) => r.rank },
-                { key: "id", label: "Cell id", value: (r) => String(r.id) },
+                { key: "id", label: "Place id", value: (r) => String(r.id) },
                 {
                   key: "loc",
                   label: "Location",
@@ -81,8 +96,8 @@ export function BudgetPlanSections({ s, rid, replan }: { s: Sections<BudgetSecti
                   render: (r) => (r.lon !== null && r.lat !== null ? fmtLonLat([r.lon, r.lat]) : "—"),
                 },
                 { key: "zone", label: "Zone", value: (r) => (r.zone === null ? null : String(r.zone)) },
-                { key: "dose", label: "Dose", align: "right", value: (r) => r.dose, render: (r) => fmtNum(r.dose, 2) },
-                { key: "benefit", label: "Cooling", unit: `${u}·cells`, align: "right", value: (r) => r.benefit, render: (r) => fmtValue(r.benefit, "", 2) },
+                { key: "dose", label: "Amount", unit: amountUnit || undefined, align: "right", value: (r) => r.dose, render: (r) => fmtNum(r.dose, 2) },
+                { key: "benefit", label: "Cooling, here and nearby", unit: `${u}·places`, align: "right", value: (r) => r.benefit, render: (r) => fmtValue(r.benefit, "", 2) },
               ]}
               rows={cells}
             />
@@ -100,7 +115,7 @@ export default function Budget() {
     <ViewPage
       view="budget"
       title="Budget"
-      intro="The run's own budget allocation (S7): where a fixed amount of the lever buys the most cooling."
+      intro={`The run's own ${term("budget_plan").label.toLowerCase()}: where a fixed budget for the lever buys the most cooling.`}
       actions={
         <Link to={lab} className="btn small">
           Re-plan in Lab

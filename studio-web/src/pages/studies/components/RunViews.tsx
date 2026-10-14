@@ -2,6 +2,7 @@
 // run's own outputs: baselines forest (distance view), uncertainty layered intervals, literature
 // panel (response view), emulator validation, planner and write-up links, and the "Truth vs
 // recovered" card of synthetic demo projects (`GET /api/runs/{rid}/truth`, SPEC §8, §9.2).
+// Plain words (phase 4): technical chart names stay, each with an ⓘ or a glossary <Term>.
 import { api } from "../../../api/client";
 import { useResource } from "../../../api/resource";
 import { useView, type ResponseSections } from "../../../api/runs";
@@ -9,6 +10,8 @@ import { useTruth, type TruthRow } from "../../../api/studies";
 import { Bars, DotRange, Forest, IntervalStack } from "../../../charts";
 import { excludesZero } from "../../../charts/IntervalStack";
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { InfoTip } from "../../../components/ui/InfoTip";
+import { Term } from "../../../components/ui/Term";
 import { Link, runHref } from "../../../router";
 import { fmtNum, fmtPct, fmtValue, unitLabel } from "../../../theme/format";
 
@@ -35,6 +38,12 @@ export function BaselinesResult({ rid, headline }: { rid: string; headline?: str
       {s.verdict && !sameText(s.verdict.text, headline) ? <p className="vt-headline">{s.verdict.text}</p> : null}
       <Forest
         title="Stack vs reference baselines"
+        note={
+          <>
+            Does the full model (the stack) beat simpler models on the same test areas?
+            <InfoTip term="baselines" label="Reference baselines" />
+          </>
+        }
         units={`ΔMSE (baseline − stack), ${u ? `${u}²` : "target units²"}; positive = stack better`}
         rows={b.map((r) => ({ id: r.id, label: r.label, est: r.delta_mse, se: r.delta_mse_se }))}
         z={2}
@@ -64,13 +73,18 @@ export function UncertaintyResult({ rid }: { rid: string }) {
     <div className="stack">
       <IntervalStack
         title="Layered intervals per scenario"
+        note={
+          <>
+            One band per source of doubt; the widest, the <Term id="envelope">envelope</Term>, counts them all.
+          </>
+        }
         units={`city-mean ΔT${u ? `, ${u}` : ""} (negative = cooler)`}
         rows={rows}
         valueLabel="City-mean ΔT"
         unit={u}
-        caption={env.length ? `${keep} of ${env.length} scenarios exclude zero under the widest (envelope) interval.` : "Estimation intervals only: no specification or attribution layer yet."}
+        caption={env.length ? `${keep} of ${env.length} scenarios keep their direction when every source of doubt is counted (their widest range excludes zero).` : "Estimation intervals only: no specification or attribution layer yet."}
       />
-      <Link to={`${runHref(rid, "trust")}#uncertainty`}>Uncertainty tab (sources, climate spread) →</Link>
+      <Link to={`${runHref(rid, "trust")}#uncertainty`}>How wide the ranges are →</Link>
     </div>
   );
 }
@@ -125,6 +139,12 @@ export function LiteratureResult({ rid }: { rid: string }) {
           <DotRange
             key={q}
             title={`Literature check: ${q}`}
+            note={
+              <>
+                Published values next to this run&apos;s estimate.
+                <InfoTip term="literature_check" label="Literature check" />
+              </>
+            }
             units={`cooling${unit ? `, ${unit}` : ""}`}
             rows={rows}
             valueLabel="Cooling"
@@ -177,6 +197,11 @@ export function EmulatorResult({ rid }: { rid: string }) {
   return (
     <Bars
       title="Emulator vs exact engine"
+      note={
+        <>
+          How often the <Term id="emulator_preview">quick estimate</Term> lands close to the <Term id="exact_engine">full model</Term> on test patches.
+        </>
+      }
       units="% of validation patches within tolerance"
       categories={levers.map(([v]) => v)}
       series={[{ id: "pass", label: "Patches passing", values: levers.map(([, l]) => (l.patch_pass_rate === null || l.patch_pass_rate === undefined ? null : l.patch_pass_rate * 100)) }]}
@@ -284,6 +309,12 @@ export function TruthCard({ rid }: { rid: string }) {
       {ratio.length ? (
         <DotRange
           title="Recovered ÷ planted"
+          note={
+            <>
+              The share of each planted quantity the run recovered.
+              <InfoTip term="effect_share" label="Recovered ÷ planted" />
+            </>
+          }
           units="1 = recovered exactly"
           rows={ratio.map((r) => {
             const band = shareInterval(r);

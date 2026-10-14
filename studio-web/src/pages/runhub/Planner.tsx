@@ -8,21 +8,29 @@
 //   hexagons.gpkg, CSVs with lon/lat added on export) and the before/after pairs.
 // Hot days, equity and zones are optional parts of a pack (no station record, no adaptation
 // package, no zone column): a pack without them says why, not "older code".
+// Plain words (phase 4): futures by emissions and period (the pathway code only in a tooltip),
+// the person-mean temperature as "Average temperature where people live", equity quintiles as fifths of
+// places ranked by the measure ("Lowest density … Highest density"), the concentration index as
+// "Who gets the cooling"; tooltips replace native titles.
 import { useMemo, useState, type ReactNode } from "react";
 import { api, errorMessage } from "../../api/client";
-import type { PlannerSections, ViewModelOf } from "../../api/runs";
+import type { GenericTable, PlannerSections, ViewModelOf } from "../../api/runs";
 import { fileRawUrl, useGridMeta, useView } from "../../api/runs";
 import type { Job } from "../../api/types";
 import { Bars, LineBand, SmallMultiples } from "../../charts";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip, TermTipBody } from "../../components/ui/InfoTip";
 import { Pill } from "../../components/ui/Pill";
+import { Tooltip } from "../../components/ui/Tooltip";
+import { term } from "../../content/glossary";
 import type { OverlayFeature } from "../../map/Overlay";
 import { Link, runHref } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtNum, fmtPct, unitLabel } from "../../theme/format";
-import { Block, GenericTableView, KpiTiles, MissingList, MissingState, OlderCode, Section, UnitsProvider, ViewPage, useRid, useUnits, type Absence } from "./common";
+import { plainCase } from "./climateWords";
+import { Block, GenericTableView, KpiTiles, MissingList, MissingState, OlderCode, Section, TipChip, UnitsProvider, ViewPage, useRid, useUnits, type Absence } from "./common";
 import { RunLayerMap } from "./RunLayerMap";
 
 function Exposure({ e }: { e: NonNullable<PlannerSections["exposure"]> }) {
@@ -30,17 +38,24 @@ function Exposure({ e }: { e: NonNullable<PlannerSections["exposure"]> }) {
   const cats = e.thresholds.map((t) => `≥ ${fmtNum(t, 0)} ${u}`);
   const pct = (a: (number | null)[] | null | undefined) => a?.map((v) => (v === null ? null : v * 100));
   const today = e.groups[0];
+  const ranged = e.groups.some((g) => g.lo?.some((v) => v !== null));
   return (
     <Bars
       title="Residents exposed to heat"
       units="% of residents"
       categories={cats}
       categoryLabel="Temperature"
-      series={e.groups.map((g, i) => ({ id: g.id, label: g.label, values: pct(g.share) ?? [], lo: pct(g.lo), hi: pct(g.hi), muted: i > 2 }))}
+      series={e.groups.map((g, i) => ({ id: g.id, label: plainCase(g.label), values: pct(g.share) ?? [], lo: pct(g.lo), hi: pct(g.hi), muted: i > 2 }))}
       valueLabel="Residents"
       unit="%"
       decimals={1}
-      caption={today ? `${today.label}: ${e.thresholds.map((t, i) => `${fmtPct(today.share[i], 0)} of residents at ≥ ${fmtNum(t, 0)} ${u}`).join(", ")}.` : undefined}
+      caption={
+        today
+          ? `${plainCase(today.label)}: ${e.thresholds.map((t, i) => `${fmtPct(today.share[i], 0)} of residents live where it reaches ${fmtNum(t, 0)} ${u} or more`).join(", ")}.${
+              ranged ? " Whiskers show the range of most climate models." : ""
+            }`
+          : undefined
+      }
     />
   );
 }
@@ -49,19 +64,25 @@ function HotDays({ h }: { h: NonNullable<PlannerSections["hot_days"]> }) {
   const u = unitLabel(useUnits().target);
   return (
     <SmallMultiples
-      title="Hot days per year"
+      title={term("hot_days").label}
+      note={
+        <>
+          From the local weather station&apos;s record
+          <InfoTip term="hot_days" />
+        </>
+      }
       units={h.unit}
       items={h.panels}
-      panelTitle={(p) => p.label}
+      panelTitle={(p) => plainCase(p.label)}
       renderPanel={(p) => (
         <LineBand
           bare
-          title={p.label}
+          title={plainCase(p.label)}
           series={[
-            { id: "campaign", label: "Campaign-like day", x: p.thresholds, y: p.campaign },
+            { id: "campaign", label: "Like the measured afternoon", x: p.thresholds, y: p.campaign },
             { id: "lower", label: "Lower bound", x: p.thresholds, y: p.lower, dashed: true },
           ]}
-          xLabel="Threshold"
+          xLabel="At or above"
           xUnit={u}
           yLabel="Days"
           decimals={1}
@@ -70,14 +91,14 @@ function HotDays({ h }: { h: NonNullable<PlannerSections["hot_days"]> }) {
       )}
       table={{
         columns: [
-          { key: "p", label: "Panel" },
-          { key: "t", label: "Threshold" },
-          { key: "c", label: "Campaign-like days" },
+          { key: "p", label: "Climate" },
+          { key: "t", label: "At or above" },
+          { key: "c", label: "Days like the measured afternoon" },
           { key: "l", label: "Lower-bound days" },
         ],
-        rows: h.panels.flatMap((p) => p.thresholds.map((t, i) => [p.label, t, p.campaign[i] ?? null, p.lower[i] ?? null])),
+        rows: h.panels.flatMap((p) => p.thresholds.map((t, i) => [plainCase(p.label), t, p.campaign[i] ?? null, p.lower[i] ?? null])),
       }}
-      caption="Days per year at or above each threshold: if every hot day looked like the campaign day (solid), and the lower bound from the station record (dashed)."
+      caption="Days per year at or above each temperature: if every hot day were like the measured afternoon (solid line), and a lower bound for ordinary days from the weather-station record (dashed)."
     />
   );
 }
@@ -85,16 +106,53 @@ function HotDays({ h }: { h: NonNullable<PlannerSections["hot_days"]> }) {
 /**
  * Why an optional part of a planner pack is absent (core `planner_pack`): hot days need a
  * station (the run config's `planner.ghcn_station`, else the forcing station) and its daily
- * history, equity an adaptation package, the zone table a `data.zone` column.
+ * history, equity a cooling package, the zone table a `data.zone` column.
  */
 const PACK_ABSENT: Record<"hot_days" | "equity" | "zones", Absence> = {
   hot_days: {
     reason:
-      "The planner pack had no weather-station record to count hot days: the run's config names no GHCN-Daily station (planner.ghcn_station) or forcing station, or the station's daily history could not be downloaded.",
+      "The planner pack had no weather-station record to count hot days: the run's settings name no GHCN-Daily station (planner.ghcn_station) and its weather inputs no station, or the station's daily history could not be downloaded.",
   },
-  equity: { reason: "The planner pack had no adaptation package (a joint scenario) whose cooling it could share out by quintile; Re-run the planner pack can name one." },
+  equity: { reason: "The planner pack had no cooling package (a scenario of several changes together) whose cooling it could share out across places; Re-run the planner pack can name one." },
   zones: { reason: "The run's data has no zone column (data.zone), so the pack has no zone table." },
 };
+
+/** The planner pack's equity measures in plain words, with the names of their lowest and highest fifths. */
+const MEASURES: Record<string, { name: string; low: string; high: string }> = {
+  "population density": { name: "population density", low: "Lowest density", high: "Highest density" },
+  "share aged 60+": { name: "share of residents aged 60+", low: "Fewest aged 60+", high: "Most aged 60+" },
+  "share under 5": { name: "share of children under 5", low: "Fewest under 5", high: "Most under 5" },
+};
+const measureName = (m: string) => MEASURES[m]?.name ?? m;
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+
+/** Quintile `i` of `n` (Q1 = lowest) as a fifth of places: "Lowest density", "2nd fifth", "Middle fifth", "4th fifth", "Highest density". */
+function fifthLabel(i: number, n: number, measure: string, fallback: string): string {
+  if (n !== 5) return fallback;
+  const w = MEASURES[measure];
+  return [w?.low ?? "Lowest fifth", "2nd fifth", "Middle fifth", "4th fifth", w?.high ?? "Highest fifth"][i] ?? fallback;
+}
+
+/** A planner table with futures named in plain words (cells and column labels that name one by code). */
+function plainTable(t: GenericTable): GenericTable {
+  return {
+    ...t,
+    columns: t.columns.map((c) => ({ ...c, label: plainCase(c.label) })),
+    rows: t.rows.map((r) => r.map((v) => (typeof v === "string" ? plainCase(v) : v))),
+  };
+}
+
+/** The concentration index of one measure, as a chip that explains itself on hover, focus or tap. */
+function ConcentrationChip({ c }: { c: { label: string; value: number | null } }) {
+  const t = term("concentration_index");
+  return (
+    <TipChip tip={<TermTipBody tip={t.tip} technical={t.technical} />}>
+      <Pill tone={c.value !== null && Math.abs(c.value) > 0.1 ? "warn" : "neutral"}>
+        {cap(measureName(c.label))}: {fmtNum(c.value, 2)}
+      </Pill>
+    </TipChip>
+  );
+}
 
 function Equity({ eq }: { eq: NonNullable<PlannerSections["equity"]> }) {
   const u = unitLabel(useUnits().target);
@@ -103,24 +161,25 @@ function Equity({ eq }: { eq: NonNullable<PlannerSections["equity"]> }) {
   return (
     <div className="stack">
       <div className="row">
+        {eq.concentration.length ? <span className="cap">{term("concentration_index").label}:</span> : null}
         {eq.concentration.map((c) => (
-          <Pill
-            key={c.label}
-            tone={c.value !== null && Math.abs(c.value) > 0.1 ? "warn" : "neutral"}
-            title="Concentration index: 0 = evenly shared, positive = concentrated in higher quintiles"
-          >
-            {c.label}: {fmtNum(c.value, 2)}
-          </Pill>
+          <ConcentrationChip key={c.label} c={c} />
         ))}
       </div>
       {cur ? (
         <Bars
-          title={`Cooling by ${cur} quintile`}
+          title={`Cooling by ${measureName(cur)}`}
+          note={
+            <>
+              Places ranked by {measureName(cur)} and split into fifths
+              <InfoTip term="quintile" />
+            </>
+          }
           units={u ? `${u} (positive = cooler)` : "positive = cooler"}
-          categories={eq.quintiles.map((q) => q.label)}
-          categoryLabel={`Quintile of ${cur} (1 = lowest)`}
-          series={[{ id: cur, label: "Mean cooling", values: eq.quintiles.map((q) => q.values[cur] ?? null) }]}
-          valueLabel="Mean cooling"
+          categories={eq.quintiles.map((q, i) => fifthLabel(i, eq.quintiles.length, cur, q.label))}
+          categoryLabel={`Fifth of places by ${measureName(cur)} (lowest to highest)`}
+          series={[{ id: cur, label: "Average cooling", values: eq.quintiles.map((q) => q.values[cur] ?? null) }]}
+          valueLabel="Average cooling"
           unit={u || undefined}
           decimals={2}
           actions={
@@ -128,13 +187,13 @@ function Equity({ eq }: { eq: NonNullable<PlannerSections["equity"]> }) {
               <select aria-label="Equity measure" value={cur} onChange={(e) => setM(e.target.value)}>
                 {eq.measures.map((x) => (
                   <option key={x} value={x}>
-                    {x}
+                    {cap(measureName(x))}
                   </option>
                 ))}
               </select>
             ) : undefined
           }
-          caption={`The package's mean cooling (positive = cooler) in each quintile of ${cur} (1 = lowest); a flat profile shares the benefit evenly.`}
+          caption={`The package's average cooling (positive = cooler) in each fifth of places, from the lowest ${measureName(cur)} to the highest. Bars of even height mean the benefit is shared evenly.`}
         />
       ) : (
         <p className="cap">No equity measures in this planner pack.</p>
@@ -168,14 +227,17 @@ function Gis({ rid, gis, hexFiles }: { rid: string; gis: NonNullable<PlannerSect
                   Download
                 </a>
                 {isCsv ? (
-                  <a
-                    className="btn small ghost"
-                    href={fileRawUrl(rid, f.relpath, "csv")}
-                    download
-                    title={noCrs ? "Row indices converted to ids (this run has no CRS, so no lon/lat)" : "Row indices converted to ids with lon/lat"}
+                  <Tooltip
+                    content={
+                      noCrs
+                        ? "Each row's place number is swapped for its id. This run has no map projection (CRS), so the file has no longitude and latitude."
+                        : "Each row's place number is swapped for its id, with its longitude and latitude added."
+                    }
                   >
-                    {noCrs ? "CSV with ids" : "CSV with lon/lat"}
-                  </a>
+                    <a className="btn small ghost" href={fileRawUrl(rid, f.relpath, "csv")} download>
+                      {noCrs ? "CSV with ids" : "CSV with lon/lat"}
+                    </a>
+                  </Tooltip>
                 ) : null}
                 {f.layer ? (
                   <button type="button" className="btn small ghost" aria-pressed={open === f.layer} onClick={() => setOpen(open === f.layer ? null : f.layer)}>
@@ -215,9 +277,9 @@ function RerunPlanner({ rid }: { rid: string }) {
       }}
     >
       <label className="row cap">
-        Package
-        <select value={pkg} onChange={(e) => setPkg(e.target.value)} aria-label="Package for the planner pack">
-          <option value="">Default (from the config)</option>
+        Cooling package
+        <select value={pkg} onChange={(e) => setPkg(e.target.value)} aria-label="Cooling package for the planner pack">
+          <option value="">Default (from the run&apos;s settings)</option>
           {packages.map((p) => (
             <option key={p.slug} value={p.slug}>
               {p.name}
@@ -226,7 +288,7 @@ function RerunPlanner({ rid }: { rid: string }) {
         </select>
       </label>
       <Button type="submit" busy={busy}>
-        Re-run planner with package
+        Re-run the planner pack with this cooling package
       </Button>
     </form>
   );
@@ -250,10 +312,10 @@ export default function Planner() {
               <Section title="Exposure" data={s.exposure}>
                 {(e) => <Exposure e={e} />}
               </Section>
-              <Section title="Person-mean temperature" data={s.person_mean}>
+              <Section title={term("person_mean").label} data={s.person_mean}>
                 {(t) => (
-                  <Block title="Person-mean temperature">
-                    <GenericTableView table={t} caption="Person-mean temperature" csvName="person-mean-temperature" />
+                  <Block title={term("person_mean").label} tip={<InfoTip term="person_mean" />}>
+                    <GenericTableView table={plainTable(t)} caption={term("person_mean").label} csvName="person-mean-temperature" />
                   </Block>
                 )}
               </Section>
@@ -263,7 +325,10 @@ export default function Planner() {
             </Section>
             <Section title="Equity" data={s.equity} absent={absent("equity")}>
               {(eq) => (
-                <Block title="Equity">
+                <Block
+                  title="Equity"
+                  tip={<InfoTip label="Equity" text="Who gets the cooling: the cooling package's cooling in places with more or fewer residents, older residents or young children." technical="Planner-pack equity (mean cooling by quintile, concentration index)" />}
+                >
                   <Equity eq={eq} />
                 </Block>
               )}
@@ -343,12 +408,21 @@ export function PlannerWhereToAct({ rid: ridProp }: { rid?: string } = {}) {
                 </Block>
               )}
             </Section>
-            <Block title="Logger sites">
+            <Block
+              title="Logger sites"
+              tip={
+                <InfoTip
+                  label="Logger sites"
+                  text="Where to put temperature loggers in the next measurement campaign to sharpen the estimate of how much trees cool: places with very different tree cover but similar paving."
+                  technical="Next-campaign logger sites (canopy contrasts at matched impervious cover)"
+                />
+              }
+            >
               {s.sites === null ? (
                 <OlderCode title="Logger sites" />
               ) : (
                 <>
-                  <p className="cap">{s.sites.length} logger sites (orange).</p>
+                  <p className="cap">{s.sites.length} logger sites suggested for the next measurement campaign (orange).</p>
                   <RunLayerMap rid={rid} keys={["people", "obs", "plantable_pp"]} title="Field kit" overlays={sites} />
                 </>
               )}
@@ -377,7 +451,7 @@ export function PlannerGisGallery({ rid: ridProp }: { rid?: string } = {}) {
           </Section>
           {s.pairs?.length ? (
             <Block title="Before/after pairs">
-              <p className="cap">{s.pairs.length} before/after pairs (green links).</p>
+              <p className="cap">{s.pairs.length} before/after pairs (green links): each planted place is matched with a similar unplanted one, to measure the effect after planting.</p>
               <RunLayerMap
                 rid={rid}
                 keys={["people", "obs", "plantable_pp"]}

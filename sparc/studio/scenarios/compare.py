@@ -112,7 +112,8 @@ def resolve_item(ctx, db, ref: Any) -> dict:
                     for v in (s.get("mean_realized") or {})}
         cost = sum(abs(float(m)) * n * per_unit[v] for v, m in (s.get("mean_realized") or {}).items()) \
             if s.get("mean_realized") else None
-        return {"ref": d, "label": match["name"], "delta": delta, "folds": folds, "se": se, "cost": cost,
+        label = L.scenario_labels(ctx).get(match["name"]) or match["name"]   # "Trees & canopy +5 pts"
+        return {"ref": d, "label": label, "delta": delta, "folds": folds, "se": se, "cost": cost,
                 "zero": False, "edited": np.ones(n, dtype=bool), "per_cell": True}
     if kind == "plan":
         prow = db.fetchone("SELECT * FROM plans WHERE id = ?", (d["id"],))

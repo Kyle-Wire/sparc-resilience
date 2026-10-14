@@ -21,8 +21,10 @@ This guide is task-oriented. The exact behaviour is specified in [`SPEC.md`](SPE
 
 Two words are used throughout:
 
-- **Preview** is the linear emulator. It answers in about a tenth of a second while you edit, but it never saturates, never clips to observed conditions and carries no uncertainty. It is always labelled.
-- **Exact** is the fitted model itself (the run's scenario engine). It takes seconds (a fast run) to tens of seconds (a full run), and gives a likely range. Uncertainty, comparisons, impacts and decision packs come only from exact results.
+- **Quick estimate** (technically the *emulator preview*: a linear emulator built from the run). It answers in about a tenth of a second while you edit, but it never levels off, never keeps changes within observed conditions and carries no likely range. It is always labelled.
+- **Full model** (technically the *exact engine*: the run's own fitted models). **Run full model** takes seconds (a fast run) to tens of seconds (a full run), and gives a likely range. Uncertainty, comparisons, impacts and decision packs come only from full-model results.
+
+**Plain words, precise meanings.** Studio is written for city planners. Labels use plain words ("Accuracy score", "Typical error", "Likely range", "Place" for a grid cell); the precise or technical meaning is one hover, tap or keyboard focus away, in the ⓘ next to a label or the dotted underline of a term (for example *Accuracy score* → R², held-out, cross-validated). The same words are used everywhere, from one shared glossary (`sparc/core/glossary.json`) that the standalone results page reads too. This guide uses Studio's labels and gives the technical name in brackets where it helps.
 
 ---
 
@@ -190,16 +192,17 @@ The rules that keep your work safe:
 
 ![Home: the four ways to start, your projects, workspace and engine status](img/home.png)
 
-- **Left sidebar.** The project switcher, then the project's pages: Overview · Setup · Inputs · Launch · Runs · **Scenario Lab** · Studies · Exports · Findings. Scenario Lab stays greyed out until the project has a run with a checkpoint. Activity (all jobs) and Settings sit at the bottom.
-- **Top bar.** Breadcrumb; the active run chip (mode, R², date) with a run switcher; the **job tray** (running and queued jobs, click to open one); the **engine dot** (scenario engine off / loading / ready / busy); the **connection pill** (live, reconnecting, or polling when live updates are blocked); search, i.e. the **command palette**; and the theme switch (system, light, dark).
+- **Left sidebar.** The project switcher, then the project's pages: **Overview** (Set up → Run → Explore → Report) · **Set up** (Data · What you can change · Weather & physics settings · More data · Scenarios · Extra checks · About, then Launch) · **Runs** · **Scenario Lab** · **Reports** (Reports & exports · Notes). A collapsed **Advanced** group holds Studies, the Config editor and Activity (all jobs); Settings sits at the bottom. Scenario Lab stays greyed out until the project has a run with saved models (a checkpoint).
+- **Top bar.** Breadcrumb; the active run chip ("name · date", with a dot for its trust grade) and a run switcher; the **job tray** (running and queued jobs, click to open one); the **full-model dot** ("Full model ready", "Full model loading 42%", "Full model busy"; its tooltip says what each state means); the **connection pill** (live, reconnecting, or polling when live updates are blocked); search, i.e. the **command palette**; and the theme switch (system, light, dark).
 - **Command palette** (Ctrl-K or Cmd-K): jump to a project, run, job, layer or scenario, or start an action.
 
 ![The command palette](img/command-palette.png)
 
 - **Everything is in the URL.** Project, run, tab, map layer, selection, compare items: copy the address and it reopens exactly that view. Reloading a page never loses your place.
 - **The browser tab title** follows the most important running job (`▶ 42% S2_S3 · SPARC Studio`).
-- **Honest numbers.** Every number carries its unit and sign ("cooler", "warmer"); extrapolated cells are hatched; outputs a run does not have say which stage or study would produce them and offer a button for it; stale files are badged. Projects built on the synthetic city carry a **DEMO** badge on every page.
-- **Keyboard.** Every control is reachable with Tab. On a map, the arrow keys move a cell cursor (Shift moves ten cells), Enter pins the cell and a screen reader hears its values.
+- **Honest numbers.** Every number carries its unit and sign ("cooler", "warmer") and, where there is one, its likely range; places beyond measured conditions are hatched ("Less certain here"); outputs a run does not have say which stage or study would produce them and offer a button for it; out-of-date files are badged. Projects built on the synthetic city carry a **DEMO** badge on every page.
+- **Tooltips.** An ⓘ or a dotted underline explains a label: hover it, tap it, or Tab to it; Escape closes it. Studio never relies on the browser's own hover titles.
+- **Keyboard.** Every control is reachable with Tab. On a map, the arrow keys move a cursor from place to place (Shift moves ten), Enter pins the place and a screen reader hears its values.
 
 ---
 
@@ -211,59 +214,59 @@ Each walkthrough is one of the ten user journeys Studio was designed around (SPE
 
 1. Install and run `sparc studio` ([§1](#1-install-and-launch)).
 2. On **Home**, choose **Try a synthetic city**. Studio writes a demo project: a synthetic temperature table with planted cooling effects (`data/city.csv` and its `truth.json`), DEMO people and land-cover layers, a DEMO CMIP6-style climate table and a ready-to-run `config.yml`, all placed at a fictional location (UTM zone 19N, EPSG:32619) so maps have coordinates. This takes about a second.
-3. The project **Overview** opens. Its readiness list shows what is ready and what is missing, each row with a one-click remedy. A demo project is ready to launch; campaign forcing shows "check" because the demo uses generic radiation.
+3. The project **Overview** opens. Its readiness list shows what is ready and what is missing, each row with a one-click remedy. A demo project is ready to launch; the weather inputs (campaign forcing) show "check" because the demo uses generic radiation.
 
    ![Project overview: readiness rows with remedies, latest runs, and the Pipeline Status Board below](img/project-overview.png)
 
-4. Click **Launch first run**. Launch preselects **Fast** and shows, for each mode, the expected time, peak memory and checkpoint size on *this* machine, the stages that will run (S6 "will run" because the demo validates canopy causally) and the plan graph with a time per stage.
+4. Click **Launch first run**. Launch preselects **Fast** and shows, for each mode, the expected time, the memory needed and the size of the saved models on *this* machine, the steps that will run ("Cause checks" will run because the demo checks canopy causally; each step's tooltip gives its stage code, here S6) and the plan graph with a time per step.
 
    ![Launch: mode cards with estimates, the stage list and the plan](img/launch-plan.png)
 
-5. **Start fast run** opens **Mission Control**. The stage rail advances, the timeline grows, the fold × model grid fills in, the response curves draw point by point and the scenario feed lists configured scenarios as they finish ([§5](#5-tracking-runs-and-jobs)).
+5. **Start fast run** opens **Mission Control**. The step rail advances (Check the data → Measure reach → Train the models → … → Write the report), the timeline grows, the test-area × model grid fills in, the cooling-by-amount curves draw point by point and the scenario feed lists the run's set-up scenarios as they finish ([§5](#5-tracking-runs-and-jobs)).
 
    ![Mission Control mid-run: progress, ETA range, stage rail, timeline and the live panel of the running stage](img/mission-control.png)
 
-6. You do not have to wait: the run's **Accuracy** tab works as soon as `predictions.parquet` is written, while later stages are still running (the view says it is live).
+6. You do not have to wait: the run's **How much to trust this** tab (and **Model details › Accuracy**) works as soon as `predictions.parquet` is written, while later stages are still running (the view says it is live).
 
    ![Accuracy, opened while the run is still going](img/accuracy-mid-run.png)
 
-7. When the run succeeds, the overview's primary button becomes **Open Scenario Lab**. In the Lab, start from the template **Shade the hottest 10%**. The preview map appears almost at once.
-8. **Run exact**. The engine loads the run (a couple of seconds for a fast run), the folds tick (three on a fast run) and the result card reads in plain language, for example: "Cools the edited area by 0.41 °F (likely range 0.30–0.52 °F). Confident it cools. 12% of the cooling lands outside the edited cells." ([§7](#7-scenario-lab))
-9. Open **Validation**. Because the city is synthetic, a **Truth vs recovered** card compares the planted effects with what the run recovered (each row says whether the run recovered the truth within 20%, attenuated it or overstated it, with the recovered share; a run without a simulation check does not claim a share in its caveats).
-10. Back in the Lab result, export a **Decision pack**; it appears in Exports with a download link ([§6](#6-outputs-and-exports)).
+7. When the run succeeds, the overview's primary button becomes **Open Scenario Lab**. In the Lab, **Start from an example** such as **Shade the hottest 10%**. The quick estimate appears almost at once.
+8. **Run full model**. The model loads (a couple of seconds for a fast run), the test areas tick (three on a fast run) and the answer card reads in plain language, for example "Cools the places you changed", a big number (−0.41 °F) on a likely-range strip (−0.52 to −0.30 °F), the chip "Confident it cools", and the citywide change, residents and cost underneath ([§7](#7-scenario-lab)).
+9. Open **How much to trust this**. Because the city is synthetic, its **Independent checks** include a **Truth vs recovered** card that compares the planted effects with what the run recovered (each row says whether the run recovered the truth within 20%, under-estimated it or overstated it, with the share recovered; a run without a simulation check does not claim a share in its caveats).
+10. Back in the Lab result, **Export decision pack**; it appears in **Reports** with a download link ([§6](#6-outputs-and-exports)).
 
 ### J2 — A new city from your own CSV
 
 1. Home → **New blank project**, give it a name.
-2. **Setup → Data**: drop your CSV or Parquet file. Large files are streamed to the project's `data/` folder. Studio shows a header preview with each column's type, missing values, range and samples, and **suggests a mapping**: target, id, x/y, zone, coordinate unit (feet or metres, from the coordinate range) and a CRS guess. Pick the CRS from the EPSG list or type any EPSG code.
-3. **Check data** runs the pipeline's S0 on the spot (about 0.3 s for 55,000 rows): QA flags as badges, grid shape and fill fraction, dropped and clipped counts, background temperature, the rounding-noise floor, and a preview map of any column. You can check unsaved edits; nothing is saved until you save.
+2. **Set up → Data**: drop your CSV or Parquet file. Large files are streamed to the project's `data/` folder. Studio shows a header preview with each column's type, missing values, range and samples, and **suggests a mapping**: target, id, x/y, zone, coordinate unit (feet or metres, from the coordinate range) and a CRS guess. Pick the CRS from the EPSG list or type any EPSG code.
+3. **Check data** runs the pipeline's first step (S0) on the spot (about 0.3 s for 55,000 rows): data checks as badges, the grid's shape and the share of it with readings, dropped and clipped counts, background temperature, the smallest possible error (rounding-noise floor), and a preview map of any column. You can check unsaved edits; nothing is saved until you save.
 
-   ![Setup → Data after Check data](img/setup-data-check.png)
+   ![Set up → Data after Check data](img/setup-data-check.png)
 
-4. **Levers**: choose the predictors, then mark the ones a city can change (canopy, impervious, albedo…) as *actionable*, with bounds, unit, doses, direction and cost. The dose-scale table flags doses beyond one standard deviation of what the city has, because the model would be extrapolating.
+4. **What you can change** (levers): choose the map layers the model uses (predictors), then mark the ones a city can change (tree canopy, paving, roof and surface reflectivity…) with bounds, unit, amounts, direction and cost. The **Size of the change** table (dose scale) flags amounts beyond one standard deviation of what the city has, because the model would be going beyond measured conditions.
 
-   ![Setup → Levers](img/setup-levers.png)
+   ![Set up → What you can change](img/setup-levers.png)
 
-5. **Physics**: map the six physics roles (canopy, impervious, albedo, …) to your columns. A missing canopy or impervious role is flagged with what it disables: placebo tests, the simulation check, the planner and the emulator need them.
-6. **Inputs**: four cards, each a tracked download job with its hosts checked first.
-   - **Campaign forcing** (ERA5 + the nearest ISD station) for the measurement day. If the station list is not cached yet, **Fetch station list** downloads it (about 3 MB) once.
+5. **Weather & physics settings**: map the six physics roles (canopy, impervious, albedo, …) to your columns. A missing canopy or impervious role is flagged with what it disables: placebo tests, the simulation check, the planner and the emulator need them.
+6. **More data**: four cards, each a tracked download job with its hosts checked first.
+   - **Weather on the measurement day** (campaign forcing: ERA5 + the nearest ISD station). If the station list is not cached yet, **Fetch station list** downloads it (about 3 MB) once.
    - **People & land cover** (HRSL + WorldCover) for exposure and equity.
    - **Open predictors** (Sentinel-2 and elevation) — also usable on a city with no predictors at all ("bootstrap" mode): either as a new `<name>_open` project or as this project's predictors.
    - **CMIP6 change factors** for the climate stage.
 
    Each card ends with **Link into config**, which shows the YAML change before applying it.
 
-   ![Setup → Inputs: host checks, the forcing form and the people & land-cover card](img/setup-inputs.png)
+   ![Set up → More data: host checks, the weather form and the people & land-cover card](img/setup-inputs.png)
 
-7. **Scenarios**, **Analysis** and **About** set the configured scenario ladders, causal validation, climate, budget optimisation, planner and report details. The config is validated as you go (the "Config valid" chip at the top right); **Edit the YAML** opens the full editor with validation, history and the impact preview.
-8. **Launch** a **Coarse 60 m** run first (a faithful preview at a quarter of the cells), then a **Full** run overnight.
+7. **Scenarios**, **Extra checks** and **About** set the scenarios worked out with every run (amount ladders), cause-and-effect checks, future climate, budget plans and report details. The settings are checked as you go (the line at the top right reads "Settings check passed" or counts the problems); **Edit the settings file (YAML)** opens the full config editor with validation, history and the impact preview.
+8. **Launch** a **Coarse** run at 60 m first (a faithful preview at a quarter of the places), then a **Full** run overnight.
 
 ### J3 — Overnight full run; the laptop sleeps and the server dies
 
-1. Launch **Full** with the CV curve. Launch shows a time range (e.g. 1 h 40 m – 1 h 55 m), peak memory (≈3 GB) and disk (≈0.6 GB).
+1. Launch **Full** with the distance test (CV curve). Launch shows a time range (e.g. 1 h 40 m – 1 h 55 m), the memory needed (≈3 GB) and disk (≈0.6 GB).
 2. Close the lid; the server is killed or the machine sleeps.
 3. Next morning run `sparc studio` again. The job's process is gone and the run never ended, so the job is **interrupted**. If its last memory sample was above 80% of RAM, the label says "possibly out of memory".
-4. The run page shows the **checkpoint card** (Files tab, and the Resume dialog): the stages saved (e.g. S3 and the baselines), when, how big, and whether it still **matches the launch snapshot** (data, code and config; "no: code changed" names what differs). Outputs written before the stop (`predictions.parquet`, `baselines.json`) are already viewable.
+4. The run page shows the **saved-models card** (checkpoint; Model details › Files, and the Resume dialog): the stages saved (e.g. S3 and the baselines), when, how big, and whether it still **matches the launch snapshot** (data, code and config; "no: code changed" names what differs). Outputs written before the stop (`predictions.parquet`, `baselines.json`) are already viewable.
 5. **Resume** shows the plan: S0 reloads the data (always), S1, S2–S3 and the baselines come from the checkpoint, the rest will run, and how much time that saves.
 6. The resumed job's rail marks the reused stages **cached**. Both jobs stay linked to the run.
 
@@ -271,12 +274,12 @@ A resume always uses the run's own launch snapshot (`studio/launch.json`), so ed
 
 ### J4 — Cancel, adjust, relaunch
 
-1. During S2–S3 the stacker leaderboard and the warnings show something you want to change.
+1. During "Train the models" (S2–S3) the model-blend leaderboard (stacker) and the warnings show something you want to change.
 2. **Cancel**. The worker stops at the next safe point (usually within seconds; the model fits check for a cancel between tuning steps) and the job ends **cancelled**. The checkpoint card says what was saved, possibly "none".
 
    ![A run cancelled during S2–S3](img/cancelled.png)
 
-3. Edit the config (Setup, or **Edit the YAML**). The **impact preview** lists, per existing run, which config sections changed and from which stage a re-run would refit ("a re-run with this config would refit from S2_S3"). Existing runs are never affected.
+3. Edit the config (Set up, or **Edit the settings file (YAML)**). The **impact preview** lists, per existing run, which config sections changed and from which stage a re-run would refit ("a re-run with this config would refit from S2_S3"). Existing runs are never affected.
 4. Relaunch from Launch, or use **Duplicate with changes** in Mission Control, which opens Launch prefilled from that run.
 
 If you resume a cancelled run instead, the saved stages are reused:
@@ -285,69 +288,69 @@ If you resume a cancelled run instead, the saved stages are reused:
 
 ### J5 — Explore every output of a finished run
 
-The **run hub** has one tab per kind of output, grouped Model · Effects · Decisions · Trust · Run. A dot on each tab says ready, partial, running, missing or stale.
+A run has seven tabs, each the one home of its facts: **Summary · Map · What cools · Heat risk · Scenario Lab · How much to trust this · Model details**. A dot on each tab says ready, partial, running, missing or out of date.
 
-![Run overview: header, caveats and KPIs](img/run-overview.png)
+![Run summary: header and headline cards](img/run-overview.png)
 
-The **Overview** shows the headline numbers (held-out R², RMSE, 90% interval coverage against its target, interval half-width against the noise floor, the headline scenario, mid-century warming), stage timings, data-health flags, the outputs grid with **stale** badges, and eight study chips. Then tour the tabs ([§6](#6-outputs-and-exports)):
+The **Summary** shows four headline cards — cooling potential, residents at heat risk, the trust grade (Good / Fair / Limited) and the climate outlook — each with its likely range and a link to the tab that explains it, the run's notes, and the step rail while the run is going. The technical headline numbers (held-out R², RMSE, 90% interval coverage, interval half-width against the noise floor), step timings, data-health flags, the outputs grid with **stale** badges and the study chips are in **Model details › Run log**. Then tour the tabs ([§6](#6-outputs-and-exports)):
 
-- **Map** shows every layer (temperature, inputs, CV design, effects, causal, configured scenarios, budget, planner and people) on a canvas at one pixel per cell, with hexagon views, swipe and side-by-side comparison, and layer export as GeoTIFF, CSV or GeoJSON.
+- **Map** shows every layer (temperature, inputs, how the model was tested, effects, cause-and-effect, set-up scenarios, budget, planner and people) on a canvas at one pixel per place, with hexagon views, swipe and side-by-side comparison, and layer export as GeoTIFF, CSV or GeoJSON. Pin a place to see its values and its own cooling-by-amount curves.
 
   ![Map explorer](img/map-explorer.png)
 
-- Brush the far-distance end of the residual histogram: the selection appears on the map, and **Analysis tools → Region stats** summarises it with a jackknife standard error. **Relationships** plots residual against distance to training cells.
+- Brush the far-distance end of the prediction-miss (residual) histogram: the selection appears on the map, and **Analysis tools → Region stats** summarises it with the spread between test areas (jackknife standard error). **Relationships** plots the miss against distance to the places the model was trained on.
 
   ![A brushed histogram selection with its region statistics](img/brushed-selection.png)
 
-- **Pin to Findings** on any chart keeps the numbers on screen, an image and a note in the project's Findings notebook ([§6](#findings)).
-- Export a GeoTIFF of a layer from the map, and a whole-run ZIP from **Exports** (a tracked job; the checkpoint is left out unless you tick it).
+- **Pin to Findings** on any chart keeps the numbers on screen, an image and a note in the project's Findings notebook (**Reports › Notes**, [§6](#findings)).
+- Export a GeoTIFF of a layer from the map, and a whole-run ZIP from **Reports** (a tracked job; the saved models are left out unless you tick them).
 
 ### J6 — A district scenario (planner)
 
-1. Open the **Scenario Lab** on the full run. The engine chip shows the checkpoint loading ("Loading checkpoint 312/525 MB…"), then ready, in about 45 s for a full Providence run.
-2. Build a selection, e.g. zone 3 **and** `lc_built ≥ 0.5`. The selection chip reads "1,284 cells · 1.16 km² · 6,420 residents · median canopy 12%".
-3. Add edits: canopy **fill 50% of plantable headroom**, plus albedo **set 0.35**.
-4. The preview carries a trust badge per lever. Albedo is unreliable city-wide in the emulator, but this edit is local, so the preview is not hatched.
+1. Open the **Scenario Lab** on the full run. The model line under **Run full model** shows the model loading ("Loading model… 60%"), then "Model ready", in about 45 s for a full Providence run.
+2. Work through the steps on the left. **01 What to change**: pick **Trees & canopy**. **02 Where**: choose **A neighbourhood** (or **Custom filter…** for e.g. zone 3 **and** `lc_built ≥ 0.5`). The selection reads "1,284 places · 1.16 km² · 6,420 residents · median canopy 12%".
+3. **03 How much**: **Use available planting space**, 50%. A sentence under the slider says how much fits. **+ Add another change**: **Cool roofs & surfaces**, **Set to exactly** 0.35 (under Advanced options, which hold the other modes).
+4. The **Quick estimate** pane updates as you go, with a trust dot per change ("Quick estimate reliable" / "Quick estimate rough"). Cool roofs are rough citywide in the quick estimate, but this change is local, so the map is not hatched.
 
-   ![Designing a scenario: edits on the left, the preview map, the compile card and Run exact on the right](img/lab-preview.png)
+   ![Designing a scenario: the steps on the left, the map, the quick estimate and Run full model on the right](img/lab-preview.png)
 
-5. **Run exact** (five fold ticks, ≈13 s on a full run). The result shows the edited-area and city means with likely ranges, a ring profile of the cooling that spills outside the edited cells, the share of edited cells outside observed conditions, realised against requested dose, the causal check, residents at or above 90 °F today and in 2041–2060 under SSP2-4.5 with and without the scenario, and the cooling by equity quintile.
+5. **Run full model** (five test-area ticks, ≈13 s on a full run). The answer card gives the cooling where you made changes and citywide, each with a likely range and a confidence chip, then up to four facts (citywide, residents out of Extreme caution, cost, cost per °F). Below it, one section each: **Where it cools** (how far the cooling reaches, by area), **Heat risk & people** (residents at each heat-risk level today, who benefits by fifth of the population), **Against future warming** (mid-century under moderate emissions, with and without the change), **What was actually changed** (what you asked for against what fits), **How sure are we** and **Technical details**.
 
-   ![An exact result in the inspector: the plain-language card, KPIs, the ring profile of the spill and the regions (from the M3 milestone check)](img/lab-exact-result.png)
+   ![A full-model result: the answer card, its facts and the sections below (from the M3 milestone check)](img/lab-exact-result.png)
 
-6. Compare it with the configured "Green Infrastructure Package". The paired standard error is available at once, because the run stored the per-fold results of its configured scenarios.
-7. Save, fork a variant, and leave the project config alone: this scenario cannot be written as a config ladder, and **Promote to config** says it is not eligible and why.
+6. **Pin to compare** and compare it with the set-up "Green Infrastructure Package". The uncertainty of the difference (paired standard error) is available at once, because the run stored the per-test-area results of its set-up scenarios.
+7. Save, copy it as a variant, and leave the project settings alone: this scenario cannot be written as an amount ladder, and **Add to the project settings…** (promote to config) says it is not eligible and why.
 
 ### J7 — Budget plan to field kit
 
-1. Lab → **Plans**: lever canopy, a budget of 20,000 pp·cells, the plantable cap on, objective "people", equity "share aged 60+" with focus 0.3.
-2. The planned allocation and its benefit-versus-budget curve update in under a second as you move the slider. With the "people" objective the residents decide where to plant; the planned benefit and the curve stay the plan's cooling in °F·cells (the caption gives the resident-weighted total apart).
-3. **Verify exactly** re-predicts the whole allocation with the engine and reports planned against realised cooling, e.g. "planned 1,704 vs realised 1,037 °F·cells", labelled *spillover non-additivity*: neighbouring treatments overlap, so per-cell responses do not simply add up.
+1. Lab → **Plans**: Trees & canopy, a budget of 20,000 pp·places, the planting-space cap on, objective "people", **Who to favour** "share aged 60+" with **How strongly** 0.3.
+2. The planned allocation and its **Cooling for each budget** curve update in under a second as you move the slider. With the "people" objective the residents decide where to plant; the **Planned benefit** and the curve stay the plan's total cooling in °F·places (the caption gives the resident-weighted total apart).
+3. **Save plan** (with "Check the plan with the full model after saving" ticked), or later **Check with the full model**, re-predicts the whole allocation and reports planned against **Checked benefit**, e.g. "planned 1,704 vs checked 1,037 °F·places": neighbouring changes overlap, so per-place responses do not simply add up (spillover non-additivity).
 
-   ![A verified plan: planned, realised, cells treated, cost and the benefit curve](img/lab-plan-verified.png)
+   ![A checked plan: planned, checked, places treated, cost and the benefit curve](img/lab-plan-verified.png)
 
-4. **Plan → scenario** puts the plan in the library as a per-cell scenario. **Field kit** lists the cells to treat by rank with longitude and latitude, logger sites and matched before/after pairs for evaluation.
+4. **Make a scenario from it** puts the plan in the library as a per-place scenario. **Field kit** lists the places to treat by rank with longitude and latitude, logger sites and matched before/after pairs for evaluation.
 5. Export a **Plan pack**.
 
 ### J8 — Validation dossier
 
-The run's **Validation** tab has one card per check, each with its status, estimated cost, launch form and result chart ([§8](#8-studies)). On the full run:
+The run's **How much to trust this** tab opens with the trust grade and four checks (**Accuracy in places it never saw**, **Are the ranges honest?**, **Does it hold up away from measurements?**, **Cause or coincidence?**), then **Independent checks**: one card per study, each with its status, estimated cost, launch form and result chart ([§8](#8-studies)). On the full run:
 
-- **Reference baselines** (minutes): does the stack beat simple spatial models?
-- **Placebo tests** (three child runs, each with its own mini stage rail): do fake or displaced layers wrongly show an effect?
+- **Simpler models** (reference baselines, minutes): does the model blend beat simple spatial models?
+- **Fake-change test** (placebo tests: three child runs, each with its own mini step rail): do fake or displaced layers wrongly show an effect?
 
-  ![The placebo form on the Validation tab](img/placebo-form.png)
+  ![The fake-change test form under Independent checks](img/placebo-form.png)
 
-- **Multiverse** (ten variant child runs filling a heatmap): do the conclusions survive reasonable alternative choices?
-- **Simulation check** (a generator × seed grid that can be continued across days): how much of a planted effect does the model recover, and do its intervals cover the truth?
+- **Stability across choices** (multiverse: ten variant child runs filling a heatmap): do the conclusions survive reasonable alternative choices?
+- **Simulation check** (a generator × seed grid that can be continued across days): how much of a planted effect does the model recover, and do its likely ranges cover the truth?
 
-When an attached study finishes, the **uncertainty report** is rebuilt automatically, and its envelopes appear on the configured scenarios and on exact Lab results. Finish with **Regenerate methods & model card** (Docs tab).
+When an attached study finishes, the **uncertainty report** is rebuilt automatically, and its **All sources together** ranges (uncertainty envelopes) appear on the set-up scenarios and on full-model Lab results. Finish with **Regenerate methods & model card** (Model details › Documents).
 
 ![Truth vs recovered on the demo city, with the uncertainty report rebuilt after the placebo study](img/validation-truth.png)
 
 ### J9 — Reproduce and compare
 
-1. **Reproduce this run** (Provenance tab, or the Validation card) re-runs the early stages into a child run and produces a checklist: hard checks (CV design, R² per model, scenario effects, input data) and soft ones (code and package versions).
+1. **Reproduce this run** (Model details › Provenance, or the **Exact re-run** card under Independent checks) re-runs the early stages into a child run and produces a checklist: hard checks (CV design, R² per model, scenario effects, input data) and soft ones (code and package versions).
 2. **Compare runs** (select two in Runs, or `/p/<project>/compare?a=…&b=…`) shows the config differences, metrics, scenario effects with likely ranges, whether data, config, code and grid are the same, the package differences, stage timings, and for runs on the same grid a difference map and the agreement of their priority maps.
 
 ### J10 — Bring existing work in
@@ -389,13 +392,13 @@ Known limitation: the ETA shown at the start of a **resumed** run does not yet d
 
 ### Mission Control
 
-Open a job from the job tray, Activity, or a run's **Track** tab (the run's latest job, with a switcher for its earlier ones).
+Open a job from the job tray, Activity, or a run's **Model details › Run log** (the run's latest job, with a switcher for its earlier ones).
 
 - **Header**: mode badge, status, elapsed time, ETA range, progress bar, the current position (e.g. `cv_curve › 1000 m blocks › fold 4/5 › mgwr › tuning 9/13`), threads and process id. Buttons: **Cancel**, **Force stop** (after the grace period), **Resume**, **Retry**, **Duplicate with changes**, **Open outputs**, **Copy diagnostics** (a JSON blob with the job, its last 200 events and the versions, for bug reports).
-- **Stage rail**: eleven chips S0 … finish with durations or estimates and checkpoint markers.
+- **Step rail**: eleven chips in plain words (Check the data, Measure reach, Train the models, Simple-model check, Distance test, Cooling by amount, Scenarios, Future climate, Cause checks, Budget plan, Write the report); each chip's tooltip gives its stage code (S0 … finish), with durations or estimates and markers where the models were saved.
 - **Timeline**: the span tree (run › stage › task) with bars growing live, warning ticks and checkpoint flags. Gaps of more than 45 s between heartbeats show as a hatched "system sleep?" band. Export it as SVG, PNG or CSV.
 - **Live stage panel**: the QA tiles of S0, the influence ranges of S1, the fold × model heatmap and stacker leaderboard of S2–S3, the baseline forest, the skill-versus-distance curve, the dose–response small multiples of S4, the scenario feed of S5, the causal checklist of S6, planned versus realised of S7.
-- **Bottom tabs**: Logs (filter by level, logger, stage and text; download the raw logs), Warnings (grouped with counts, linked to the relevant view), Outputs (each file as it is written, clickable mid-run), Checkpoints, Resources (memory, CPU and processes, with a warning above 80% of memory) and Config & provenance.
+- **Bottom tabs**: Logs (filter by level, logger, stage and text; hover a line for its full message; download the raw logs), Warnings (grouped with counts, linked to the relevant view), Outputs (each file as it is written, clickable mid-run), Checkpoints, Resources (memory, CPU and processes, with a warning above 80% of memory) and Config & provenance.
 
 Study jobs add a **child matrix** above the tracker: the placebo kinds with their mini rails and verdicts, the multiverse variants, the simulation-check generator × seed grid, the reproduction checklist.
 
@@ -423,7 +426,7 @@ Out-of-memory labels:
   ![Activity](img/activity.png)
 
 - The **Pipeline Status Board** on the project overview has one row per run and one column per stage, post-run action and study: done (seconds), cached, running (%), failed, skipped (reason), disabled, stale or not run, each with its action. It covers runs made with the CLI too. A post-run job still waiting in a launch's "then run" chain shows as running with "queued".
-- **Runs** lists the project's runs (and `/runs` the whole workspace's) with mode, duration, R², RMSE, coverage, checkpoint size, studies and commit; a stage-duration chart across runs, grouped by commit, shows performance changes. Select two to compare.
+- **Runs** lists the project's runs (and `/runs` the whole workspace's) with mode, duration, accuracy score (R²), typical error (RMSE), range reliability (coverage), saved-models size, studies and code version (commit); a stage-duration chart across runs, grouped by commit, shows performance changes. Select two to compare.
 - **Notifications**: a toast with the headline numbers when a job ends, an optional browser notification (Settings), and the count in the tab title.
 
 ### Runs started from the command line
@@ -442,76 +445,65 @@ sparc core run --project configs/core_providence.yml --fast --progress progress.
 
 ### Run tabs
 
-| Group | Tab | What it shows |
-|---|---|---|
-| Model | Overview | Header, KPIs, stage timings, data health, outputs grid, study chips, limitations, the run's findings |
-| | Data | QA tiles and flags, coverage, dose scale, predictor histograms and correlations, zones, coarse grid, joins |
-| | Accuracy | Each model and the stack, observed vs predicted, residuals by zone and fold, interval honesty against the 90% target, stacker, physics, advection, forcing, CV design. Live while the run is going |
-| | Distance | Skill against CV block size, reference baselines, which wins |
-| | Influence | Influence ranges per predictor, correlograms, rings, anisotropy, priors |
-| Effects | Response | Dose–response curves per lever with their shapes and fold means, and the literature comparison |
-| | Causal | Per treatment: forest, audit, doubly-robust curve against the model's own curve, CATE maps, sensitivity |
-| Decisions | Heat | The heat brief: how hot the campaign afternoon felt (NWS heat index), residents by heat-risk category today, with the adaptation package and in each climate future, what helps and how sure ([Heat stress](#heat-stress-and-verdicts)) |
-| | Scenarios | The configured scenarios with likely ranges, ladders, per-fold detail and each one's verdict |
-| | Climate | Warming by SSP and period, models, exposure, adaptation offset, thresholds |
-| | Budget | The S7 allocation: KPIs, Pareto curve, top cells |
-| | Planner | Exposure, person-weighted means, hot days, equity, plantable space, zones, hexagons, logger sites and pairs, GIS files |
-| | Lab | The Scenario Lab ([§7](#7-scenario-lab)) |
-| Trust | Validation | Study cards ([§8](#8-studies)) |
-| | Uncertainty | Layered intervals per scenario, the verdict each supports, and the studies they draw on |
-| | Provenance | Hashes, git, platform, packages and their differences, effective config, launch snapshot, Reproduce |
-| Run | Track | Mission Control for the run's jobs |
-| | Map | The map explorer and analysis tools |
-| | Docs | Run report, methods, model card, uncertainty, placebo, multiverse, simulation-check and benchmark documents; Regenerate |
-| | Files | Every file with its catalogue entry, the data dictionary, previews, raw downloads and conversions, and the checkpoint card |
+A run has seven tabs. The first six speak to planners in plain words; every technical view lives, complete, under **Model details**. Each fact has one home, and the other tabs link to it in one line.
 
-Every tab opens even mid-run. A missing output names the stage or study that produces it and offers the action ("Resume to compute S6", "Run planner pack"). A stage a finished run skipped offers **Re-run with <stage>**, which opens Launch prefilled from that run. Sections that older code did not write say "not in this run (older code)".
+| Tab | What it shows |
+|---|---|
+| **Summary** | Four headline cards — **Cooling potential**, **Residents at heat risk**, **How much to trust this** (the trust grade) and **Climate outlook** — each a number with its likely range and a link to its home; the run's notes; the step rail while the run is going |
+| **Map** | The map explorer and analysis tools: every layer, a pinned place's values and its own cooling-by-amount curves |
+| **What cools** | **What each change does**: per lever, the cooling by amount (dose–response curve) with its likely range, how quickly extra effort stops paying off (**Diminishing returns**: "In 72% of places each extra step of canopy cools less than the last; about 90% of the possible cooling comes by +18 pts"), the shape of the response in each place (Diminishing · Steady · Slow start, then strong · Hit the limit), and a marker at the amount that gives 90% of the cooling; then **how far cooling reaches** and **where to act** (available planting space, zones, sites) |
+| **Heat risk** | Three sections: **Today** (feels-like temperature, residents at each heat-risk level, [Heat stress](#heat-stress-and-verdicts)) · **Who is exposed** (average temperature where people live, hot days per year, who gets the cooling by fifth of the population) · **Future climate** (warming by emissions future and time period, heat risk in each future, how much warming the changes cancel, "can adaptation keep up") |
+| **Scenario Lab** | Design · Library (with the run's set-up scenarios) · Plans (with the run's budget plan) · Compare · More tools (Try amounts) ([§7](#7-scenario-lab)) |
+| **How much to trust this** | The trust grade (**Good / Fair / Limited**, from the accuracy score in places the model never saw, with a check that its likely ranges hold), then four checks — **Accuracy in places it never saw** · **Are the ranges honest?** · **Does it hold up away from measurements?** · **Cause or coincidence?** — then **Independent checks** (study cards, [§8](#8-studies)), **How wide the ranges are** and **Limitations** |
+| **Model details** | A left rail of technical sections, each with a one-line plain intro and an ⓘ on its technical name: **Data & checks** · **Accuracy** (each model and the blend, observed vs predicted, misses by zone and test area, interval honesty, blend weights, physics, wind, weather inputs, how the model was tested) · **Reach & spatial structure** (skill against test-block size, simpler models, influence distances, correlograms, rings, direction, starting assumptions) · **Response curves** (partial dependence, fold means, published studies) · **Cause-and-effect audit** (forest, audit, doubly-robust curve, effect by place, sensitivity) · **Uncertainty sources** · **Run log** (the run's record — headline technical numbers, step timings, data health, the outputs grid, study chips — and Mission Control for its jobs) · **Provenance** (hashes, git, platform, packages, effective config, launch snapshot, Reproduce) · **Documents** (run report, methods, model card and study write-ups; Regenerate) · **Files** (every file with its catalogue entry, the data dictionary, previews, raw downloads and conversions, and the saved-models card) |
+
+Every tab opens even mid-run. A missing output names the step or study that produces it and offers the action ("Resume to compute S6", "Run planner pack"). A step a finished run skipped offers **Re-run with <step>**, which opens Launch prefilled from that run. Sections that older code did not write say "not in this run (older code)". Old links (`/r/<run>/accuracy`, `/r/<run>/climate`, `/r/<run>/track`, …) redirect to the new home of their content.
 
 ### Heat stress and verdicts
 
-Air temperature alone understates danger: humidity slows sweating, so the same air temperature feels hotter on a muggier day. The **Heat** tab turns each cell's measured temperature into the US National Weather Service **heat index** using the campaign's dewpoint (from the forcing file: the airport station's, else ERA5's) and counts residents in the NWS categories:
+Air temperature alone understates danger: humidity slows sweating, so the same air temperature feels hotter on a muggier day. **Heat risk › Today** turns each place's measured temperature into a **feels-like temperature** (the US National Weather Service **heat index**) using the measured afternoon's dewpoint (from the forcing file: the airport station's, else ERA5's) and counts residents at each **heat-risk level** (the NWS categories):
 
-| Category | Heat index | What can happen |
+| Heat-risk level | Feels-like temperature (heat index) | What can happen |
 |---|---|---|
 | Caution | 80–90 °F | fatigue with prolonged exposure or activity |
 | Extreme caution | 90–103 °F | heat cramps and heat exhaustion possible |
 | Danger | 103–125 °F | heat cramps or exhaustion likely, heat stroke possible |
 | Extreme danger | ≥ 125 °F | heat stroke highly likely |
 
-The tab opens with a five-part brief written from the numbers: **how hot it felt**, **who is exposed**, **as the climate warms**, **what helps** and **how sure**. Below it: key numbers, residents by category today, with the adaptation package (the config's first joint scenario) and under each climate pathway (switch the period and the humidity assumption), the distribution of the heat index across the city, the heat-risk map, a futures table and the verdict table.
+The page opens with a five-part brief written from the numbers: **how hot it felt**, **who is exposed**, **as the climate warms**, **what helps** and **how sure**. Below it: key numbers, residents by category today, with the adaptation package (the config's first joint scenario) and under each climate pathway (switch the period and the humidity assumption), the distribution of the heat index across the city, the heat-risk map, a futures table and the verdict table.
 
-- **Futures** add each pathway's median warming to the campaign afternoon. Future humidity is uncertain, so every future is a range between **constant dewpoint** (moisture unchanged, the lower end) and **constant relative humidity** (moisture rises with warming, the upper end), widened by the climate models' 10th–90th percentile warming. The heat index is steep near the category edges, so a few tenths of a degree can move many residents across one; read the ranges, not one number.
+- **Futures** (Heat risk › Future climate) add each emissions future's median warming to the measured afternoon; each is named in plain words, e.g. "Moderate emissions, mid-century (2041–2060)", with the SSP code in its tooltip. Future humidity is uncertain, so every future is a range between **constant dewpoint** (moisture unchanged, the lower end) and **constant relative humidity** (moisture rises with warming, the upper end), widened by the climate models' 10th–90th percentile warming. The heat index is steep near the category edges, so a few tenths of a degree can move many residents across one; read the ranges, not one number.
 - **What-if humidity**: pick a preset (dry 10 °C to oppressive 24 °C) or type a dewpoint to recompute everything for a muggier or drier afternoon. A run without campaign humidity asks for one instead of guessing.
-- **Verdicts** turn each scenario's uncertainty into one word: **Robust** (the plausible range excludes no change and every analysis variant agrees on the sign), **Direction only** (the sign holds but the size could be close to zero) or **Not established** (it cannot be told apart from what the pipeline reports when the simulation plants no effect, or most edited cells are beyond the conditions the model was trained on). An asterisk marks a qualifier such as extrapolation; hover for the reasons. Verdicts need the uncertainty envelopes (Uncertainty tab).
-- In the **Map** explorer, the "Heat stress" group holds the heat index and the heat-risk category, today and with the package.
-- In the **Scenario Lab**, the compile panel shows the draft's heat risk live while you edit (from the instant preview): how many residents it would move out of Extreme caution or worse. When the run's configured scenarios for a lever are Not established or Direction only, the card says so, so a preview never reads as more certain than the evidence. An exact result's impacts lead with the verified heat risk: how many residents it moves out of Extreme caution or worse, today and in each future. The decision pack and the report export ("Heat stress" section) carry the same numbers.
+- **Verdicts** turn each scenario's uncertainty into plain words: **Solid** (robust: the plausible range excludes no change and every analysis variant agrees on the sign), **Direction clear** (direction only: the sign holds but the size could be close to zero) or **Not proven** (not established: it cannot be told apart from what the pipeline reports when the simulation plants no effect, or most changed places are beyond measured conditions). An asterisk marks a qualifier such as going beyond measured conditions; hover, tap or focus it for the reasons. Verdicts need the **All sources together** ranges (uncertainty envelopes; Model details › Uncertainty sources).
+- In the **Map** explorer, the "Heat stress" group holds the feels-like temperature and the heat-risk level, today and with the package.
+- In the **Scenario Lab**, the quick-estimate pane shows the draft's heat-risk shift live while you edit: how many residents it would move out of Extreme caution or worse. When the run's set-up scenarios for a lever are Not proven or Direction clear, the pane says so, so a quick estimate never reads as more certain than the evidence. A full-model answer card leads its facts with the residents it moves out of Extreme caution, and **Heat risk & people** gives every level today and in each future. The decision pack and the report export ("Heat stress" section) carry the same numbers.
 
 ### Findings
 
-**Pin to Findings** (on charts, maps and result cards) stores the view and its full URL state, a title, a Markdown note, the numbers on screen and an optional image. The **Findings** notebook (per project, or `/findings` for all projects) lets you reorder (drag or move buttons), annotate in place, filter by run, open each finding exactly where it was pinned, and export the notebook as a Markdown ZIP with images or a self-contained HTML file. Exports reproduce the snapshotted numbers and carry a provenance block and the caveats.
+**Pin to Findings** (on charts, maps and result cards) stores the view and its full URL state, a title, a Markdown note, the numbers on screen and an optional image. The **Findings** notebook (**Reports › Notes** per project, or `/findings` for all projects) lets you reorder (drag or move buttons), annotate in place, filter by run, open each finding exactly where it was pinned, and export the notebook as a Markdown ZIP with images or a self-contained HTML file. Exports reproduce the snapshotted numbers and carry a provenance block and the caveats.
 
 ![The Findings notebook after an HTML export](img/findings.png)
 
 ### Exports & reports
 
-The **Exports** page has the report builder, one card per export and the project's export history. Every export is a tracked job that writes into `projects/<slug>/exports/<export id>/`; the history lists them with their status, size, **Download** and **Delete**.
+**Reports › Reports & exports** has the report builder, one card per export and the project's export history. Every export is a tracked job that writes into `projects/<slug>/exports/<export id>/`; the history lists them with their status, size, **Download** and **Delete**.
 
-![Exports: report builder, bundle, GIS pack, results page and the export history](img/exports-decision-pack.png)
+![Reports & exports: report builder, bundle, GIS pack, results page and the export history](img/exports-decision-pack.png)
 
 | Export | What you get |
 |---|---|
 | Any layer (Map, Lab) | GeoTIFF (float32, the data's CRS, NaN for no data), CSV or GeoJSON, straight away |
 | Charts and maps | SVG, PNG or CSV from each chart's toolbar |
-| Run bundle | A ZIP of the outputs you tick, a contents manifest and a README with units and sign conventions. The checkpoint is excluded unless ticked; links that point outside the run are never followed |
+| Run bundle | A ZIP of the outputs you tick, a contents manifest and a README with units and sign conventions. The saved models (checkpoint) are excluded unless ticked; links that point outside the run are never followed |
 | GIS pack | One ZIP: every layer as GeoTIFF, `hexagons.gpkg` (250 m and 500 m hexagons), logger sites and before/after pairs with longitude and latitude, and a README |
 | Standalone results page | One self-contained `results.html` with the run's maps, charts and caveats, readable offline. Optionally includes a placebo study |
 | Project report | The report builder: pick sections (summary, accuracy, validation, scenarios, plans, climate, equity, caveats, limitations, provenance, findings) and the results, plans and findings to include, preview it, then export **HTML** (with a print stylesheet: print to PDF from the browser) or **Markdown** (maps embedded) |
 | Findings | Markdown ZIP with images, or self-contained HTML |
-| Decision pack (Lab result) | `brief.html`, `scenario.json`, `summary.json`, `cells.csv` (id, lon, lat, zone, ΔT, its sd, extrapolation, realised change), `delta.tif` and realised-change GeoTIFFs, hexagon tables, `README.txt` |
+| Decision pack (Lab result, **Export decision pack**) | `brief.html`, `scenario.json`, `summary.json`, `cells.csv` (id, lon, lat, zone, ΔT, its sd, extrapolation, realised change), `delta.tif` and realised-change GeoTIFFs, hexagon tables, `README.txt` |
 | Plan pack | The decision-pack contents plus the field list, logger sites, before/after pairs and the Pareto table |
 | Compare pack | Per-item summaries, paired differences, difference GeoTIFFs and a brief |
 
-Packs are built from **exact** results. A pack made from a scenario without an exact result, or from an unverified plan, is stamped **DRAFT**, carries no standard errors and is built from the emulator preview (so it needs the run's emulator); its extrapolation share reads "not computed (preview)". A plan's planned benefit is never used as a ΔT map: each treated cell holds the cooling its dose brings to its whole neighbourhood (°F·cells).
+Packs are built from **full-model** results. A pack made from a scenario without a full-model result, or from an unchecked plan, is stamped **DRAFT**, carries no standard errors and is built from the quick estimate (so it needs the run's quick estimate); its share beyond measured conditions reads "not computed (preview)". A plan's planned benefit is never used as a temperature-change map: each treated place holds the cooling its amount brings to its whole neighbourhood (°F·places).
 
 Runs without a CRS cannot produce longitude/latitude, GeoTIFF, GeoPackage or GeoJSON; the buttons say so.
 
@@ -519,78 +511,89 @@ Runs without a CRS cannot produce longitude/latitude, GeoTIFF, GeoPackage or Geo
 
 ## 7. Scenario Lab
 
-The Lab is where planners spend their time. It opens on a run with a checkpoint (the active run, else the latest one) and has six pages: **Design**, **Library**, **Plans**, **Sweeps**, **Climate** and **Compare**.
+The Lab is where planners spend their time. It opens on a run with saved models (a checkpoint; the active run, else the latest one) and has four pages, **Design**, **Library**, **Plans** and **Compare**, plus **More tools** (**Try amounts**). Climate × adaptation now lives in **Heat risk › Future climate** (the old Lab › Climate link redirects there).
 
-### The engine
+**Design** is a step flow, with the map in the middle and the quick estimate on the right:
 
-Exact results need the run's fitted models in memory. Studio keeps them in a long-lived **engine** process that holds a few loaded runs (two by default, within a memory budget) and serves one request at a time. The engine chip shows its state: cold, loading (with progress), ready, busy, or **incompatible** (the checkpoint was written by a different version of the pipeline; see [§10](#incompatible-checkpoints-and-stale-results)). Before loading a run Studio checks the memory it needs and, if it does not fit, offers to evict another run or to wait for a job to finish. Loading takes about 2 s for a fast run and 40–60 s for a full run (faster the second time).
+1. **01 What to change**: lever cards in plain words — **Trees & canopy**, **Less paving**, **Cool roofs & surfaces** — each with a one-line effect and a trust dot (how reliable the quick estimate is for it).
+2. **02 Where**: **Whole city** · **A neighbourhood** · **Hottest places** · **Where most people are exposed** · **Draw on the map**, or **Custom filter…** for the full selection builder.
+3. **03 How much**: **Add** · **Bring up to at least** · **Use available planting space**, a slider in the lever's own units and a live sentence ("You asked for +20 pts; about 14 pts fits — the rest exceeds available space"). **+ Add another change** stacks more; finished changes collapse into sentences.
+4. **Quick estimate** pane: the cooling where you made changes and citywide, area and residents, estimated cost, the heat-risk shift and a plain trust line ("The quick estimate is reliable for this change" / "Rough in the hatched areas — run the full model for a firm answer").
+5. **Run full model (≈ N min)**: the one primary button, with the model's state on one line under it.
+6. **Advanced options** (one disclosure): the other modes (Set to exactly, Multiply by, Cap at, to a percentile, per place), **Keep changes within realistic limits**, **Include knock-on effects**, **Reusable in other runs**, the per-change details table, warnings and **Expert mode**.
+
+**Start from an example** offers templates; the full scenario editor (all modes, costs and files) stays one link away under Advanced options.
+
+### The full model
+
+Full-model results need the run's fitted models in memory. Studio keeps them in a long-lived **scenario engine** process that holds a few loaded runs (two by default, within a memory budget) and serves one request at a time. The model line under **Run full model** (and the full-model dot in the top bar) shows its state: "Model loads when you run it", "Loading model… 42%", "Model ready", "Model busy — your run will wait its turn", or "Model not available for this run — quick estimate only" (no saved models, or they were written by a different version of the pipeline; see [§10](#incompatible-checkpoints-and-stale-results)). Before loading a run Studio checks the memory it needs and, if it does not fit, offers to evict another run or to wait for a job to finish. Loading takes about 2 s for a fast run and 40–60 s for a full run (faster the second time).
 
 ### Scenarios, edits and selections
 
-A **scenario** is a named, revisioned list of **edits**. Each edit is a lever, a mode, an amount and **where** it applies:
+A **scenario** is a named, revisioned list of **changes** (edits). Each change is a lever, a mode, an amount and **where** it applies:
 
 | Mode | Meaning |
 |---|---|
-| add · set · scale | Add an amount, set a value, multiply |
-| floor · ceiling | Raise cells to at least, or lower them to at most, a value |
-| fill headroom | Fill a share of the plantable headroom (needs the people & land-cover layers) |
-| to percentile | Bring cells up to a percentile of the city |
-| per cell | A value per cell: a brush stroke, an uploaded CSV of `id,lever,change` (or `id,lever,value`) or a budget plan |
+| Add · Set to exactly · Multiply by | Add an amount, set a value, multiply (add · set · scale) |
+| Bring up to at least · Cap at | Raise places to at least, or lower them to at most, a value (floor · ceiling) |
+| Use available planting space | Plant on a share of the open ground that can take trees (fill headroom; needs the people & land-cover layers) |
+| To a percentile | Bring places up to a percentile of the city |
+| Per place | A value per place: a brush stroke, an uploaded CSV of `id,lever,change` (or `id,lever,value`) or a budget plan |
 
-**Selections** combine zones, drawn shapes (rectangle, circle, polygon, in longitude/latitude so they travel between runs), filters on any column ("canopy ≤ 40", "top 10% hottest"), hexagons, buffers around another selection, uploaded cells and saved regions, with and / or / minus / not. The selection chip always says how many cells, how much area and how many residents.
+**Selections** combine zones, drawn shapes (rectangle, circle, polygon, in longitude/latitude so they travel between runs), filters on any column ("canopy ≤ 40", "top 10% hottest"), hexagons, buffers around another selection, uploaded cells and saved regions, with and / or / minus / not. The selection always says how many places, how much area and how many residents.
 
-Edits outside a lever's bounds are clipped the way the engine clips them (a cell already outside the bounds is never pushed further out). Non-actionable predictors can be edited only in expert mode.
+Changes outside a lever's bounds are held back the way the engine clips them (a place already outside the bounds is never pushed further out); **What was actually changed** reports what fitted. Map layers a city cannot change can be edited only in **Expert mode**.
 
 **Templates** start you off: *Cool roofs on built-up cells*, *Shade the hottest X%*, *Fill X% of plantable space*, *Depave the most paved blocks*, *Prioritise by footprint*, *Around sites* (uploaded or typed points) and *Configured package*.
 
-### Preview versus exact
+### Quick estimate versus full model
 
-| | Preview | Exact |
+| | Quick estimate | Full model |
 |---|---|---|
-| What | The linear emulator built from the run | The run's own scenario engine |
-| Speed | ≈0.02–0.15 s, live while you edit | ≈2 s (fast run) to ≈13 s (full run) after the engine has loaded |
-| Uncertainty | none | likely range from the cross-validation folds |
-| Saturation, clipping to observed conditions | no | yes |
+| What | A linear emulator built from the run (emulator preview) | The run's own fitted models (exact engine) |
+| Speed | ≈0.02–0.15 s, live while you edit | ≈2 s (fast run) to ≈13 s (full run) after the model has loaded |
+| Uncertainty | none | likely range from the test areas (cross-validation folds) |
+| Diminishing returns, realistic limits | no | yes |
 | Used for | design and exploration | every number you report, compare or export |
 
-![A city-wide edit on Providence: the preview is hatched and the Lab recommends Run exact](img/lab-hatched-preview.png)
+![A citywide change on Providence: the quick estimate is hatched and the Lab recommends Run full model](img/lab-hatched-preview.png)
 
-The preview needs the run's **emulator**. If it is missing, the Lab offers **Build emulator** (about a minute for a fast run, 4–5 minutes per lever on a full run); exact results work without it. Each lever carries a **trust badge** from the emulator's own validation: *good*, *rough* or *none*. The preview map is **hatched** with a banner ("Preview unreliable at this scale — run exact") when more than 3,000 cells are edited, a *rough* lever edits more than 1,000 cells, or a city-wide edit uses a lever the emulator gets badly wrong.
+The quick estimate has to be built once per run. If it is missing, the Lab offers **Build quick estimate** (about a minute for a fast run, 4–5 minutes per lever on a full run; the button gives the time); full-model results work without it. Each lever carries a **trust dot** from the quick estimate's own validation: *Quick estimate reliable*, *Quick estimate rough* or *No quick estimate*. The map is **hatched** ("Rough estimate here") when more than 3,000 places are changed, a rough lever changes more than 1,000 places, or a citywide change uses a lever the quick estimate gets badly wrong.
 
-### Reading an exact result
+### Reading a full-model result
 
-The result card speaks plain language by default:
+The **answer card** speaks plain language:
 
-- "**Cools the edited area by 0.62 °F** (likely range 0.44–0.80 °F). City-wide: 0.021 °F cooler."
-- **Confident it cools** when the whole 95% range is on the cool side, **Confident it warms** on the warm side, **Could be zero** otherwise.
-- Qualifiers when they apply: "partly outside observed conditions (23% of edited cells)", "independent causal check disagrees", "preview only — not verified".
-- What it buys: residents moved below a temperature threshold today and mid-century, cooling per unit cost, the share of mid-century warming it offsets.
-- Heat risk (when the run has campaign humidity): residents the design moves out of the NWS Extreme caution category or worse, today and in each future ([Heat stress](#heat-stress-and-verdicts)).
+- A headline without numbers ("**Cools the places you changed**", "May cool the whole city" when the range crosses zero) and one big number with its likely-range strip on a zero line, e.g. −0.62 °F where you made changes (likely range −0.80 to −0.44 °F).
+- A confidence chip: **Confident it cools** when the whole 95% likely range is on the cool side, **Confident it warms** on the warm side, **Might be no real effect** otherwise.
+- Up to four facts: **Citywide**, **Residents out of Extreme caution** (when the run has campaign humidity; [Heat stress](#heat-stress-and-verdicts)), **Estimated cost** and **Cost per °F**.
+- **Keep in mind** qualifiers when they apply: "partly beyond the conditions measured in this city (23% of the places you changed)", "A separate cross-check finds less cooling — see How sure are we", "preview only — not verified".
+- Actions: **Pin to compare**, **Export decision pack**, **Show on map**.
 
-The **expert** toggle shows the standard errors, the jackknife over folds, cell counts and method notes. Below the card: region breakdowns (edited cells, edited cells plus their influence ring, outside, every zone and saved region), the ring profile of the spill, realised against requested dose per lever (and what mediators like NDVI did), cost, the causal band, the uncertainty envelope from attached studies, and impacts (exposure today and under the climate futures, equity quintiles, hot days avoided when station data is cached).
+Below the card, each item once, in sections that open on demand: **Where it cools** (how far the cooling reaches, by area, the map layers) · **Heat risk & people** (residents by heat-risk level, who benefits, hot days) · **Against future warming** (how much of the coming warming it cancels) · **What was actually changed** (what you asked for against what fits, and what knock-on effects like NDVI did) · **How sure are we** (quick estimate vs full model, the sources of doubt, cross-checks) · **Technical details** (for analysts: standard errors, the spread between test areas, place counts, every area and saved region, method notes).
 
-Results are cached by content: running the same scenario on the same run and checkpoint returns the stored result at once. When the run's checkpoint or the pipeline code changes, old results are marked **stale** but stay readable.
+Results are cached by content: running the same scenario on the same run and saved models returns the stored result at once. When the run's saved models or the pipeline code change, old results are marked **out of date** but stay readable.
 
 ### Library, revisions and promotion
 
-Scenarios autosave every two seconds; undo and redo cover the last 50 steps. Their status moves draft → previewed → exact, and becomes stale when the run or code changes. Changing the edits of a scenario that already has an exact result **forks** a new revision instead, so results are never orphaned; the library shows the lineage tree, tags and the run's configured scenarios (read-only: **Clone to edit**). **Make ladder** forks a series of doses and runs them in one batch. **Promote to config** writes a whole-city scenario into the project config as a configured ladder or package (with a YAML diff first); the current run is never touched.
+Scenarios autosave every two seconds; undo and redo cover the last 50 steps. Their status moves draft → quick estimate → full model, and becomes out of date when the run or code changes. Changing a scenario that already has a full-model result **forks** a new revision instead, so results are never orphaned; the library shows the lineage tree, tags and the run's **set up with this run** scenarios (configured scenarios, read-only: **Clone to edit**). From a scenario's **More…** menu: **Copy as a variant**, **Try growing amounts (ladder)…** (a series of amounts run in one batch), **Check across runs…** and **Add to the project settings…** (promote to config: writes a whole-city scenario into the project config as a ladder or package, with a YAML diff first; the current run is never touched).
 
 ### Compare and check across runs
 
-**Compare** takes two to four items (exact results, configured scenarios, plans, the baseline): locked-scale maps, the A − B difference map with swipe, a KPI table with **paired** standard errors, regions, equity, exposure, cost and causal bands. Differences always read A − B: a negative value means A cools more. The confidence line says it in words, for example "Shade cools the city 0.97 °F less than Cooling package (likely range 0.77–1.16 °F). Confident there is a difference." Paired errors use the shared fold models, so they are much tighter than comparing two independent ranges; configured scenarios of older runs offer **Re-run exactly for paired SE**. An unverified plan has no per-cell ΔT: it is compared by its city mean, cost and cooling per cost only, without edited-area, regional, equity, exposure or difference maps, until you verify it.
+**Compare** takes two to four items pinned with **Pin to compare** (full-model results, set-up scenarios, plans, the baseline): locked-scale maps, the A − B difference map with swipe, a table with the **uncertainty of the difference** (paired standard errors), areas, equity, exposure, cost and cause-and-effect bands. Differences always read A − B: a negative value means A cools more. The confidence line says it in words, for example "Shade cools the city 0.97 °F less than Cooling package (likely range 0.77–1.16 °F). Confident there is a difference." Paired errors use the shared test-area models, so they are much tighter than comparing two independent ranges; set-up scenarios of older runs offer to re-run them with the full model for the paired error. An unchecked plan has no per-place temperature change: it is compared by its citywide mean, cost and cooling per cost only, without where-changed, area, equity, exposure or difference maps, until you check it with the full model.
 
 ![Compare: paired difference with its likely range](img/lab-compare.png)
 
-**Check across runs** evaluates the same scenario on other runs of the project (fast, coarse, full, open-data, multiverse children), as one heavy job that shows its time and peak memory before it starts. The spread becomes the specification band of the exact results of the version it checked, including ones computed before the check; a draft edited afterwards needs a new check.
+**Check across runs** evaluates the same scenario on other runs of the project (fast, coarse, full, open-data, multiverse children), as one heavy job that shows its time and the memory needed before it starts. The spread becomes the **Across model versions and runs** band (specification uncertainty) of the full-model results of the version it checked, including ones computed before the check; a draft edited afterwards needs a new check.
 
-### Sweeps and plans
+### Try amounts and plans
 
-- **Sweeps** run one lever at a series of doses in a region and fit the saturation curve to the region's benefit against the requested dose (the chart's axis: the overlay, its d90 line and caption), overlaid on the run's response curves. The fit against the neighbourhood dose (the smoothed dose around each cell, smaller for a regional sweep) is quoted in its own units, with each point's neighbourhood dose in the table.
-- **Plans** ([J7](#j7--budget-plan-to-field-kit)) optimise a single-lever budget: budget slider, cost (a number or any cost column), caps (plantable headroom, a region), a minimum dose per treated cell (allocations below it are dropped and the freed budget is reported, not re-spent), objective (cooling or people reached) and equity (score source and focus). **Verify exactly** and **Verify frontier** run the allocation through the engine. Combining several single-lever plans in one scenario is allowed and labelled "not jointly optimal".
+- **Try amounts** (More tools; a dose sweep) runs one lever at a series of amounts in an area and fits the diminishing-returns curve to the area's benefit against the amount asked for (the chart's axis: the overlay, its **Amount for 90% of the cooling** line (d90) and caption), overlaid on the run's response curves. The fit against the **amount nearby** (neighbourhood dose: the smoothed amount around each place, smaller for an area sweep) is quoted in its own units, with each point's amount nearby in the table.
+- **Plans** ([J7](#j7--budget-plan-to-field-kit)) optimise a single-lever budget: budget slider, cost (a number or any cost column), caps (available planting space, an area), a **smallest amount per treated place** (allocations below it are dropped and the freed budget is reported, not re-spent), objective (cooling or people reached) and **Who to favour** (score source and **How strongly**). **Check with the full model** and **Check every budget** run the allocation, or the whole curve, through the full model. Combining several single-lever plans in one scenario is allowed and labelled "not jointly optimal".
 
 ### Climate × adaptation
 
-**Climate** combines the run's CMIP6 change factors (SSPs, periods, a statistic across models) with today's measured pattern and any adaptation (exact results or configured scenarios): warming by period, exposure above your thresholds, how much of the warming each adaptation offsets, and future-temperature maps that update instantly. Without a climate table it offers **Fetch CMIP6 change factors**.
+**Heat risk › Future climate** combines the run's CMIP6 change factors (SSPs, periods, a statistic across models) with today's measured pattern and any adaptation (full-model results or set-up scenarios): warming by period, exposure above your thresholds, how much of the warming each adaptation offsets, and future-temperature maps that update instantly. Without a climate table it offers **Fetch CMIP6 change factors**.
 
 ![Climate × adaptation with a 92 °F threshold](img/lab-climate.png)
 
@@ -602,23 +605,23 @@ Studies are the evidence that a run can be trusted. All of them are tracked jobs
 
 | Card | Kind | What it does | Needs | Typical cost |
 |---|---|---|---|---|
-| Reference baselines | action | Scores simple spatial baselines against the stack | predictions | minutes |
+| Simpler models (reference baselines) | action | Scores simple spatial baselines against the model blend | predictions | minutes |
 | Planner pack | action | Exposure, hot days, equity, plantable space, hexagons, logger sites and pairs, GIS files | `planner.layers` | minutes |
-| Scenario emulator | action | Builds the linear emulator for Lab previews | the checkpoint | ≈1 min fast, 4–5 min per lever full |
-| Uncertainty report | action | Layered intervals per scenario from the attached studies | — | seconds |
+| Quick estimate (scenario emulator) | action | Builds the linear emulator behind the Lab's quick estimates | the saved models | ≈1 min fast, 4–5 min per lever full |
+| All sources together (uncertainty report) | action | Layered ranges per scenario from the attached studies | — | seconds |
 | Methods & model card | action | Regenerates `methods.md` and `model_card.md` from the merged manifest | — | seconds |
-| Placebo tests | study | Re-fits with a random field, shifted or rotated layers (one child run each); a placebo should show no effect | canopy/impervious roles | minutes per kind at 60 m |
+| Fake-change test (placebo tests) | study | Re-fits with a random field, shifted or rotated layers (one child run each); a placebo should show no effect | canopy/impervious roles | minutes per kind at 60 m |
 | Simulation check | study | Plants known effects on this city with several generators × seeds and measures recovery and interval coverage | both roles | long; resumable |
-| Multiverse | study | Re-runs alternative modelling choices (built-in and custom variants) and checks that effects and priorities agree | — | one child run per variant |
-| Reproduction | study | Re-runs S0–S3 into a child run and checks the results match | a recorded config | like the original stages |
-| Effect benchmark | project study | Recovery of known effects on synthetic cities with and without Spatial+ | nothing | minutes |
-| Literature | panel | How the run's response rates compare with published ones (from the response stage) | — | — |
+| Stability across choices (multiverse) | study | Re-runs alternative modelling choices (built-in and custom variants) and checks that effects and priorities agree | — | one child run per variant |
+| Exact re-run (reproduction) | study | Re-runs S0–S3 into a child run and checks the results match | a recorded config | like the original stages |
+| Known-effect test (effect benchmark) | project study | Recovery of known effects on synthetic cities with and without Spatial+ | nothing | minutes |
+| Published studies (literature check) | panel | How the run's response rates compare with published ones (from the response stage) | — | — |
 
-Each card shows its status (not run, queued, running, done, **stale vs run**, failed), the estimate, what is missing if it cannot run, its result chart, and **Run again** prefilled from the last parameters. For simulation checks and multiverses, workers × threads must fit the heavy-job thread setting.
+Each card (under **How much to trust this › Independent checks**) shows its status (not run, queued, running, done, **out of date**, failed), the estimate, what is missing if it cannot run, its result chart, and **Run again** prefilled from the last parameters. For simulation checks and multiverses, workers × threads must fit the heavy-job thread setting.
 
 - **Attach / Detach** (placebo, simulation check, multiverse): attached studies feed the run's uncertainty report. Studies launched from a run are attached to it automatically. When an attached study finishes, or you attach or detach a finished one, the uncertainty report is rebuilt (Settings → "Rebuild uncertainty envelopes when an attached study finishes").
 - **Stale**: a study is stale against a run whose checkpoint has changed since the study ran.
-- The **Studies hub** (sidebar) shows a status matrix for every run of the project, the project's studies by kind, and the effect benchmark launcher. Each study has its own page with its result view, its child runs (each linking to its run and tracker), attach/detach, resume (for studies that stopped unfinished), delete, and for simulation checks a **merge** across studies.
+- The **Studies hub** (sidebar › Advanced) shows a status matrix for every run of the project, the project's studies by kind, and the effect benchmark launcher. Each study has its own page with its result view, its child runs (each linking to its run and tracker), attach/detach, resume (for studies that stopped unfinished), delete, and for simulation checks a **merge** across studies.
 
 ![Studies hub](img/studies-hub.png)
 
@@ -694,9 +697,9 @@ The process vanished (server killed, sleep, out of memory). Open the run: the ch
 ### Incompatible checkpoints and stale results
 
 - **Checkpoints from before this release cannot be resumed.** This release changed the pipeline code that a checkpoint's fingerprint covers (see [`RELEASE_NOTES.md`](RELEASE_NOTES.md)). Such runs still open: every output stays viewable and the Lab can still load their checkpoints. They have no `checkpoint.json`, so the engine cannot tell which code wrote them (`code_match: null`).
-- **Code changed since a checkpoint was saved**: for checkpoints written by this release, a later change of the pipeline code makes the engine report `code_match: false`; the Lab still loads the checkpoint, a resume refits (see above), and exact results computed before the change are marked **stale**.
-- **Engine "incompatible"**: the checkpoint cannot be loaded by this version (a class it pickled no longer exists). The engine chip offers **Refit S2/S3**, which re-runs the run from its launch snapshot as a new run; meanwhile you can work with previews only.
-- **Stale results** (a banner on a result) were computed before the run's checkpoint or the pipeline code changed. They stay readable; **Run exact** again to refresh them.
+- **Code changed since a checkpoint was saved**: for checkpoints written by this release, a later change of the pipeline code makes the engine report `code_match: false`; the Lab still loads the checkpoint, a resume refits (see above), and full-model results computed before the change are marked **out of date**.
+- **"Model not available for this run"** (engine *incompatible*): the saved models cannot be loaded by this version (a class it pickled no longer exists). The Lab offers **Refit S2/S3**, which re-runs the run from its launch snapshot as a new run; meanwhile you can work with quick estimates only.
+- **Out-of-date results** (a banner on a result) were computed before the run's saved models or the pipeline code changed. They stay readable; **Run full model again** to refresh them.
 - **Untrusted checkpoint**: an imported run's checkpoint is not loaded until you confirm it is yours ([J10](#j10--bring-existing-work-in)).
 
 ### Input downloads fail
@@ -707,9 +710,9 @@ The process vanished (server killed, sleep, out of memory). Open the run: the ch
 - Everything downloaded is cached in `<workspace>/cache/` and reused by every project.
 - **Offline mode** (Settings) hides every action that needs the network, for air-gapped machines. Runs, the Lab, studies and exports work offline once the inputs are in place.
 
-### The preview says `no_emulator`, or is hatched
+### The Lab says "No quick estimate yet", or the map is hatched
 
-The run has no emulator: **Build emulator** (Validation card or the Lab banner). Hatching means the preview is unreliable at that scale: use **Run exact**.
+The run has no quick estimate (`no_emulator`): **Build quick estimate** (in the Lab's quick-estimate pane, or the **Quick estimate** card under Independent checks). Hatching ("Rough estimate here") means the quick estimate is unreliable at that scale: use **Run full model**.
 
 ### The index looks wrong
 

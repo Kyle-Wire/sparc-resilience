@@ -22,9 +22,11 @@ import { Card } from "../../components/ui/Card";
 import { Dialog } from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Field, issuesAt } from "../../components/ui/Field";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { NumberField } from "../../components/ui/NumberField";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table, type Column } from "../../components/ui/Table";
+import { term } from "../../content/glossary";
 import { Link } from "../../router";
 import { toast, useUi } from "../../stores/ui";
 import { fmtBytes, fmtDateTime, fmtNum } from "../../theme/format";
@@ -117,21 +119,21 @@ function SettingsForm() {
   const cpu = sys.data?.cpu_count;
   return (
     <div className="stack">
-      <Card title="Threads and slots" eyebrow={cpu ? `${cpu} CPU threads on this machine` : undefined}>
+      <Card title={`${term("threads").label} and work at once`} tip={<InfoTip term="threads" />} eyebrow={cpu ? `${cpu} CPU threads on this machine` : undefined}>
         <div className="settings-grid">
-          <NumSetting k="thread_budget" label="Thread budget" hint="All concurrent work shares it." draft={draft} set={set} issues={issues} />
-          <NumSetting k="threads_heavy" label="Threads per heavy job" hint="Runs, studies, emulator builds." draft={draft} set={set} issues={issues} />
-          <NumSetting k="engine_threads" label="Engine threads" hint="Reduced to 1 while a heavy job runs." draft={draft} set={set} issues={issues} />
-          <NumSetting k="heavy_slots" label="Heavy slots" draft={draft} set={set} issues={issues} />
-          <NumSetting k="medium_slots" label="Medium slots" hint="Post-run actions and exports." draft={draft} set={set} issues={issues} />
-          <NumSetting k="network_slots" label="Network slots" hint="Input downloads." draft={draft} set={set} issues={issues} />
+          <NumSetting k="thread_budget" label="Threads in total (thread budget)" hint="All work running at once shares them." draft={draft} set={set} issues={issues} />
+          <NumSetting k="threads_heavy" label="Threads per run or study" hint="Runs, studies and building quick estimates." draft={draft} set={set} issues={issues} />
+          <NumSetting k="engine_threads" label={`Threads for the ${term("exact_engine").label.toLowerCase()}`} hint="Cut to 1 while a run or study is going." draft={draft} set={set} issues={issues} />
+          <NumSetting k="heavy_slots" label="Runs and studies at once (heavy slots)" draft={draft} set={set} issues={issues} />
+          <NumSetting k="medium_slots" label="After-run steps at once (medium slots)" hint="After-run steps and exports." draft={draft} set={set} issues={issues} />
+          <NumSetting k="network_slots" label="Downloads at once (network slots)" hint="Weather, climate and map-layer downloads." draft={draft} set={set} issues={issues} />
         </div>
       </Card>
-      <Card title="Scenario engine">
+      <Card title={term("exact_engine").label} eyebrow="Scenario engine" tip={<InfoTip term="exact_engine" />}>
         <div className="settings-grid">
           <NumSetting k="engine_max_runs" label="Runs kept loaded" draft={draft} set={set} issues={issues} />
-          <NumSetting k="engine_mem_budget_gb" label="Memory budget" unit="GB" step={0.5} draft={draft} set={set} issues={issues} />
-          <NumSetting k="engine_idle_min" label="Unload after idle" unit="min" draft={draft} set={set} issues={issues} />
+          <NumSetting k="engine_mem_budget_gb" label="Memory it may use" unit="GB" step={0.5} draft={draft} set={set} issues={issues} />
+          <NumSetting k="engine_idle_min" label="Unload when idle for" unit="min" draft={draft} set={set} issues={issues} />
         </div>
       </Card>
       <Card title="Jobs and app">
@@ -143,10 +145,10 @@ function SettingsForm() {
         </div>
         <div className="stack" style={{ gap: 6 }}>
           <Toggle checked={draft.auto_uncertainty} onChange={(v) => set({ auto_uncertainty: v })}>
-            Rebuild uncertainty envelopes when an attached study finishes
+            Update the likely ranges (uncertainty envelope) when a linked independent check finishes
           </Toggle>
           <Toggle checked={draft.offline} onChange={(v) => set({ offline: v })}>
-            Offline: hide actions that need the network
+            Offline: hide actions that need the internet
           </Toggle>
           <Toggle
             checked={draft.notifications}
@@ -166,7 +168,7 @@ function SettingsForm() {
           </Toggle>
         </div>
       </Card>
-      <Card title="Watch roots" eyebrow="folders scanned every 10 s for command-line runs">
+      <Card title="Folders to watch" eyebrow="watch roots · checked every 10 s for runs started from the command line">
         {draft.watch_roots.length ? (
           <ul className="roots">
             {draft.watch_roots.map((r) => (
@@ -179,7 +181,7 @@ function SettingsForm() {
             ))}
           </ul>
         ) : (
-          <p className="cap">No watch roots. Command-line runs elsewhere can still be imported.</p>
+          <p className="cap">No folders watched. Runs started from the command line elsewhere can still be imported.</p>
         )}
         <div className="row">
           <input type="text" aria-label="Folder to watch" placeholder="/path/to/output/core" value={root} onChange={(e) => setRoot(e.target.value)} style={{ minWidth: "18em" }} />
@@ -230,7 +232,7 @@ function StorageManager() {
   const runCols: Column<RunStore>[] = [
     { key: "run", label: "Run", value: (r) => r.label ?? r.run_id, render: (r) => <Link to={`/r/${encodeURIComponent(r.run_id)}`}>{r.label || r.run_id}</Link> },
     { key: "outputs", label: "Outputs", align: "right", value: (r) => r.outputs_bytes, render: (r) => fmtBytes(r.outputs_bytes) },
-    { key: "ckpt", label: "Checkpoint", align: "right", value: (r) => r.checkpoint_bytes, render: (r) => fmtBytes(r.checkpoint_bytes) },
+    { key: "ckpt", label: term("checkpoint").label, align: "right", tip: <InfoTip term="checkpoint" />, value: (r) => r.checkpoint_bytes, render: (r) => fmtBytes(r.checkpoint_bytes) },
     {
       key: "actions",
       label: "Free space",
@@ -395,15 +397,15 @@ function NetCheck() {
             }
           }}
         >
-          Check the data hosts
+          Check the download servers
         </Button>
-        <span className="cap">Results are cached for 10 minutes per host.</span>
+        <span className="cap">Each server's result is kept for 10 minutes.</span>
       </div>
       {res ? (
         <table className="checklist" aria-label="Network check">
           <thead>
             <tr>
-              <th scope="col">Host</th>
+              <th scope="col">Server</th>
               <th scope="col">Reachable</th>
               <th scope="col" className="r">
                 Time
@@ -464,7 +466,7 @@ export default function Settings() {
     <div className="stack">
       <header className="page-head">
         <h1>Settings</h1>
-        <p className="cap">Workspace-wide: thread budget, engine, watch roots, storage and network.</p>
+        <p className="cap">For the whole workspace: processor threads, the full model, folders to watch, disk space and network.</p>
       </header>
       <SettingsForm />
       <Card title="Storage">

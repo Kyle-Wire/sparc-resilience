@@ -2,6 +2,9 @@
 // stale vs run / failed), the row's cost estimate and headline, attach/detach for studies that
 // feed the uncertainty report, the launch form (disabled with the server's missing requirements
 // listed) and the kind's result chart.
+// Plain words (phase 4): each card says what the check does in plain words, with an ⓘ at the end
+// of that line giving the check's plain name (glossary) and its technical name; the card's status
+// explains itself in a tooltip (no native title).
 import type { ReactNode } from "react";
 import {
   ATTACHABLE_KINDS,
@@ -14,11 +17,13 @@ import {
 } from "../../../api/studies";
 import { Card } from "../../../components/ui/Card";
 import { ActionButton } from "../../../components/ui/EmptyState";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { JobStrip } from "../../../components/ui/JobStrip";
 import { StatusChip } from "../../../components/ui/StatusChip";
 import { Link } from "../../../router";
 import { fmtRelative } from "../../../theme/format";
-import { AttachToggle, estimateText } from "./common";
+import { TipChip } from "../../runhub/common";
+import { AttachToggle, KIND_TERMS, estimateText } from "./common";
 import type { FormContext } from "./KindForms";
 import { formFromParams } from "../model/params";
 import { LaunchPanel } from "./LaunchPanel";
@@ -27,17 +32,17 @@ import { StudyViewPanel } from "./StudyViews";
 
 /** What each card is for (shown under its title). */
 export const KIND_INTROS: Record<StudyKind, string> = {
-  baselines: "Is the stack better than simpler models? Refits reference baselines on the same folds and compares held-out error.",
-  planner: "Exposure, hot days, equity, plantable space, hexagon summaries and logger sites from the people and land-cover layers.",
-  emulator: "A fast stand-in for the exact engine, validated on random patches; enables the Lab's instant preview.",
-  uncertainty: "Layers estimation, specification (multiverse), attribution (simulation check) and causal intervals per scenario.",
-  writeup: "Rewrites the methods and the model card from the merged manifest (the run report stays as written).",
-  placebo: "Re-fits with fake or displaced layers: a placebo should show no effect, the real layers should.",
-  simcheck: "Plants known effects in synthetic targets on this city and checks how much the model recovers, and how often its intervals cover the truth.",
-  multiverse: "Re-fits under defensible alternative choices (CV blocks, forcing, models) to see whether the answers keep their sign.",
-  reproduce: "Re-runs the stages from the run's launch snapshot in a new run and checks the numbers match within tolerance.",
-  literature: "Published cooling ranges for comparable levers next to this run's estimates (computed with the response stage).",
-  benchmark: "Plants a known canopy effect in a synthetic city and measures the share each model recovers (project-wide, no run needed).",
+  baselines: "Does the full model beat simpler ones? Scores simple reference models on the same test areas and compares their typical error.",
+  planner: "Who is exposed, hot days, how evenly the heat falls, open planting space, neighbourhood summaries and where to put sensors, from the people and land-cover layers.",
+  emulator: "Builds the quick estimate: a fast stand-in for the full model, checked on random patches. It powers the Lab's instant preview.",
+  uncertainty: "Adds up every source of doubt for each scenario: the model fit, other model versions, the simulation check and the cause-and-effect check.",
+  writeup: "Rewrites the methods and the model card from the run's records (the run report stays as written).",
+  placebo: "Refits with fake or shuffled map layers: a fake change should show no effect, the real layers should.",
+  simcheck: "Plants known effects in made-up temperatures for this city and checks how much of them the model recovers, and how often its likely ranges contain them.",
+  multiverse: "Refits with other reasonable choices (test-area size, weather inputs, models) to see whether the answers keep their direction.",
+  reproduce: "Re-runs the analysis from the run's launch settings in a new run and checks the numbers match.",
+  literature: "Published cooling for similar changes next to this run's estimates (worked out with the response curves).",
+  benchmark: "Plants a known tree-cover effect in a made-up city and measures how much of it each model recovers (project-wide, no run needed).",
 };
 
 const STATE_TEXT: Record<StudyState, string> = {
@@ -45,7 +50,7 @@ const STATE_TEXT: Record<StudyState, string> = {
   queued: "queued",
   running: "running",
   done: "done",
-  stale: "stale vs run",
+  stale: "out of date",
   failed: "failed",
 };
 
@@ -118,7 +123,9 @@ export function StudyCard({ row, rid, pid, units, ctx, open, extra }: StudyCardP
       title={
         <>
           {label}
-          <StatusChip status={row.state} text={STATE_TEXT[row.state] ?? row.state} title={row.updated_utc ? `Updated ${fmtRelative(row.updated_utc)}` : undefined} />
+          <TipChip tip={row.updated_utc ? `Updated ${fmtRelative(row.updated_utc)}${row.state === "stale" ? ". The run has changed since this check ran." : ""}` : null}>
+            <StatusChip status={row.state} text={STATE_TEXT[row.state] ?? row.state} />
+          </TipChip>
         </>
       }
       actions={
@@ -134,6 +141,7 @@ export function StudyCard({ row, rid, pid, units, ctx, open, extra }: StudyCardP
     >
       <p className="cap" style={{ margin: 0 }}>
         {KIND_INTROS[row.kind]}
+        {KIND_TERMS[row.kind] ? <InfoTip term={KIND_TERMS[row.kind]!} technical={label} /> : null}
       </p>
       {row.headline ? <p className="vt-headline">{row.headline}</p> : null}
       {row.job_id && active ? (

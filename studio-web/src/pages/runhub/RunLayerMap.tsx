@@ -29,7 +29,7 @@ export function RunLayerMap({ rid, keys, title, height = 380, overlays }: { rid:
     <div className="stack" style={{ gap: 6 }}>
       <MapView grid={grid.data} groups={groups} loadLayer={load} layerKey={cur} onLayerChange={setKey} height={height} title={title} overlays={overlays} />
       <p className="cap">
-        <Link to={`/r/${encodeURIComponent(rid)}/map?layer=${encodeURIComponent(cur)}`}>Open in the Map explorer</Link> for swipe, tools and the cell inspector.
+        <Link to={`/r/${encodeURIComponent(rid)}/map?layer=${encodeURIComponent(cur)}`}>Open in the Map explorer</Link> for swipe, tools and place details.
       </p>
     </div>
   );

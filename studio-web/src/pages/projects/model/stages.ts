@@ -8,11 +8,14 @@
 // The plan request sends only the explicit choices, so the server marks implied stages
 // `will_run` with `reason: required_by:<stage>` (the plan graph shows "required by S6").
 import type { LaunchArgs, RequestStage } from "../../../api/projects";
+import { term, type TermId } from "../../../content/glossary";
 
 export type ChecklistId = "S0" | "S1" | "S2_S3" | "S4" | "S5" | "S6" | "S7";
 
 export type ChecklistRow = {
   id: ChecklistId;
+  /** The stage's code ("S0", "S2–S3"), which reasons such as "required by S6" refer to. */
+  code: string;
   label: string;
   desc: string;
   checked: boolean;
@@ -22,15 +25,20 @@ export type ChecklistRow = {
   reason: string | null;
 };
 
-export const CHECKLIST: readonly { id: ChecklistId; label: string; desc: string }[] = [
-  { id: "S0", label: "S0 Data and QA", desc: "Load, clean and grid the table" },
-  { id: "S1", label: "S1 Area of influence", desc: "Correlograms and influence ranges" },
-  { id: "S2_S3", label: "S2–S3 Models and stacker", desc: "Cross-fitted base models, stacker, baselines, CV curve" },
-  { id: "S4", label: "S4 Response surfaces", desc: "Dose sweeps and footprints of every lever" },
-  { id: "S5", label: "S5 Scenarios", desc: "Configured scenarios (and climate × adaptation)" },
-  { id: "S6", label: "S6 Causal validation", desc: "DML, spillover, CATE, dose-response, audit" },
-  { id: "S7", label: "S7 Budget optimisation", desc: "Allocation of the budget and its closed-loop check" },
-];
+function stageName(id: ChecklistId): string {
+  return id === "S2_S3" ? "S2–S3" : id;
+}
+
+/** Glossary term of each checklist stage (plain label and one-line description). */
+const STAGE_TERM: Record<ChecklistId, TermId> = { S0: "stage_s0", S1: "stage_s1", S2_S3: "stage_s2_s3", S4: "stage_s4", S5: "stage_s5", S6: "stage_s6", S7: "stage_s7" };
+
+/** The checklist stages in plain words (the glossary's label and tip); `code` names the stage in reasons. */
+export const CHECKLIST: readonly { id: ChecklistId; code: string; label: string; desc: string }[] = (["S0", "S1", "S2_S3", "S4", "S5", "S6", "S7"] as const).map((id) => ({
+  id,
+  code: stageName(id),
+  label: term(STAGE_TERM[id]).label,
+  desc: term(STAGE_TERM[id]).tip,
+}));
 
 /** The default selection: a full run. */
 export const ALL_CHOICES: readonly ChecklistId[] = ["S0", "S1", "S2_S3", "S4", "S5", "S6", "S7"];
@@ -43,14 +51,11 @@ function firstChosen(chosen: ReadonlySet<ChecklistId>, candidates: readonly Chec
   return null;
 }
 
-function stageName(id: ChecklistId): string {
-  return id === "S2_S3" ? "S2–S3" : id;
-}
 
 /** Checklist rows for a selection, with implied stages locked on and the reason shown. */
 export function checklistRows(selection: Iterable<ChecklistId>): ChecklistRow[] {
   const chosen = new Set(selection);
-  return CHECKLIST.map(({ id, label, desc }) => {
+  return CHECKLIST.map(({ id, code, label, desc }) => {
     let checked = chosen.has(id);
     let locked = false;
     let reason: string | null = null;
@@ -73,7 +78,7 @@ export function checklistRows(selection: Iterable<ChecklistId>): ChecklistRow[] 
         reason = `required by ${by}`;
       }
     }
-    return { id, label, desc, checked, locked, reason };
+    return { id, code, label, desc, checked, locked, reason };
   });
 }
 

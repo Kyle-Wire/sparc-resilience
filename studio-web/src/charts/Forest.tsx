@@ -4,6 +4,8 @@ import { Axis, axisTitle } from "./Axis";
 import { ChartFrame, markProps, useChart, useChartWidth, type ChartTable, type FrameOptions } from "./ChartFrame";
 import { bandScale, extent, linearScale, niceDomain } from "./scales";
 import { fmtSigned } from "../theme/format";
+import { term } from "../content/glossary";
+import { Term } from "../components/ui/Term";
 
 export type ForestRow = {
   id: string;
@@ -48,7 +50,7 @@ export function forestTable(p: Pick<ForestProps, "rows" | "valueLabel" | "unit" 
     { key: "est", label: p.valueLabel, unit: p.unit },
     { key: "lo", label: "Lower", unit: p.unit },
     { key: "hi", label: "Upper", unit: p.unit },
-    { key: "excl", label: "Excludes 0" },
+    { key: "excl", label: "Clear of zero" },
   ];
   if (hasCompare) columns.push({ key: "cmp", label: p.compareLabel ?? "Comparison", unit: p.unit });
   return {
@@ -135,7 +137,7 @@ export function Forest(props: ForestProps) {
       <>
         <span>
           <i style={{ background: "var(--s1)" }} />
-          estimate ± {z === 2 ? "2" : "1.96"} SE
+          estimate and <Term id="interval_95" technical={`estimate ± ${z === 2 ? "2" : "1.96"} SE (about 95%)`}>{term("interval_95").label.toLowerCase()}</Term>
         </span>
         {props.rows.some((r) => r.compare !== undefined && r.compare !== null) ? (
           <span>

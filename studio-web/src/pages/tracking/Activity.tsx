@@ -20,12 +20,14 @@ import { Card } from "../../components/ui/Card";
 import { Chips } from "../../components/ui/Chips";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { IconButton } from "../../components/ui/IconButton";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { Select } from "../../components/ui/Select";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table, type Column } from "../../components/ui/Table";
 import { useProjects } from "../../layouts/resources";
+import { TipSpan } from "../../layouts/tips";
 import { codecs, Link, navigate, useUrlState } from "../../router";
 import { activeJobs, useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
@@ -35,6 +37,9 @@ import { queueMovePatches } from "./model";
 import "./tracking.css";
 
 const HISTORY_STATUSES = ["succeeded", "failed", "cancelled", "interrupted"] as const;
+
+/** What runs in each queue lane, in plain words. */
+const LANE_WORDS: Record<string, string> = { heavy: "runs and studies", medium: "after-run steps and exports", network: "downloads", light: "quick tasks" };
 
 function duration(j: Job): number | null {
   if (!j.started_utc) return null;
@@ -81,6 +86,13 @@ function QueueCard() {
   return (
     <Card
       title="Queue"
+      tip={
+        <InfoTip
+          label="the queue"
+          text="Work waits here for a free slot. Each lane runs a set number of jobs at once (its slots), so big runs do not slow everything else down. Settings sets the slots."
+          technical="Job queue: lanes and slots"
+        />
+      }
       actions={
         q ? (
           <Button
@@ -116,7 +128,7 @@ function QueueCard() {
             <tr>
               <th scope="col">Lane</th>
               <th scope="col" className="r">
-                Slots
+                Running / slots
               </th>
               <th scope="col">Running</th>
               <th scope="col">Queued (first starts next)</th>
@@ -125,7 +137,10 @@ function QueueCard() {
           <tbody>
             {q.lanes.map((l) => (
               <tr key={l.lane}>
-                <th scope="row">{l.lane}</th>
+                <th scope="row">
+                  {l.lane}
+                  {LANE_WORDS[l.lane] ? <span className="cap"> · {LANE_WORDS[l.lane]}</span> : null}
+                </th>
                 <td className="num r">
                   {l.running.length}/{l.slots}
                 </td>
@@ -145,7 +160,11 @@ function QueueCard() {
                         <li key={id}>
                           <span className="row" style={{ gap: 4 }}>
                             <Link to={`/jobs/${encodeURIComponent(id)}`}>{jobs[id]?.label || id}</Link>
-                            {jobs[id]?.status === "blocked" ? <StatusChip status="blocked" title={jobs[id]?.blocked?.reason} /> : null}
+                            {jobs[id]?.status === "blocked" ? (
+                              <TipSpan tip={jobs[id]?.blocked?.reason ? `Waiting: ${jobs[id]?.blocked?.reason}` : "Waiting for other work to finish first."}>
+                                <StatusChip status="blocked" />
+                              </TipSpan>
+                            ) : null}
                             <IconButton size="small" icon="chevronUp" label={`Move ${jobs[id]?.label || id} up`} disabled={i === 0} onClick={() => void move(l.queued, i, -1)} />
                             <IconButton size="small" icon="chevronDown" label={`Move ${jobs[id]?.label || id} down`} disabled={i === l.queued.length - 1} onClick={() => void move(l.queued, i, 1)} />
                           </span>
@@ -186,9 +205,9 @@ function History() {
   const cols: Column<Job>[] = [
     { key: "status", label: "Status", value: (j) => j.status, render: (j) => <StatusChip status={j.status} /> },
     { key: "label", label: "Job", value: (j) => j.label, render: (j) => <Link to={`/jobs/${encodeURIComponent(j.id)}`}>{j.label || j.kind}</Link> },
-    { key: "kind", label: "Kind", value: (j) => j.kind, render: (j) => <span className="mono">{j.kind}</span> },
+    { key: "kind", label: "Kind of work", value: (j) => j.kind, render: (j) => <span className="mono">{j.kind}</span> },
     { key: "project", label: "Project", value: (j) => projName(j.project_id) },
-    { key: "created", label: "Created", value: (j) => j.created_utc, render: (j) => <span title={fmtDateTime(j.created_utc)}>{fmtRelative(j.created_utc)}</span> },
+    { key: "created", label: "Created", value: (j) => j.created_utc, render: (j) => <TipSpan tip={fmtDateTime(j.created_utc)}>{fmtRelative(j.created_utc)}</TipSpan> },
     { key: "duration", label: "Duration", align: "right", value: (j) => duration(j), render: (j) => fmtDuration(duration(j)) },
     { key: "error", label: "Outcome", sortable: false, value: (j) => j.error?.message ?? (j.exit_code !== null ? `exit ${j.exit_code}` : null), render: (j) => <span className="cap">{j.error?.message ?? (j.exit_code !== null ? `exit ${j.exit_code}` : "—")}</span> },
     {
@@ -221,7 +240,7 @@ function History() {
           />
         </div>
         <div className="field">
-          <label htmlFor="hist-kind">Kind</label>
+          <label htmlFor="hist-kind">Kind of work</label>
           <Select id="hist-kind" value={kind} onChange={setKind} options={[{ value: "", label: "All kinds" }, ...kinds.map((k) => ({ value: k, label: k }))]} />
         </div>
         <div className="field">
@@ -272,7 +291,7 @@ function History() {
           }
         }}
       >
-        {toDelete ? `${toDelete.label || toDelete.kind} and its job directory (events, stdout, stderr) are removed. Run outputs are not touched.` : null}
+        {toDelete ? `${toDelete.label || toDelete.kind} and its job folder (its progress log and messages) are removed. The run's results are not touched.` : null}
       </ConfirmDialog>
     </Card>
   );
@@ -286,7 +305,7 @@ export default function Activity() {
     <div className="stack">
       <header className="page-head">
         <h1>Activity</h1>
-        <p className="cap">Every job Studio runs or follows: queued, running, interrupted and finished.</p>
+        <p className="cap">All the work Studio runs or follows (runs, studies, downloads, exports): waiting, running, interrupted and finished.</p>
       </header>
       <QueueCard />
       <Card title="Running">
@@ -301,7 +320,7 @@ export default function Activity() {
         )}
       </Card>
       {interrupted.data?.items.length ? (
-        <Card title="Interrupted" eyebrow="the worker vanished (server stopped, sleep, out of memory)">
+        <Card title="Interrupted" eyebrow="stopped unexpectedly: Studio stopped, the computer slept, or memory ran out">
           <ul className="spine">
             {interrupted.data.items.map((j) => (
               <li key={j.id}>
@@ -309,7 +328,7 @@ export default function Activity() {
                   <StatusChip status="interrupted" /> <Link to={`/jobs/${encodeURIComponent(j.id)}`}>{j.label || j.kind}</Link>
                 </span>
                 <span className="cap">
-                  {j.error?.message ?? "process vanished"} · {fmtRelative(j.finished_utc ?? j.created_utc)}
+                  {j.error?.message ?? "stopped unexpectedly"} · {fmtRelative(j.finished_utc ?? j.created_utc)}
                 </span>
                 {canRestart(j) ? (
                   <Button size="small" variant="primary" icon="play" onClick={() => void resumeOrRetry(j)}>

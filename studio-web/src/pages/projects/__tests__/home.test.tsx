@@ -47,8 +47,12 @@ describe("home", () => {
     const { container } = renderAt("/", <Home />);
     await waitFor(() => container.querySelector('[data-project="p_prov"]'), 5000, "cards");
     const prov = container.querySelector('[data-project="p_prov"]')!;
-    expect(prov.textContent).toContain("Readiness 11/11");
-    expect(prov.textContent).toContain("R² 0.874");
+    expect(prov.textContent).toContain("Readiness 11 of 11 checks pass");
+    expect(prov.textContent).toContain("Accuracy score 0.874");
+    expect(prov.textContent).not.toContain("R²");
+    // the jargon is a glossary term: its tooltip explains it, with the technical name
+    expect(prov.querySelector('button.term[data-term="r2"]')).not.toBeNull();
+    expect(prov.querySelector('button.term[data-term="readiness"]')).not.toBeNull();
     expect(prov.querySelector('a[href="/r/20261001-142233-full-a1b2"]')).not.toBeNull();
     expect(container.querySelector('[data-project="p_demo"]')!.textContent).toContain("DEMO");
     const quick = container.querySelector('[aria-label="Quickstarts"]')!.textContent!;
@@ -185,7 +189,7 @@ describe("projects list", () => {
     );
     const { container } = renderAt("/projects", <Projects />);
     await waitFor(() => container.querySelectorAll("tbody tr").length === 2, 5000, "rows");
-    expect(container.textContent).toContain("11/11");
+    expect(container.textContent).toContain("11 of 11");
     const demoRow = byText(container, "tbody tr", "Synthetic city")!;
     click(byText(demoRow, "button", "Archive"));
     await waitFor(() => calls.length === 1, 5000, "archive");

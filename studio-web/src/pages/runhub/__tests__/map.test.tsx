@@ -146,13 +146,13 @@ describe("Map explorer", () => {
     key(stage, "ArrowLeft");
     key(stage, "ArrowUp"); // north-west cell: row 0
     key(stage, "Enter"); // pin
-    await waitFor(() => container.querySelector('[aria-label="Pinned cell"] h3')?.textContent === "Cell 1001", 3000, "inspector");
+    await waitFor(() => container.querySelector('[aria-label="Pinned place"] h3')?.textContent === "Place 1001", 3000, "inspector");
     const req = m.calls.find((c) => c.url.startsWith(`/api/runs/${rid}/cells/0`))!;
     expect(decodeURIComponent(req.url)).toContain("scenarios=configured:canopy-increase-plus-10");
-    const insp = container.querySelector('[aria-label="Pinned cell"]')!;
+    const insp = container.querySelector('[aria-label="Pinned place"]')!;
     expect(insp.textContent).toContain("Canopy Increase +10");
     expect(insp.textContent).toContain("0.10 °F cooler");
-    expect(insp.querySelector('svg.chart[aria-label="canopy response here"]')).not.toBeNull(); // rebuilt from A and d_s
+    expect(insp.querySelector('svg.chart[aria-label="Trees & canopy: cooling by amount here"]')).not.toBeNull(); // rebuilt from A and d_s
     m.restore();
   });
 
@@ -229,6 +229,11 @@ describe("Map explorer", () => {
     expect(container.textContent).toContain("showing 250 m hexagon means");
     expect(container.querySelector('[role="tablist"][aria-label="Analysis tool"]')).not.toBeNull();
     expect(container.querySelector('[data-tool="breakdown"]')).not.toBeNull();
+    // the tools and map controls in plain words; the technical names are in ⓘ tooltips, not native titles
+    expect([...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent)).toEqual(["Area summary", "Breakdown by group", "Relationships", "Clustering by distance"]);
+    expect(container.textContent).toContain("250 m hexagons");
+    expect(container.textContent).toContain("Test areas");
+    expect(container.querySelector('section[aria-labelledby="map-title"] > header [title], section[aria-labelledby="map-title"] > .row [title]')).toBeNull();
     m.restore();
   });
 });

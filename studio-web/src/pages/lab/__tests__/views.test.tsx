@@ -1,6 +1,7 @@
 // The other Lab pages against a mocked server: a saved plan (planned vs realised with the
-// spillover label, field kit, Plan → scenario), a sweep curve, Climate × adaptation (charts,
-// explore request, the client-side future map) and Compare (paired SE, needs-exact chips).
+// overlap label, field kit, make a scenario from it), a sweep curve ("Try amounts"), Climate ×
+// adaptation (charts, explore request, the client-side future map) and Compare (the uncertainty of
+// each difference, needs-a-full-model-run chips). Plain words with ⓘ tooltips, no native titles.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearResources } from "../../../api/resource";
 import type { Comparison, Plan, Sweep } from "../../../api/lab";
@@ -9,7 +10,7 @@ import { useJobs } from "../../../stores/jobs";
 import { byText, click, flush, mockFetch, render, waitFor } from "../../../test/render";
 import Climate from "../Climate";
 import Compare from "../Compare";
-import Plans from "../Plans";
+import Plans, { checkedVsPlanned } from "../Plans";
 import Sweeps from "../Sweeps";
 import { forgetDrafts } from "../model/draft";
 import { L, PID, RID, bin, result, runRoutes, scenario } from "../__fixtures__/lab";
@@ -52,7 +53,7 @@ const PLAN: Plan = {
 };
 
 describe("Plans", () => {
-  it("shows planned vs realised with the spillover label, builds the field kit and turns the plan into a scenario", async () => {
+  it("shows planned vs checked benefit with the overlap label, builds the field kit and turns the plan into a scenario", async () => {
     fetchMock = mockFetch({
       ...runRoutes(),
       "GET /api/plans/pl_1": { body: PLAN },
@@ -71,13 +72,21 @@ describe("Plans", () => {
     navigate(`/r/${RID}/lab/plans/pl_1`, { replace: true });
     const { container } = render(<Plans />);
     await waitFor(() => container.querySelector("[data-spillover]"), 8000, "plan detail");
-    expect(container.querySelector("[data-spillover]")!.textContent).toMatch(/Planned 1,704 vs realised 1,037 °F·cells/);
-    expect(container.querySelector("[data-spillover]")!.textContent).toMatch(/spillover non-additivity/);
-    expect(byText(container, ".kpi", "Realised (exact)")!.textContent).toMatch(/61% of planned/);
+    expect(container.querySelector("[data-spillover]")!.textContent).toMatch(/Planned 1,704 vs checked 1,037 °F·places/);
+    expect(container.querySelector("[data-spillover]")!.textContent).toMatch(/Lower than planned: .*neighbouring changes overlap/);
+    expect(container.querySelector('[data-spillover] button.infotip[data-term="closed_loop"]')).not.toBeNull();
+    expect(byText(container, ".kpi", "Checked benefit")!.textContent).toMatch(/61% of planned · neighbouring changes overlap/);
+    // the check can also find more cooling than planned: then it never says the cooling was lost
+    expect(checkedVsPlanned(583, 624)).toMatch(/^Higher than planned: .*also counts cooling that spreads to nearby places\.$/);
+    expect(checkedVsPlanned(583, 590)).toMatch(/^About as planned/);
+    expect(checkedVsPlanned(583, 400)).toMatch(/^Lower than planned: /);
+    // the trade-off chart's budget axis has a unit
+    expect([...container.querySelectorAll("svg.chart text")].map((t) => t.textContent)).toContain("Budget (cost units)");
+    expect(container.querySelector(".kpis")!.textContent).not.toMatch(/open loop|closed loop|Realised \(exact\)/i);
     click(byText(container, "button", "Build field kit"));
     await waitFor(() => byText(container, "td", "101"), 5000, "field kit");
     expect(byText(container, "button", "GeoJSON")).not.toBeNull();
-    click(byText(container, "button", "Plan → scenario"));
+    click(byText(container, "button", "Make a scenario from it"));
     await waitFor(() => window.location.pathname === `/r/${RID}/lab/s/sc_plan`, 5000, "to scenario");
   });
 });
@@ -105,16 +114,18 @@ describe("Sweeps", () => {
     });
     navigate(`/r/${RID}/lab/sweeps/sw_1`, { replace: true });
     const { container } = render(<Sweeps />);
-    await waitFor(() => container.querySelector('svg.chart[aria-label="Response to the swept lever"]'), 8000, "sweep chart");
-    // the caption's d_s and d90 are the fit on the requested dose (the x axis); the neighbourhood fit is quoted apart
-    const fig = byText(container, "figure", "Fit on the requested dose: saturating, A = 0.550, d_s = 9.00")!;
+    await waitFor(() => container.querySelector('svg.chart[aria-label="Cooling by amount"]'), 8000, "sweep chart");
+    // the caption's 90% point and d_s are the fit on the requested amount (the x axis); the fit on the amount nearby is quoted apart
+    const fig = byText(container, "figure", "Fitted shape: diminishing; about 90% of the possible cooling comes by an amount of 20.70")!;
     expect(fig).not.toBeNull();
-    expect(fig.textContent).toMatch(/90% of the effect by a requested dose of 20\.70/);
-    expect(fig.textContent).toMatch(/On the neighbourhood dose .*not this axis\): d_s = 2\.00, d90 = 4\.60/);
-    expect(fig.textContent).not.toMatch(/effect by 4\.60/);
-    const points = [...container.querySelectorAll("table.tbl")].find((t) => t.querySelector("caption")?.textContent === "Sweep points")!;
+    expect(fig.textContent).toMatch(/fit on the amount asked for: A = 0\.550, d_s = 9\.00/);
+    expect(fig.textContent).toMatch(/On the amount nearby .*not this axis\): about 90% of the possible cooling by 4\.60( pp)?, d_s = 2\.00/);
+    expect(fig.textContent).not.toMatch(/comes by an amount of 4\.60/);
+    expect(fig.querySelector('button.infotip[data-term="saturation"]')).not.toBeNull();
+    const points = [...container.querySelectorAll("table.tbl")].find((t) => t.querySelector("caption")?.textContent === "Results by amount")!;
     expect(points.querySelectorAll("tbody tr").length).toBe(3);
-    expect(points.textContent).toContain("Neighbourhood dose");
+    expect(points.textContent).toContain("Amount nearby");
+    expect(container.querySelector("[title]")).toBeNull();
   });
 });
 
@@ -168,18 +179,23 @@ describe("Climate × adaptation", () => {
     });
     navigate(`/r/${RID}/lab/climate`, { replace: true });
     const { container } = render(<Climate />);
-    await waitFor(() => container.querySelector('svg.chart[aria-label="Warming by scenario and period"]'), 8000, "warming chart");
+    await waitFor(() => container.querySelector('svg.chart[aria-label="Warming by emissions future and period"]'), 8000, "warming chart");
+    // emissions futures and periods in plain words; the pathway codes only in the ⓘ's technical line
+    const emissions = container.querySelector('[role="group"][aria-label="Emissions futures"]')!;
+    expect([...emissions.querySelectorAll("button.chip")].map((b) => b.textContent)).toEqual(["Moderate emissions", "Very high emissions"]);
+    expect([...container.querySelectorAll('[role="group"][aria-label="Time periods"] button.chip')].map((b) => b.textContent)).toEqual(["Mid-century (2041–2060)"]);
+    expect(container.querySelector(".lab-form")!.textContent).not.toMatch(/SSP|ssp|p10|p90/);
     await waitFor(() => explored.length > 0, 5000, "explore");
     expect(explored[0]).toMatchObject({ adaptations: [], statistic: "median" });
     const chip = byText(container, "button.chip", "Downtown cool corridor")!;
     click(chip);
     await waitFor(() => explored.length > 1, 5000, "explore with the adaptation");
     expect(explored.at(-1)).toMatchObject({ adaptations: [{ kind: "result", id: "res_1" }] });
-    await waitFor(() => container.querySelector('svg.chart[aria-label="Share of cells at or above 90.0 °F"]'), 5000, "exposure bars");
-    expect(byText(container, "figure", "Cancels 41% of SSP2-4.5 2041–2060 median warming")).not.toBeNull();
+    await waitFor(() => container.querySelector('svg.chart[aria-label="Share of places with an air temperature at or above 90 °F"]'), 5000, "exposure bars");
+    expect(byText(container, "figure", "Cancels out 41% of the warming expected by mid-century (2041–2060), with moderate emissions.")).not.toBeNull();
     // the future map: obs [86, 88, 89.5, 90, 91, 85, 87] + median warming 3.6 → 5 of 7 cells ≥ 90
-    await waitFor(() => byText(container, ".cap", "Warming +3.60 °F (median of models)"), 5000, "map caption");
-    expect(byText(container, ".cap", "Warming +3.60 °F")!.textContent).toMatch(/71% of cells at or above 90/);
+    await waitFor(() => byText(container, ".cap", "Warming +3.60 °F (middle climate-model estimate)"), 5000, "map caption");
+    expect(byText(container, ".cap", "Warming +3.60 °F")!.textContent).toMatch(/71% of places at or above an air temperature of 90 °F/);
     await flush(2);
   });
 });
@@ -198,7 +214,7 @@ const CMP: Comparison = {
 };
 
 describe("Compare", () => {
-  it("creates the comparison, shows paired SE or the needs-exact chip, and renders small multiples", async () => {
+  it("creates the comparison, shows the uncertainty of the difference or the needs-a-full-model-run chip, and renders small multiples", async () => {
     fetchMock = mockFetch({
       ...runRoutes(),
       [`POST /api/runs/${RID}/compare`]: { status: 201, body: CMP },
@@ -210,10 +226,14 @@ describe("Compare", () => {
     navigate(`/r/${RID}/lab/compare?items=${encodeURIComponent("res:res_1,configured:cool-roofs")}`, { replace: true });
     const { container } = render(<Compare />);
     await waitFor(() => new URLSearchParams(window.location.search).get("cid") === "cmp_1", 8000, "comparison created");
-    await waitFor(() => byText(container, ".badge", "needs exact re-run"), 8000, "pairs table");
+    await waitFor(() => byText(container, "td .badge", "needs a full model run"), 8000, "pairs table");
     expect(fetchMock.calls.find((c) => c.method === "POST")!.body).toEqual({ items: [{ kind: "result", id: "res_1" }, { kind: "configured", slug: "cool-roofs" }] });
-    expect(byText(container, ".badge", "needs exact: Cool roofs")).not.toBeNull();
-    expect(byText(container, "button", "Re-run exactly")).not.toBeNull();
+    expect(byText(container, ".badge", "needs a full model run: Cool roofs")).not.toBeNull();
+    expect(byText(container, "button", "Run full model again")).not.toBeNull();
+    // "paired SE" in plain words, explained in an ⓘ
+    expect(byText(container, "[data-paired-note]", "± its uncertainty of the difference (95%)")).not.toBeNull();
+    expect(container.querySelector('button.infotip[data-term="paired_se"]')).not.toBeNull();
+    expect(container.textContent).not.toMatch(/paired SE/i);
     await waitFor(() => container.querySelectorAll(".mini-maps figure").length === 2, 5000, "small multiples");
     expect(container.querySelector(".mini-maps")!.textContent).toContain("Cool roofs");
     // pairs read A − B, as the server computes them (diff = A − B, SE(A − B))
@@ -242,10 +262,10 @@ describe("Compare", () => {
     navigate(`/r/${RID}/lab/compare?items=${encodeURIComponent("plan:plan_1,res:res_1")}`, { replace: true });
     const { container } = render(<Compare />);
     await waitFor(() => byText(container, "h3", "Difference map: Plan: Trees (planned) − Downtown cool corridor"), 8000, "pair");
-    expect(byText(container, ".cap", "No difference map: an unverified plan has no per-cell ΔT")).not.toBeNull();
-    const note = byText(container, ".cap", "Plan: Trees (planned): not verified.");
+    expect(byText(container, ".cap", "No difference map: a plan not checked yet has no change place by place")).not.toBeNull();
+    const note = byText(container, ".cap", "Plan: Trees (planned): not checked yet.");
     expect(note).not.toBeNull();
-    expect(note!.textContent).toContain("°F·cells");
+    expect(note!.textContent).toContain("°F·places");
     expect(fetchMock.calls.some((c) => c.url.includes("/layers/cmp"))).toBe(false);
     await flush(2);
   });

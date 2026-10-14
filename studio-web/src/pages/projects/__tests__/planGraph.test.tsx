@@ -19,12 +19,12 @@ describe("PlanGraph", () => {
     expect(s4.dataset.state).toBe("will_run");
     expect(s4.querySelector(".plan-state")!.textContent).toBe("will run");
     expect(s4.querySelector(".plan-reason")!.textContent).toContain("required by S6");
-    expect(s4.querySelector(".plan-units")!.textContent).toContain("22 engine passes");
+    expect(s4.querySelector(".plan-units")!.textContent).toContain("22 model passes");
     expect(s4.querySelector(".plan-est")!.textContent).toBe("≈4–6 min");
 
     expect(by("S1").querySelector(".plan-state")!.textContent).toBe("cached");
     expect(by("S1").textContent).toContain("from the checkpoint");
-    expect(by("baselines").textContent).toContain("disabled in the config (cv.baselines)");
+    expect(by("baselines").textContent).toContain("turned off in the project settings");
     expect(by("S5").textContent).toContain("not requested");
     expect(by("climate").textContent).toContain("needs S5 (scenarios)");
     expect(by("S7").textContent).toContain("no budget set");

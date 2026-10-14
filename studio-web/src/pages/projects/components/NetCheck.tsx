@@ -6,6 +6,7 @@ import { errorMessage } from "../../../api/client";
 import { netcheck, type NetcheckRow } from "../../../api/inputs";
 import { Button } from "../../../components/ui/Button";
 import { Pill } from "../../../components/ui/Pill";
+import { TipSpan } from "../../../layouts/tips";
 import { fmtInt } from "../../../theme/format";
 
 export function NetCheck({ hosts, auto = true }: { hosts: readonly string[]; auto?: boolean }) {
@@ -37,23 +38,27 @@ export function NetCheck({ hosts, auto = true }: { hosts: readonly string[]; aut
   return (
     <div className="netcheck stack" style={{ gap: 6 }} aria-label="Network hosts">
       <div className="row" style={{ gap: 6 }}>
-        <span className="eyebrow">Hosts</span>
+        <span className="eyebrow">Servers it downloads from</span>
         {hosts.map((h) => {
           const r = byHost.get(h);
           if (!r)
             return (
-              <Pill key={h} icon="dot" title="not checked yet">
-                {h}
-              </Pill>
+              <TipSpan key={h} tip="Not checked yet.">
+                <Pill icon="dot">{h}</Pill>
+              </TipSpan>
             );
           return r.ok ? (
-            <Pill key={h} tone="good" icon="check" title={`${h} answered`}>
-              {h} {r.ms !== null ? <span className="num">{fmtInt(r.ms)} ms</span> : null}
-            </Pill>
+            <TipSpan key={h} tip={`${h} answered${r.ms !== null ? ` in ${fmtInt(r.ms)} ms` : ""}.`}>
+              <Pill tone="good" icon="check">
+                {h} {r.ms !== null ? <span className="num">{fmtInt(r.ms)} ms</span> : null}
+              </Pill>
+            </TipSpan>
           ) : (
-            <Pill key={h} tone="crit" icon="x" title={r.error ?? "unreachable"}>
-              {h} unreachable
-            </Pill>
+            <TipSpan key={h} tip={`${h} did not answer.`} technical={r.error ?? null}>
+              <Pill tone="crit" icon="x">
+                {h} unreachable
+              </Pill>
+            </TipSpan>
           );
         })}
         <Button size="small" variant="ghost" icon="refresh" busy={busy} onClick={() => void run()}>

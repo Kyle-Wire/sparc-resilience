@@ -7,12 +7,15 @@ import { useEffect, useState, type ReactNode } from "react";
 import { ApiError, errorMessage } from "../../api/client";
 import { conflictVersion, getConfig, putConfig, useProjectConfig, validateConfig } from "../../api/projects";
 import { invalidate, mutate } from "../../api/resource";
-import { Badge, DemoBadge } from "../../components/ui/Badge";
+import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { StageNum } from "../../components/ui/StageRail";
 import { Tabs } from "../../components/ui/Tabs";
+import { term } from "../../content/glossary";
 import { useProject } from "../../layouts/resources";
+import { DemoTag, TipSpan } from "../../layouts/tips";
 import { Link, navigate, useRoute } from "../../router";
 import { toast } from "../../stores/ui";
 import { CfgProvider } from "./components/cfg";
@@ -112,10 +115,10 @@ function SaveBar({ pid }: { pid: string }) {
       setConflict(null);
       invalidate(`project:${pid}`);
       const errors = r.issues.filter((i) => i.level === "error").length;
-      toast(errors ? "warning" : "success", `Saved config version ${r.version}`, { body: errors ? `${errors} validation ${errors === 1 ? "error" : "errors"} remain.` : undefined });
+      toast(errors ? "warning" : "success", `Saved settings version ${r.version}`, { body: errors ? `${errors} ${errors === 1 ? "problem remains" : "problems remain"} in the settings.` : undefined });
     } catch (e) {
       if (e instanceof ApiError && e.code === "conflict") setConflict({ server: conflictVersion(e.detail) });
-      else toast("error", "Could not save the config", { body: errorMessage(e) });
+      else toast("error", "Could not save the settings", { body: errorMessage(e) });
     } finally {
       setSaving(false);
     }
@@ -129,9 +132,9 @@ function SaveBar({ pid }: { pid: string }) {
       st().forget(pid);
       st().adopt(pid, doc);
       setConflict(null);
-      toast("info", `Loaded config version ${doc.version}`);
+      toast("info", `Loaded settings version ${doc.version}`);
     } catch (e) {
-      toast("error", "Could not load the saved config", { body: errorMessage(e) });
+      toast("error", "Could not load the saved settings", { body: errorMessage(e) });
     } finally {
       setSaving(false);
     }
@@ -141,7 +144,7 @@ function SaveBar({ pid }: { pid: string }) {
     <>
       {draft.serverVersion > draft.baseVersion && dirty.length ? (
         <div className="callout" data-tone="info" role="status">
-          A newer config version ({draft.serverVersion}) was saved while you edited (yours is based on {draft.baseVersion}). Saving will ask before overwriting it.{" "}
+          A newer settings version ({draft.serverVersion}) was saved while you edited (yours is based on version {draft.baseVersion}). Saving will ask before overwriting it.{" "}
           <Button size="small" variant="ghost" onClick={() => void reload()}>
             Load version {draft.serverVersion}
           </Button>
@@ -157,7 +160,7 @@ function SaveBar({ pid }: { pid: string }) {
             Discard
           </Button>
           <Button variant="primary" icon="check" busy={saving} onClick={() => void save(draft.baseVersion)}>
-            Save config
+            Save settings
           </Button>
         </div>
       ) : null}
@@ -209,6 +212,7 @@ export default function Setup() {
   // Numbered steps on the brand rail, filled up to the last complete step.
   const dots = draft ? STEPS.map((s) => stepDot(s.id, readiness, draft.raw, issues)) : [];
   const lastOk = dots.lastIndexOf("ok");
+  const cur = STEPS.find((s) => s.id === step);
 
   return (
     <div className="stack setup-page">
@@ -216,14 +220,18 @@ export default function Setup() {
         <p className="eyebrow">Setup</p>
         <div className="row">
           <h1>{p ? `Set up ${p.name}` : "Set up"}</h1>
-          {p?.demo ? <DemoBadge /> : null}
+          {p?.demo ? <DemoTag /> : null}
           <span className="spacer" />
           <span className="cap" role="status" aria-live="polite">
-            {validating ? "Validating…" : draft ? (errors || warns ? `${errors} ${errors === 1 ? "error" : "errors"} · ${warns} ${warns === 1 ? "warning" : "warnings"}` : "Config valid") : ""}
+            {validating ? "Checking the settings…" : draft ? (errors || warns ? `${errors} ${errors === 1 ? "problem" : "problems"} · ${warns} ${warns === 1 ? "warning" : "warnings"}` : "Settings check passed") : ""}
           </span>
-          {draft ? <Badge title="Config version the draft is based on">v{draft.baseVersion}</Badge> : null}
+          {draft ? (
+            <TipSpan tip={`${term("config_version").label} ${draft.baseVersion}: your edits start from it. ${term("config_version").tip}`} technical={term("config_version").technical}>
+              <Badge>v{draft.baseVersion}</Badge>
+            </TipSpan>
+          ) : null}
           <Link className="btn small ghost" to={`/p/${encodeURIComponent(pid)}/config`}>
-            Edit the YAML
+            Edit the settings file (YAML)
           </Link>
           <Link className="btn small" to={`/p/${encodeURIComponent(pid)}/launch`}>
             Launch
@@ -260,6 +268,11 @@ export default function Setup() {
                 };
               })}
             >
+              {cur ? (
+                <p className="cap step-intro">
+                  {cur.help} <InfoTip label={`the ${cur.label} step`} text="The parts of the project's settings file this step edits." technical={cur.technical} />
+                </p>
+              ) : null}
               {STEP_VIEW[step]()}
             </Tabs>
           </div>

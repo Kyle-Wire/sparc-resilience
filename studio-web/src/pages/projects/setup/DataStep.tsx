@@ -9,6 +9,9 @@ import { isNumericDtype, uploadFile, useFileInspect, useProjectFiles, type FileI
 import { invalidate } from "../../../api/resource";
 import { Button } from "../../../components/ui/Button";
 import { Card } from "../../../components/ui/Card";
+import { InfoTip } from "../../../components/ui/InfoTip";
+import { term } from "../../../content/glossary";
+import { TipSpan } from "../../../layouts/tips";
 import { ConfirmDialog } from "../../../components/ui/Dialog";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { FileDrop } from "../../../components/ui/FileDrop";
@@ -147,23 +150,49 @@ function CheckResults({ pid }: { pid: string }) {
         </div>
       ) : null}
       <KpiRow label="Data check">
-        <Kpi label="Points kept" value={fmtInt(check.n_points)} note={`of ${fmtInt(check.n_input)} rows · ${fmtInt(check.n_dropped)} dropped`} tone={check.n_dropped > 0 ? "warn" : undefined} />
-        <Kpi label="Grid" value={`${fmtInt(check.grid.nx)} × ${fmtInt(check.grid.ny)}`} note={`cell ${fmtNum(check.grid.cell_m, 1)} m · ${fmtNum(check.extent_m[0] / 1000, 1)} × ${fmtNum(check.extent_m[1] / 1000, 1)} km`} />
-        <Kpi label="Fill fraction" value={fmtPct(check.grid.fill_fraction, 1)} note={`${fmtNum(check.grid.collisions, 2)} collisions per cell`} />
-        <Kpi label="Background" value={fmtValue(check.background.value, units, 2)} note={check.background.source || undefined} />
-        <Kpi label="Noise floor" value={check.noise_floor === null ? "—" : fmtValue(check.noise_floor, units, 2)} note={check.noise_floor === null ? "target not rounded" : "rounding noise of the target"} />
+        <Kpi label="Readings kept" value={fmtInt(check.n_points)} note={`of ${fmtInt(check.n_input)} rows · ${fmtInt(check.n_dropped)} dropped`} tone={check.n_dropped > 0 ? "warn" : undefined} />
+        <Kpi
+          label={
+            <>
+              Map grid <InfoTip term="cell" />
+            </>
+          }
+          value={`${fmtInt(check.grid.nx)} × ${fmtInt(check.grid.ny)}`}
+          note={`squares of ${fmtNum(check.grid.cell_m, 1)} m · ${fmtNum(check.extent_m[0] / 1000, 1)} × ${fmtNum(check.extent_m[1] / 1000, 1)} km`}
+        />
+        <Kpi
+          label={
+            <>
+              {term("grid_fill").label} <InfoTip term="grid_fill" />
+            </>
+          }
+          value={fmtPct(check.grid.fill_fraction, 1)}
+          note={`${fmtNum(check.grid.collisions, 2)} readings share a square, on average`}
+        />
+        <Kpi label="Background temperature" value={fmtValue(check.background.value, units, 2)} note={check.background.source || undefined} />
+        <Kpi
+          label={
+            <>
+              {term("noise_floor").label} <InfoTip term="noise_floor" />
+            </>
+          }
+          value={check.noise_floor === null ? "—" : fmtValue(check.noise_floor, units, 2)}
+          note={check.noise_floor === null ? "readings are not rounded" : "from rounding in the readings"}
+        />
       </KpiRow>
       {check.flags.length ? (
         <div className="row" aria-label="QA flags">
           {check.flags.map((f) => (
-            <Pill key={f.code} tone={f.severity === "warn" ? "warn" : "accent"} icon={f.severity === "warn" ? "alert" : "info"} title={f.code}>
-              {f.message}
-            </Pill>
+            <TipSpan key={f.code} tip="A data-quality flag from the check." technical={f.code}>
+              <Pill tone={f.severity === "warn" ? "warn" : "accent"} icon={f.severity === "warn" ? "alert" : "info"}>
+                {f.message}
+              </Pill>
+            </TipSpan>
           ))}
         </div>
       ) : (
         <Pill tone="good" icon="check">
-          No QA flags
+          No data-quality flags
         </Pill>
       )}
       {clipped.length ? (
@@ -227,7 +256,7 @@ function Background({ columns }: { columns: Opt[] }) {
   const mode: "median" | "number" | "column" = typeof v === "number" ? "number" : v === "median" || v === undefined || v === null ? "median" : "column";
   return (
     <div data-cfg-path="data.background" className="field">
-      <span className="field-label">Background (ΔT reference)</span>
+      <span className="field-label">Reference temperature</span>
       <Seg
         label="Background"
         size="small"
@@ -251,7 +280,7 @@ function Background({ columns }: { columns: Opt[] }) {
           ))}
         </select>
       ) : null}
-      <span className="hint">Every ΔT is relative to this value.</span>
+      <span className="hint">Temperature changes are measured from this value (default: the middle reading).</span>
       <IssueLines issues={c.issues("data.background")} />
     </div>
   );
@@ -281,7 +310,7 @@ export function DataStep() {
   return (
     <div className="stack setup-step" data-step="data">
       <StepIssues issues={stepIssues("data", d.issues)} />
-      <Card title="Point table" eyebrow="1 · Upload">
+      <Card title="Temperature readings" eyebrow="1 · Upload">
         <FileDrop label="Drop a CSV or parquet of street-level temperatures" hint="Streamed to the project's data folder (CSV or parquet, up to the upload limit in Settings)." accept=".csv,.parquet" onFiles={(f) => f[0] && void up.start(f[0])} />
         {up.view}
         <div className="grid2">
@@ -301,7 +330,7 @@ export function DataStep() {
         </div>
       </Card>
 
-      <Card title="Header preview" eyebrow="2 · Columns">
+      <Card title="Columns in the file" eyebrow="2 · Columns">
         {!dataPath ? (
           <p className="cap">Upload or choose a data file first.</p>
         ) : inspect.error ? (
@@ -315,14 +344,14 @@ export function DataStep() {
         )}
       </Card>
 
-      <Card title="Column mapping" eyebrow="3 · Mapping" className="mapping-form">
+      <Card title="Which column is which" eyebrow="3 · Mapping" className="mapping-form">
         <div className="grid3">
           <CfgSelect path="data.target" label="Temperature (target)" options={numCols} confidence={conf("data.target")} hint={suggestHint(s, "data.target", c.value("data.target"))} />
           <CfgSelect path="data.target_units" label="Target units" options={TARGET_UNITS} />
           <CfgSelect path="data.id" label="Id column" options={allCols} none="none (rows are numbered)" confidence={conf("data.id")} hint={suggestHint(s, "data.id", c.value("data.id"))} />
           <CfgSelect path="data.x" label="X coordinate" options={numCols} confidence={conf("data.x")} hint={suggestHint(s, "data.x", c.value("data.x"))} />
           <CfgSelect path="data.y" label="Y coordinate" options={numCols} confidence={conf("data.y")} hint={suggestHint(s, "data.y", c.value("data.y"))} />
-          <CfgSelect path="data.coord_unit" label="Coordinate unit" options={COORD_UNITS} confidence={conf("data.coord_unit")} hint={suggestHint(s, "data.coord_unit", c.value("data.coord_unit")) ?? "Feet vs metres follows from the lattice spacing."} />
+          <CfgSelect path="data.coord_unit" label="Coordinate unit" options={COORD_UNITS} confidence={conf("data.coord_unit")} hint={suggestHint(s, "data.coord_unit", c.value("data.coord_unit")) ?? "Worked out from the spacing between readings."} />
           <CfgSelect path="data.zone" label="Zone column" options={allCols} none="none" confidence={conf("data.zone")} hint={suggestHint(s, "data.zone", c.value("data.zone")) ?? "Neighbourhood codes (reporting only)."} />
         </div>
         <EpsgField hint={s?.crs_guess ?? null} centroid={centroid} confidence={conf("data.crs")} />
@@ -331,20 +360,24 @@ export function DataStep() {
       <Card title="Further settings" eyebrow="4 · Options">
         <div className="grid3">
           <Background columns={numCols} />
-          <CfgNumber path="data.subsample" label="Subsample" hint="Keep only this many points around the centre (smoke tests)." step={1000} min={1} />
+          <CfgNumber path="data.subsample" label="Subsample" hint="Keep only this many readings around the centre, for a quick trial run." step={1000} min={1} />
           <CfgNumber path="data.coarse_m" label="Coarse cell size" unit="m" hint="Aggregate onto cells of this size over the full extent." min={1} />
-          <CfgNumber path="data.cell_m" label="Grid cell size" unit="m" hint="Default: inferred from the point lattice." min={0.1} />
-          <CfgText path="data.reproject_to" label="Reproject to" placeholder="EPSG:32619" hint="Reproject x/y to this CRS (metres)." />
+          <CfgNumber path="data.cell_m" label="Grid cell size" unit="m" hint="Default: worked out from the spacing between readings." min={0.1} />
+          <CfgText path="data.reproject_to" label="Reproject to" placeholder="EPSG:32619" hint="Convert the coordinates to this map projection (in metres)." />
         </div>
       </Card>
 
-      <Card title="Join tables" eyebrow="5 · Joins">
+      <Card
+        title="Extra tables to join"
+        eyebrow="5 · Joins"
+        tip={<InfoTip label="Extra tables to join" text="More columns for the same places, in other files, matched to the readings by their id." technical="data.joins" />}
+      >
         <JoinsEditor pid={pid} columns={allCols} />
       </Card>
 
       <Card
         title="Check data"
-        eyebrow="6 · S0 inline"
+        eyebrow="6 · Check the data"
         actions={
           <Button variant="primary" icon="play" busy={checking} disabled={!dataPath} onClick={() => void runDataCheck(pid)}>
             Check data

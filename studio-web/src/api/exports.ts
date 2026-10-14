@@ -42,16 +42,16 @@ export type ReportSection =
 
 export const REPORT_SECTIONS: readonly { id: ReportSection; label: string; hint: string }[] = [
   { id: "summary", label: "Summary", hint: "Headline numbers written from the run" },
-  { id: "accuracy", label: "Accuracy", hint: "Held-out skill, interval coverage, baselines" },
-  { id: "validation", label: "Validation", hint: "Placebo, simulation check, multiverse, reproduction" },
-  { id: "scenarios", label: "Scenarios", hint: "Configured scenarios and the selected exact results" },
+  { id: "accuracy", label: "Accuracy", hint: "Accuracy score, range reliability, simpler models" },
+  { id: "validation", label: "Independent checks", hint: "Fake-change test, simulation check, stability across choices, repeat run" },
+  { id: "scenarios", label: "Scenarios", hint: "Scenarios set up with this run and the selected full model results" },
   { id: "plans", label: "Plans", hint: "The selected budget plans" },
   { id: "climate", label: "Climate", hint: "Mid-century warming and exposure" },
-  { id: "heat", label: "Heat stress", hint: "Residents by NWS heat-risk category, what helps, verdicts" },
+  { id: "heat", label: "Heat risk", hint: "Residents by NWS heat-risk category, what helps, verdicts" },
   { id: "equity", label: "Equity", hint: "Who the cooling reaches" },
-  { id: "caveats", label: "Caveats", hint: "Generated from the numbers" },
+  { id: "caveats", label: "Things to keep in mind", hint: "Generated from the numbers" },
   { id: "limitations", label: "Limitations", hint: "From the model card" },
-  { id: "provenance", label: "Provenance", hint: "Run, commit and hashes" },
+  { id: "provenance", label: "Audit trail", hint: "Code version and file fingerprints" },
   { id: "findings", label: "Findings", hint: "The selected pinned findings" },
 ];
 

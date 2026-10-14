@@ -229,7 +229,7 @@ def preflight_rows(sctx, cfg, *, ram: float, disk_bytes: float, hosts: list[str]
     ws_root = sctx.workspace.root if sctx is not None else Path.cwd()
     disk = preflight_disk(ws_root, disk_bytes)
     rows.append({"check": "disk", "ok": disk is None, "severity": "error" if disk else "info",
-                 "message": disk["reason"] if disk else f"checkpoint and outputs need about {disk_bytes / 1e9:.2f} GB",
+                 "message": disk["reason"] if disk else f"saved models and outputs need about {disk_bytes / 1e9:.2f} GB",
                  "action": None})
     files = [i for i in issues if i["code"] == "file_missing"]
     rows.append({"check": "files", "ok": not files, "severity": "warn" if files else "info",

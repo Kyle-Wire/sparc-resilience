@@ -10,18 +10,23 @@
 // Run metadata, stage timings, the outputs grid and the accuracy numbers are not here: they
 // live in Model details (Provenance, Run log, Accuracy) and How much to trust this.
 // Overview.tsx keeps the full technical overview.
+// Plain words (phase 4): each card has an ⓘ (InfoTip) with what its number means and the technical
+// name behind it (the trust card's names the four checks); its line is short sentences, with units
+// and the likely range or the spread across climate models.
 import type { ClimateProjection, OverviewSections, RunDetail, ScenarioRow, ViewKpi, ViewModelOf } from "../../api/runs";
 import { useRunDetailFull, useView } from "../../api/runs";
 import type { Likely, RunSummary } from "../../api/types";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { StageRail, type StageRailStage } from "../../components/ui/StageRail";
+import { heatCategory, periodLabel, ssp, term, type TermId } from "../../content/glossary";
 import { trustGrade, type TrustGrade, type TrustInput } from "../../content/trust";
 import { runIsLive } from "../../layouts/resources";
 import { Link, runHref, useRoute } from "../../router";
-import { coolerWarmer, DASH, EMPTY, fmtDateTime, fmtDuration, fmtInt, fmtNum, fmtPct, fmtRange, fmtSigned, unitLabel } from "../../theme/format";
-import { stageShort } from "../projects/model/plan";
+import { coolerWarmer, EMPTY, fmtDateTime, fmtDuration, fmtInt, fmtNum, fmtPct, fmtSigned, unitLabel } from "../../theme/format";
 import { railStatus } from "../tracking/mission/StageRail";
-import { useRid } from "./common";
+import { STAGE_SHORT } from "../tracking/model";
+import { TipChip, useRid } from "./common";
 import { isTempUnit, rangeWords, targetUnit } from "./format";
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -33,10 +38,15 @@ const pending = (r: Loaded<unknown>) => r.data === undefined && !r.error;
 
 export type HeadlineCardId = "cooling" | "heat" | "trust" | "climate";
 
+/** The ⓘ of a headline card: a glossary term (its technical name goes under the tip), named after the card, with the card's own tip. */
+export type CardTip = { term: TermId; text: string; technical?: string };
+
 /** One headline card. `state` "absent" means the run has no number for it; `line` says why. */
 export type HeadlineCard = {
   id: HeadlineCardId;
   label: string;
+  /** What the card's number means, in its ⓘ. */
+  tip: CardTip;
   state: "ready" | "loading" | "absent";
   value?: string;
   unit?: string;
@@ -59,7 +69,7 @@ function changeParts(v: number, unit: string, decimals: number): { value: string
 
 // ---------------------------------------------------------------- cooling potential
 
-export type CoolingPick = { name: string; likely: Pick<Likely, "estimate" | "lo" | "hi"> };
+export type CoolingPick = { name: string; likely: Pick<Likely, "estimate" | "lo" | "hi">; /** The run's joint scenario (the overview's `package` KPI). */ package?: boolean };
 
 /**
  * The cooling headline: the run's cooling package (its joint scenario, the overview's `package`
@@ -69,12 +79,17 @@ export type CoolingPick = { name: string; likely: Pick<Likely, "estimate" | "lo"
 export function coolingPick(kpis: readonly ViewKpi[] | null | undefined, rows: readonly ScenarioRow[] | null | undefined): CoolingPick | null {
   for (const id of ["package", "headline"]) {
     const k = kpiOf(kpis, id);
-    if (k && isNum(k.value)) return { name: k.label, likely: { estimate: k.value, lo: k.likely?.lo ?? null, hi: k.likely?.hi ?? null } };
+    if (k && isNum(k.value)) return { name: k.label, likely: { estimate: k.value, lo: k.likely?.lo ?? null, hi: k.likely?.hi ?? null }, ...(id === "package" ? { package: true } : {}) };
   }
   let best: ScenarioRow | null = null;
   for (const r of rows ?? []) if (isNum(r.delta?.estimate) && (!best || r.delta.estimate < best.delta.estimate)) best = r;
   return best ? { name: best.name, likely: { estimate: best.delta.estimate, lo: best.delta.lo, hi: best.delta.hi } } : null;
 }
+
+const COOLING_TIP: CardTip = {
+  term: "citywide",
+  text: "How much cooler the whole city gets, on average, with this run's cooling package (or its best scenario). The average counts every place, including those left as they are.",
+};
 
 export function coolingCard(
   rid: string,
@@ -82,7 +97,7 @@ export function coolingCard(
   scenarios: Loaded<ViewModelOf<"scenarios">>,
   live: boolean,
 ): HeadlineCard {
-  const base = { id: "cooling", label: "Cooling potential", to: runHref(rid, "lab", "library"), linkText: "See scenarios" } as const;
+  const base = { id: "cooling", label: "Cooling potential", tip: COOLING_TIP, to: runHref(rid, "lab", "library"), linkText: "See scenarios" } as const;
   const kpis = overview.data?.sections.kpis;
   const pick = coolingPick(kpis, scenarios.data?.availability === "missing" ? null : scenarios.data?.sections.rows);
   if (!pick) {
@@ -91,14 +106,23 @@ export function coolingCard(
   }
   const unit = targetUnit(overview.data?.units ?? scenarios.data?.units);
   const { estimate, lo, hi } = pick.likely;
-  const range = isNum(lo) && isNum(hi) ? ` · likely ${rangeWords(lo, hi, unit, 2)}` : "";
-  return { ...base, state: "ready", ...changeParts(estimate, unit, 2), line: `${pick.name}, city-wide average${range}`, tone: isNum(hi) && hi < 0 ? "good" : undefined };
+  const range = isNum(lo) && isNum(hi) ? ` Likely ${rangeWords(lo, hi, unit, 2)}.` : "";
+  // the package is named for what it is: one name ("cooling package") everywhere, and what it holds
+  const what = pick.package ? "The cooling package (the run's combined trees, paving and roof changes)" : pick.name;
+  return { ...base, state: "ready", ...changeParts(estimate, unit, 2), line: `${what}, averaged over the whole city.${range}`, tone: isNum(hi) && hi < 0 ? "good" : undefined };
 }
 
 // ---------------------------------------------------------------- residents at heat risk
 
+const EXTREME_CAUTION = heatCategory("extreme_caution").label;
+
+const HEAT_TIP: CardTip = {
+  term: "heat_risk_level",
+  text: `Residents (or places, for a run without population data) where a hot afternoon already feels like ${EXTREME_CAUTION} or worse: a heat index (feels-like temperature) of 90 °F or more on the US National Weather Service scale.`,
+};
+
 export function heatCard(rid: string, heat: Loaded<ViewModelOf<"heat">>, live: boolean): HeadlineCard {
-  const base = { id: "heat", label: "Residents at heat risk", to: runHref(rid, "heat"), linkText: "See heat risk" } as const;
+  const base = { id: "heat", label: "Residents at heat risk", tip: HEAT_TIP, to: runHref(rid, "heat"), linkText: "See heat risk" } as const;
   if (pending(heat)) return { ...base, state: "loading", line: "" };
   const vm = heat.data;
   const today = vm && vm.availability !== "missing" ? vm.sections.today : null;
@@ -109,8 +133,11 @@ export function heatCard(rid: string, heat: Loaded<ViewModelOf<"heat">>, live: b
   }
   const people = today.measure === "people";
   const ec = today.unadapted.ec_or_worse;
-  const share = isNum(today.total) && today.total > 0 ? ` · ${fmtPct(ec / today.total)} of ${fmtInt(today.total)} ${people ? "residents" : "cells"}` : "";
-  return { ...base, state: "ready", value: fmtInt(ec), unit: people ? "residents" : "cells", line: `at Extreme caution or worse on the heat index today${share}` };
+  // a run without population counts places (grid cells) instead of residents
+  const who = people ? "residents" : `${term("cell").label.toLowerCase()}s`;
+  const share = isNum(today.total) && today.total > 0 ? ` That is ${fmtPct(ec / today.total)} of ${fmtInt(today.total)} ${who}.` : "";
+  const where = people ? "live where a hot afternoon" : "where a hot afternoon";
+  return { ...base, state: "ready", value: fmtInt(ec), unit: who, line: `${where} already feels like ${EXTREME_CAUTION} or worse.${share}` };
 }
 
 // ---------------------------------------------------------------- trust
@@ -128,8 +155,16 @@ export function trustInputs(kpis: readonly ViewKpi[] | null | undefined, run: Pi
 
 const GRADE_TONE: Record<TrustGrade, HeadlineCard["tone"]> = { good: "good", fair: "warn", limited: "crit" };
 
+/** The trust card's ⓘ: what the grade is and the four checks behind it (How much to trust this). */
+export const TRUST_CARD_TIP: CardTip = {
+  term: "trust_grade",
+  text:
+    "Good, Fair or Limited. Four checks sit behind it: how well the model predicts places it never saw, whether its prediction ranges hold, " +
+    "whether it holds up far from the measurements, and whether its cooling is cause, not coincidence. The first two set the grade.",
+};
+
 export function trustCard(rid: string, overview: Loaded<ViewModelOf<"overview">>, run: RunSummary | undefined, live: boolean): HeadlineCard {
-  const base = { id: "trust", label: "How much to trust this", to: runHref(rid, "trust"), linkText: "See the checks" } as const;
+  const base = { id: "trust", label: "How much to trust this", tip: TRUST_CARD_TIP, to: runHref(rid, "trust"), linkText: "See the four checks" } as const;
   const t = trustGrade(trustInputs(overview.data?.sections.kpis, run));
   if (!t) {
     if (pending(overview)) return { ...base, state: "loading", line: "" };
@@ -148,14 +183,26 @@ export function warmingPick(warming: readonly ClimateProjection[] | null | undef
   return mid.find((p) => p.experiment === "ssp245") ?? mid[0] ?? null;
 }
 
+const CLIMATE_TIP: CardTip = {
+  term: "ssp",
+  text: "How much hotter summer afternoons get by mid-century (2041–2060) than in 1995–2014, for the emissions future named on the card: the middle answer of several climate models. Most models fall within the range shown.",
+  technical: "CMIP6 change in summer daily maximum temperature (median; 10th–90th percentile across models)",
+};
+
+/** An emissions pathway in plain words ("moderate emissions"), else the projection's own label. */
+function emissionsWords(p: ClimateProjection): string {
+  return ssp(p.experiment ?? "")?.label ?? p.label;
+}
+
 export function climateCard(rid: string, climate: Loaded<ViewModelOf<"climate">>, overview: Loaded<ViewModelOf<"overview">>, live: boolean): HeadlineCard {
-  const base = { id: "climate", label: "Climate outlook", to: runHref(rid, "heat", "future"), linkText: "See future climate" } as const;
+  const base = { id: "climate", label: "Climate outlook", tip: CLIMATE_TIP, to: runHref(rid, "heat", "future"), linkText: "See future climate" } as const;
   const vm = climate.data && climate.data.availability !== "missing" ? climate.data : null;
   const p = warmingPick(vm?.sections.warming);
   if (p && isNum(p.median)) {
     const unit = targetUnit(vm?.units);
-    const spread = isNum(p.p10) && isNum(p.p90) ? ` · ${fmtRange(p.p10, p.p90, unit, 1)} across ${p.n_models ? fmtInt(p.n_models) : "the"} climate models` : "";
-    return { ...base, state: "ready", ...changeParts(p.median, unit, 1), line: `by ${p.period.replace("-", DASH)} (${p.label})${spread}` };
+    const models = p.n_models ? `${fmtInt(p.n_models)} climate models` : "the climate models";
+    const spread = isNum(p.p10) && isNum(p.p90) ? ` Most of ${models}: ${rangeWords(p.p10, p.p90, unit, 1)}.` : "";
+    return { ...base, state: "ready", ...changeParts(p.median, unit, 1), line: `Summer afternoons by ${periodLabel(p.period)}, with ${emissionsWords(p)}.${spread}` };
   }
   // The overview's headline number when the climate view cannot say.
   const k = kpiOf(overview.data?.sections.kpis, "warming");
@@ -164,7 +211,7 @@ export function climateCard(rid: string, climate: Loaded<ViewModelOf<"climate">>
     return { ...base, state: "ready", ...changeParts(k.value, unit, k.decimals ?? 1), line: k.label };
   }
   if (pending(climate) || pending(overview)) return { ...base, state: "loading", line: "" };
-  return { ...base, state: "absent", line: live ? "Appears once the climate stage finishes." : "This run has no climate projections." };
+  return { ...base, state: "absent", line: live ? "Appears once the climate stage finishes." : "This run has no future-climate projections." };
 }
 
 // ---------------------------------------------------------------- caveats
@@ -190,9 +237,13 @@ function SummaryCard({ card }: { card: HeadlineCard }) {
       data-tone={card.state === "ready" ? card.tone : undefined}
       style={{ gridTemplateRows: "auto auto 1fr auto", gap: 6 }}
     >
-      <h2 className="label" id={labelId} style={{ margin: 0 }}>
-        {card.label}
-      </h2>
+      {/* the ⓘ sits beside the title, not inside it, so the card's name stays its title */}
+      <div className="summary-card-head">
+        <h2 className="label" id={labelId} style={{ margin: 0, display: "inline" }}>
+          {card.label}
+        </h2>
+        <InfoTip term={card.tip.term} label={card.label} text={card.tip.text} technical={card.tip.technical} />
+      </div>
       <span className="value">
         {card.state === "loading" ? (
           <span className="cap" role="status">
@@ -225,7 +276,7 @@ function Progress({ rid, detail, live, timings }: { rid: string; detail: RunDeta
     const status = railStatus(s.state);
     return {
       id: s.id,
-      label: <span title={labels.get(s.id) ?? stageShort(s.id)}>{stageShort(s.id)}</span>,
+      label: <TipChip tip={labels.get(s.id) ?? null}>{STAGE_SHORT[s.id] ?? s.id}</TipChip>,
       status,
       meta: status === "done" && isNum(s.seconds) ? fmtDuration(s.seconds) : undefined,
       data: { stage: s.id },
@@ -238,7 +289,7 @@ function Progress({ rid, detail, live, timings }: { rid: string; detail: RunDeta
         <Link to={runHref(rid, "details", "runlog")}>{live ? "Follow it in the run log" : "See what happened in the run log"}</Link>
       </p>
       <JobStrip runId={rid} />
-      {stages.length ? <StageRail stages={stages} orientation="horizontal" size="sm" label="Pipeline stages" current={running?.id ?? null} /> : null}
+      {stages.length ? <StageRail stages={stages} orientation="horizontal" size="sm" label="Run stages" current={running?.id ?? null} /> : null}
     </section>
   );
 }
@@ -274,7 +325,10 @@ function KeepInMind({ rid, items, limitations }: { rid: string; items: string[];
   if (!items.length && !limitations) return null;
   return (
     <details className="summary-caveats cap" id={KEEP_IN_MIND_ID} data-caveats={items.length} open={hash === `#${KEEP_IN_MIND_ID}` || undefined}>
-      <summary style={{ cursor: "pointer", width: "max-content", maxWidth: "100%" }}>Things to keep in mind{items.length ? ` (${items.length})` : ""}</summary>
+      <summary style={{ cursor: "pointer", width: "max-content", maxWidth: "100%" }}>
+        {term("keep_in_mind").label}
+        {items.length ? ` (${items.length})` : ""}
+      </summary>
       {items.length ? (
         <ul className="prose" style={{ margin: "6px 0 0", paddingLeft: 18 }}>
           {items.map((c, i) => (

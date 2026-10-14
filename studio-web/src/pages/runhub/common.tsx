@@ -2,18 +2,23 @@
 // missing-output empty state in one sentence with the server's action, the run-wide caveats only
 // when asked: their home is the Summary), per-section placeholders
 // (older code, or the known reason a section is absent), KPI tiles, flags, generic tables and
-// the Findings pin for non-chart blocks.
+// the Findings pin for non-chart blocks. Plain words with tooltips (phase 4): status chips explain
+// themselves on hover, focus or tap (TipChip, never a native title), KPI tiles and block titles take
+// an ⓘ (InfoTip), and a Model details section can put an ⓘ beside its page's title (TitleTipProvider).
 import { Component, createContext, useContext, useState, type ErrorInfo, type ReactNode } from "react";
 import { api, errorMessage } from "../../api/client";
 import type { GenericTable, MissingOutput, Sections, Verdict, ViewFlag, ViewKpi, ViewModelOf, ViewName, ViewParams, ViewSections, ViewUnits } from "../../api/runs";
 import { useRunDetailFull, useView } from "../../api/runs";
-import type { Action, Finding, FindingCreate, StageId } from "../../api/types";
+import type { Action, Availability, Finding, FindingCreate, StageId } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
 import { ActionButton, EmptyState } from "../../components/ui/EmptyState";
 import { Icon } from "../../components/ui/Icon";
+import { InfoTip, type InfoTipProps } from "../../components/ui/InfoTip";
 import { Kpi, KpiRow } from "../../components/ui/Kpi";
 import { Pill } from "../../components/ui/Pill";
 import { Table, type Column } from "../../components/ui/Table";
+import { useTooltip } from "../../components/ui/Tooltip";
+import { term } from "../../content/glossary";
 import { runIsLive } from "../../layouts/resources";
 import { useRoute } from "../../router";
 import { toast, useUi } from "../../stores/ui";
@@ -52,17 +57,47 @@ export function LiveBanner({ children }: { children?: ReactNode }) {
   );
 }
 
+/** What "older code" means, in the ⓘ beside the placeholder. */
+const OLDER_CODE_TIP = "This run was made with an earlier version of SPARC that did not write this part. Running it again with the current version adds it.";
+
 /** Placeholder for a section an older-code run does not have. */
 export function OlderCode({ title }: { title: ReactNode }) {
   return (
     <div className="callout older-code" data-tone="info" data-older-code="true">
       <strong>{title}</strong>: not in this run (older code)
+      <InfoTip label="older code" text={OLDER_CODE_TIP} />
     </div>
   );
 }
 
+/**
+ * A status chip (badge, pill) that explains itself on hover (after a short delay), keyboard focus
+ * or tap, in place of a native `title`: the tooltip exists only while open (in a portal), so it adds
+ * nothing to the page's text. Without a tip the chip renders as it is.
+ */
+export function TipChip({ tip, children }: { tip: ReactNode; children: ReactNode }) {
+  const t = useTooltip<HTMLSpanElement>({ content: tip });
+  if (tip === null || tip === undefined || tip === "") return <>{children}</>;
+  return (
+    // focusable so keyboard users can read the tip too (it is not a control)
+    <span ref={t.anchorRef} className="tip-anchor" tabIndex={0} data-tip-chip="" {...t.triggerProps}>
+      {children}
+      {t.bubble}
+    </span>
+  );
+}
+
+/** The ⓘ a Model details section puts beside its page's title (ViewPage shows it next to a level-2 title). */
+const TitleTipCtx = createContext<ReactNode>(null);
+
+/** Gives the pages inside a Model details section the ⓘ for their title. */
+export function TitleTipProvider({ tip, children }: { tip: ReactNode; children: ReactNode }) {
+  return <TitleTipCtx.Provider value={tip}>{children}</TitleTipCtx.Provider>;
+}
+
 /** Why a section is absent when the reason is known (a stage the run skipped, data the run lacks): one sentence. */
-export type Absence = { reason: ReactNode; action?: Action | null };
+/** `why`: a skipped stage's reason as a phrase ("turned off in the project settings"), for callers that word their own sentence. */
+export type Absence = { reason: ReactNode; action?: Action | null; why?: string | null };
 
 /** Placeholder for a section absent for a known reason, with its remedy when there is one. */
 export function NotInRun({ title, reason, action }: { title: ReactNode } & Absence) {
@@ -95,7 +130,7 @@ export function useSkippedStage(rid: string, stage: StageId, what: string): Abse
   if (!skipped) return null;
   const why = row.reason && row.reason !== "not run" ? planReasonText(row.reason) : null;
   const action = overview.data?.sections.outputs_grid?.find((o) => o.produced_by === `stage:${stage}` && o.action)?.action ?? null;
-  return { reason: why ? `${what} did not run: ${why}.` : `${what} did not run.`, action };
+  return { reason: why ? `${what} did not run: ${why}.` : `${what} did not run.`, action, why };
 }
 
 type BoundaryProps = { title: ReactNode; children: ReactNode };
@@ -145,10 +180,10 @@ export function Section<T>({
 /** One plain sentence per producer whose outputs a view is missing (all of them share its remedy). */
 const PRODUCER_SENTENCE: Record<string, string> = {
   "post:planner": "Run the planner pack to see where to act, who is exposed, and the GIS files.",
-  "post:uncertainty": "Compute the uncertainty envelopes to see how wide each scenario's range is.",
-  "post:baselines": "Score the baselines to see whether the model beats simpler ones.",
+  "post:uncertainty": "Add up every source of uncertainty to see how wide each scenario's likely range is.",
+  "post:baselines": "Score the simpler comparison models to see whether this model beats them.",
   "post:writeup": "Regenerate the methods and model card to see them.",
-  "post:emulator": "Build the emulator to see this.",
+  "post:emulator": `Set up the ${term("emulator_preview").label.toLowerCase()} to see this.`,
 };
 
 /** Two remedies are the same button when they make the same request. */
@@ -206,12 +241,13 @@ export function MissingList({ missing }: { missing: ViewModelOf<ViewName>["missi
   );
 }
 
+/** The run's caveats as one disclosure, worded as the Summary's: "Things to keep in mind (3)". */
 export function Caveats({ caveats, open }: { caveats: string[]; open?: boolean }) {
   if (!caveats.length) return null;
   return (
     <details className="callout" data-tone="info" open={open}>
       <summary>
-        {caveats.length} caveat{caveats.length === 1 ? "" : "s"} for this run
+        {term("keep_in_mind").label} ({caveats.length})
       </summary>
       <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
         {caveats.map((c, i) => (
@@ -255,18 +291,41 @@ export type ViewPageProps<V extends ViewName> = {
   children: (sections: Sections<ViewSections[V]>, vm: ViewModelOf<V>) => ReactNode;
 };
 
+/** A view's availability in plain words, with what it means (the pill beside the title). */
+export const AVAILABILITY_WORDS: Record<Exclude<Availability, "ready">, { label: string; tip: string }> = {
+  partial: { label: "partly ready", tip: "Some of the outputs this page uses are not written yet. The sections below say what is missing." },
+  running: { label: "updating", tip: "The run is still writing outputs. This page refreshes as they arrive." },
+  stale: {
+    label: "may be out of date",
+    tip: "Some outputs here are older than the run's record and may be left over from an earlier attempt. Re-run the step that writes them to be sure.",
+  },
+  missing: { label: "not available yet", tip: "The outputs this page needs have not been written for this run." },
+};
+
+/** The DEMO badge, with what demo data means on hover, focus or tap. */
+export function DemoChip() {
+  return (
+    <TipChip tip={term("demo").tip}>
+      <Badge tone="demo">DEMO</Badge>
+    </TipChip>
+  );
+}
+
 /**
  * A run tab rendered from `GET /api/runs/{rid}/views/{view}`: loading and error states, the
  * missing-output empty state with its action, the live banner while the run writes, the
- * view's caveats when asked (`showCaveats`), then the sections.
+ * view's caveats when asked (`showCaveats`), then the sections. Inside a Model details section
+ * (TitleTipProvider) a level-2 title gets the section's ⓘ.
  */
 export function ViewPage<V extends ViewName>({ view, title, intro, live, liveText, actions, showCaveats = false, caveatsOpen, level = 2, kicker = false, params, children }: ViewPageProps<V>) {
   const rid = useRid();
   const res = useView(rid, view, params);
   const runLive = useRunIsLive(rid);
+  const titleTip = useContext(TitleTipCtx);
   const vm = res.data;
   const isLive = !!vm && (runLive || vm.availability === "running" || (live ? live(vm) : false));
   const Heading = level === 3 ? "h3" : "h2";
+  const availability = vm && vm.availability !== "ready" ? AVAILABILITY_WORDS[vm.availability] : null;
   return (
     <section className="stack runhub-view" data-view={view} aria-labelledby={`view-${view}`}>
       <header className="row" style={{ justifyContent: "space-between" }}>
@@ -274,12 +333,13 @@ export function ViewPage<V extends ViewName>({ view, title, intro, live, liveTex
           <Heading id={`view-${view}`} className={kicker ? "kicker" : undefined} style={{ margin: 0 }}>
             {title}
           </Heading>
-          {vm?.demo ? (
-            <Badge tone="demo" title="Synthetic demo data at a fictional location">
-              DEMO
-            </Badge>
+          {level === 2 && !kicker && titleTip ? titleTip : null}
+          {vm?.demo ? <DemoChip /> : null}
+          {vm && availability ? (
+            <TipChip tip={availability.tip}>
+              <Pill tone={vm.availability === "stale" ? "warn" : "neutral"}>{availability.label}</Pill>
+            </TipChip>
           ) : null}
-          {vm && vm.availability !== "ready" ? <Pill tone={vm.availability === "stale" ? "warn" : "neutral"}>{vm.availability}</Pill> : null}
         </div>
         {actions ? <div className="row">{actions}</div> : null}
       </header>
@@ -306,11 +366,15 @@ export function ViewPage<V extends ViewName>({ view, title, intro, live, liveTex
 /** A KPI whose value is words, not a number (a budget's constraint, its objective). */
 export const isTextKpi = (k: ViewKpi) => k.format === "text" || typeof k.value === "string";
 
+/** The ⓘ of a KPI tile: a glossary term, or a one-off label and tip (InfoTip's props). */
+export type KpiTip = InfoTipProps;
+
 /**
  * ViewModel KPIs as tiles (units and cooler/warmer wording from kpiDisplay). Words are not
  * numbers: text KPIs ("Constraint", "Objective") read as one caption line below the tiles.
+ * `tips` puts an ⓘ after the label of the tiles it names (by KPI id).
  */
-export function KpiTiles({ kpis, units, label }: { kpis: ViewKpi[]; units?: ViewUnits; label?: string }) {
+export function KpiTiles({ kpis, units, label, tips }: { kpis: ViewKpi[]; units?: ViewUnits; label?: string; tips?: Partial<Record<string, KpiTip>> }) {
   const ctxUnits = useUnits();
   if (!kpis.length) return <p className="cap">No key numbers for this run.</p>;
   const tiles = kpis.filter((k) => !isTextKpi(k));
@@ -319,7 +383,25 @@ export function KpiTiles({ kpis, units, label }: { kpis: ViewKpi[]; units?: View
     <KpiRow label={label}>
       {tiles.map((k) => {
         const d = kpiDisplay(k, units ?? ctxUnits);
-        return <Kpi key={k.id} label={k.label} value={d.value} unit={d.unit || undefined} note={d.note ?? undefined} tone={k.tone ?? undefined} />;
+        const tip = tips?.[k.id];
+        const kpiLabel = tip ? (
+          <>
+            {k.label}
+            <InfoTip {...tip} />
+          </>
+        ) : (
+          k.label
+        );
+        // Cooling added up over places (°F·places) is explained once, by the glossary's total_cooling ⓘ.
+        const unit = d.unit && d.unit.endsWith("·places") ? (
+          <>
+            {d.unit}
+            <InfoTip term="total_cooling" label={d.unit} />
+          </>
+        ) : (
+          d.unit || undefined
+        );
+        return <Kpi key={k.id} label={kpiLabel} value={d.value} unit={unit} note={d.note ?? undefined} tone={k.tone ?? undefined} />;
       })}
     </KpiRow>
   ) : null;
@@ -429,15 +511,18 @@ const VERDICT_TONE: Record<Verdict["verdict"], "good" | "warn" | "crit" | "neutr
 const VERDICT_ICON = { robust: "check", direction: "alert", not_established: "x", unknown: "minus" } as const;
 
 /** The plain verdict on a scenario's change (Robust / Direction only / Not established); the reasons and
- *  qualifiers are in the tooltip and, with `detail`, written out below the pill. */
+ *  qualifiers are in its tooltip (hover, focus or tap) and, with `detail`, written out below the pill. */
 export function VerdictPill({ verdict, detail }: { verdict: Pick<Verdict, "verdict" | "label" | "reasons" | "qualifiers"> | null | undefined; detail?: boolean }) {
   if (!verdict || !verdict.verdict) return <span className="cap">—</span>;
   const why = [...(verdict.reasons ?? []), ...(verdict.qualifiers ?? []).map((q) => `note: ${q}`)].join("; ");
   const pill = (
-    <Pill tone={VERDICT_TONE[verdict.verdict] ?? "neutral"} icon={VERDICT_ICON[verdict.verdict] ?? "minus"} title={why || undefined}>
-      {verdict.label}
-      {verdict.qualifiers?.length ? " *" : ""}
-    </Pill>
+    // with `detail` the reasons are written out below, so the pill needs no tooltip
+    <TipChip tip={detail ? null : why}>
+      <Pill tone={VERDICT_TONE[verdict.verdict] ?? "neutral"} icon={VERDICT_ICON[verdict.verdict] ?? "minus"}>
+        {verdict.label}
+        {verdict.qualifiers?.length ? " *" : ""}
+      </Pill>
+    </TipChip>
   );
   if (!detail) return pill;
   return (
@@ -448,13 +533,15 @@ export function VerdictPill({ verdict, detail }: { verdict: Pick<Verdict, "verdi
   );
 }
 
-/** A titled card with optional actions in its header. */
-export function Block({ title, actions, children, id }: { title: ReactNode; actions?: ReactNode; children: ReactNode; id?: string }) {
+/** A titled card with optional actions in its header; `tip` (an InfoTip) explains the title, beside it. */
+export function Block({ title, tip, actions, children, id }: { title: ReactNode; tip?: ReactNode; actions?: ReactNode; children: ReactNode; id?: string }) {
   return (
     <section className="card" id={id}>
       <header>
         <div>
-          <h3>{title}</h3>
+          {/* the ⓘ sits beside the heading, not inside it, so the heading's name stays its title */}
+          <h3 style={tip ? { display: "inline" } : undefined}>{title}</h3>
+          {tip}
         </div>
         {actions ? <div className="row">{actions}</div> : null}
       </header>

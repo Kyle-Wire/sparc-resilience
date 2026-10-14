@@ -5,6 +5,9 @@
 import { useFileInspect } from "../../../api/projects";
 import { Button } from "../../../components/ui/Button";
 import { Card } from "../../../components/ui/Card";
+import { InfoTip } from "../../../components/ui/InfoTip";
+import { Term } from "../../../components/ui/Term";
+import { term } from "../../../content/glossary";
 import { NumberField } from "../../../components/ui/NumberField";
 import { Seg } from "../../../components/ui/Seg";
 import { fmtSig } from "../../../theme/format";
@@ -77,7 +80,7 @@ function LeverCard({ name, range }: { name: string; range: { min: number | null;
         />
         <span className="mono">{name}</span>
         <span className="cap">
-          {on ? "actionable lever" : "not a lever"}
+          {on ? "can be changed in plans" : "not changed in plans"}
           {range.min !== null && range.max !== null ? ` · data ${fmtSig(range.min, 4)} to ${fmtSig(range.max, 4)}` : ""}
         </span>
       </label>
@@ -88,9 +91,9 @@ function LeverCard({ name, range }: { name: string; range: { min: number | null;
             <CfgNumber path={`${base}.max`} label="Highest value" hint="An edit never goes above this." />
             <CfgText path={`${base}.unit`} label="Unit" placeholder="pp, reflectance…" />
             <CfgSeg path={`${base}.direction`} label="Direction" options={DIRECTIONS} fromValue={(v) => (v === "decrease" ? "decrease" : "increase")} />
-            <CfgNumber path={`${base}.cost_per_unit`} label="Cost per unit" hint="Cost of one unit of dose on one cell (default 1)." min={0} />
+            <CfgNumber path={`${base}.cost_per_unit`} label="Cost per unit" hint="Cost of one unit of change in one place (default 1)." min={0} />
           </div>
-          <CfgNumberList path={`${base}.doses`} label="Dose ladder (S4 sweep)" unit={lever.unit ?? null} signed={sign} hint="Magnitudes, including 0; the direction sets the sign." />
+          <CfgNumberList path={`${base}.doses`} label="Amounts to test (dose ladder, S4)" unit={lever.unit ?? null} signed={sign} hint="Sizes of change, including 0; the direction sets the sign." />
           <DoseScaleTable lever={name} entry={check?.dose_scale?.[name]} unit={lever.unit ?? null} stale={stale} />
           <IssueLines issues={c.issues(base)} />
         </div>
@@ -209,7 +212,7 @@ export function LeversStep() {
   return (
     <div className="stack setup-step" data-step="levers">
       <StepIssues issues={stepIssues("levers", d.issues)} />
-      <Card title="Predictors" eyebrow="Model inputs">
+      <Card title="Map layers the model uses" eyebrow="Predictors" tip={<InfoTip term="predictor" />}>
         <CfgChips path="predictors" label="Predictors" options={[...candidates, ...predictors.filter((p) => !candidates.includes(p))].map((p) => ({ value: p, label: p }))} hint="Numeric columns the models learn from (target, coordinates, id and zone excluded)." />
         <div className="grid2">
           <CfgChips path="encodings.categorical" label="Categorical (one-hot)" options={predOpts} />
@@ -236,16 +239,19 @@ export function LeversStep() {
         </details>
       </Card>
       <Card
-        title="Levers"
-        eyebrow="What a plan can change"
+        title={term("levers").label}
+        eyebrow="Levers"
+        tip={<InfoTip term="levers" />}
         actions={
           <Button size="small" icon="refresh" busy={d.checking} onClick={() => void runDataCheck(c.pid)}>
             {d.check ? "Re-run the data check" : "Run the data check"}
           </Button>
         }
       >
-        <p className="cap">Each actionable predictor gets a dose sweep in S4 and can be edited in scenarios. The dose-scale table shows how far each dose reaches in the data.</p>
-        {predictors.length === 0 ? <p className="cap">Choose predictors first.</p> : null}
+        <p className="cap">
+          Each layer you mark here is tested at several amounts of change (stage S4) and can be changed in scenarios. The <Term id="dose_scale">size-of-change</Term> table under each layer shows how big each amount is next to how much the layer already varies in the data.
+        </p>
+        {predictors.length === 0 ? <p className="cap">Choose the map layers the model uses first.</p> : null}
         <div className="stack" style={{ gap: 10 }}>
           {predictors.map((p) => (
             <LeverCard key={p} name={p} range={range(p)} />
@@ -253,10 +259,14 @@ export function LeversStep() {
         </div>
         <IssueLines issues={c.issues("actionable")} />
       </Card>
-      <Card title="Coupling" eyebrow="Sums with a cap">
+      <Card
+        title="Linked limits"
+        eyebrow="Coupling"
+        tip={<InfoTip label="Linked limits" text="Caps the total of several layers, so changes cannot push it past a limit: e.g. tree canopy plus paving can never cover more than 100% of a place." technical="coupling (sum ≤ max)" />}
+      >
         <Coupling predictors={predOpts} />
       </Card>
-      <Card title="Mediators" eyebrow="Predictors the levers move">
+      <Card title={term("mediators").label} eyebrow="Mediators" tip={<InfoTip term="mediators" />}>
         <Mediators predictors={predictors} levers={levers} />
       </Card>
     </div>

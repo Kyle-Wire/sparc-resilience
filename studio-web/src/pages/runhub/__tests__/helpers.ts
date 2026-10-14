@@ -142,7 +142,7 @@ export const LAYER_GROUPS: LayerGroup[] = [
     layers: [
       layerMeta({ key: "obs", label: "Observed", scale: "div", center: 83 }),
       layerMeta({ key: "resid", label: "Residual", scale: "div", center: 0, stats: stats(-1, 1), sign_note: "positive = model too cool" }),
-      layerMeta({ key: "dist_train_m", label: "Distance to training data", unit: "m", stats: stats(0, 300) }),
+      layerMeta({ key: "dist_train_m", label: "Distance to the nearest reading", unit: "m", stats: stats(0, 300) }),
     ],
   },
   { id: "scenarios", label: "Scenarios", layers: [layerMeta({ key: "sc:canopy-increase-plus-10", label: "Canopy Increase +10", scale: "div", center: 0, stats: stats(-1, 0) })] },

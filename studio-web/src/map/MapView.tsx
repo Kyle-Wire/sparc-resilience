@@ -9,6 +9,7 @@ import { Icon } from "../components/ui/Icon";
 import { IconButton } from "../components/ui/IconButton";
 import { NumberField } from "../components/ui/NumberField";
 import { Seg } from "../components/ui/Seg";
+import { useTipOn } from "../components/ui/useTipOn";
 import { downloadBlob, fileSlug } from "../components/ui/download";
 import { errorMessage } from "../api/client";
 import { toast, useUi } from "../stores/ui";
@@ -85,6 +86,31 @@ export const TOOL_INFO: Record<ToolId, { icon: IconName; short: string; label: s
   pick: { icon: "target", short: "Pick area", label: "Pick area: pick a neighbourhood or a block" },
 };
 
+/** A map tool button: icon and short word; the longer description is its name and its tooltip. */
+function ToolButton({ tool, pressed, disabled, onPick }: { tool: ToolId; pressed: boolean; disabled: boolean; onPick: () => void }) {
+  const info = TOOL_INFO[tool];
+  // the tooltip repeats the accessible name, so it does not describe the button as well
+  const t = useTipOn<HTMLButtonElement>(info.label, { control: true, describe: false });
+  return (
+    <>
+      <button ref={t.ref} type="button" aria-pressed={pressed} aria-label={info.label} disabled={disabled} {...t.props({ onClick: onPick })}>
+        <Icon name={info.icon} size={14} />
+        {info.short}
+      </button>
+      {t.bubble}
+    </>
+  );
+}
+
+/** Words of the map's own controls (tooltips and notes). */
+export const MAP_WORDS = {
+  diffTip: "Map B minus map A, place by place.",
+  diffNeedsGrid: "Difference needs both maps on the same grid of places.",
+  lockTip: "Keep the current colour scale when switching layers, so their colours compare.",
+  noReading: "No reading here",
+  pinned: "Pinned place",
+} as const;
+
 function useLayerValues(meta: LayerMeta | null, load: (m: LayerMeta) => Promise<LayerValues>) {
   const [state, setState] = useState<{ key: string | null; values: LayerValues | null; error: unknown }>({ key: null, values: null, error: null });
   useEffect(() => {
@@ -127,6 +153,7 @@ export function MapView(props: MapViewProps) {
   const setCmp = (k: string | null) => (props.onCompareChange ? props.onCompareChange(k) : setInnerCmp(k));
 
   const [opacity, setOpacity] = useState(1);
+  const lockTip = useTipOn<HTMLButtonElement>(MAP_WORDS.lockTip, { control: true });
   const [lock, setLock] = useState<Domain | null>(null);
   const [manual, setManual] = useState<[number, number] | null>(null);
   const [chosenTool, setToolId] = useState<ToolId>("pan");
@@ -151,7 +178,7 @@ export function MapView(props: MapViewProps) {
   const diffMeta = useMemo<LayerMeta | null>(
     () =>
       meta && cmpMeta && diff
-        ? { ...meta, key: `diff:${meta.key}:${cmpMeta.key}`, label: `${cmpMeta.label} − ${meta.label}`, scale: "div", center: 0, zero_blank: false, labels: null, stats: { n: diff.length, lo: null, hi: null, mean: null, p1: null, p2: null, p50: null, p98: null, p99: null }, sign_note: "B − A" }
+        ? { ...meta, key: `diff:${meta.key}:${cmpMeta.key}`, label: `${cmpMeta.label} − ${meta.label}`, scale: "div", center: 0, zero_blank: false, labels: null, stats: { n: diff.length, lo: null, hi: null, mean: null, p1: null, p2: null, p50: null, p98: null, p99: null }, sign_note: /^°[FC]$|^K$/.test(unitLabel(meta.unit)) ? "negative = B is cooler than A" : "negative = B is lower than A" }
         : null,
     [meta, cmpMeta, diff],
   );
@@ -201,7 +228,7 @@ export function MapView(props: MapViewProps) {
   const describe = useCallback(
     (row: number, p: { px: number; py: number }) => {
       const ll = fmtLonLat(rasterToLonLat(grid, p.px, p.py));
-      if (row < 0) return `No observation${ll ? " · " + ll : ""}`;
+      if (row < 0) return `${MAP_WORDS.noReading}${ll ? " · " + ll : ""}`;
       const m = showMeta;
       const v = showValues ? showValues[row] : NaN;
       let txt = "—";
@@ -311,10 +338,7 @@ export function MapView(props: MapViewProps) {
           {tools.length > 1 ? (
             <div className="seg small map-tools" role="group" aria-label="Map tool">
               {tools.map((t) => (
-                <button key={t} type="button" aria-pressed={toolId === t} title={TOOL_INFO[t].label} aria-label={TOOL_INFO[t].label} onClick={() => setToolId(t)} disabled={t === "brush" && !props.brush}>
-                  <Icon name={TOOL_INFO[t].icon} size={14} />
-                  {TOOL_INFO[t].short}
-                </button>
+                <ToolButton key={t} tool={t} pressed={toolId === t} onPick={() => setToolId(t)} disabled={t === "brush" && !props.brush} />
               ))}
             </div>
           ) : null}
@@ -331,7 +355,7 @@ export function MapView(props: MapViewProps) {
               { value: "none", label: "Single" },
               { value: "swipe", label: "Swipe" },
               { value: "side", label: "Side by side" },
-              { value: "diff", label: "Difference", disabled: props.allowDiff === false, title: props.allowDiff === false ? "Difference needs the same grid" : "B − A" },
+              { value: "diff", label: "Difference", disabled: props.allowDiff === false, tip: props.allowDiff === false ? MAP_WORDS.diffNeedsGrid : MAP_WORDS.diffTip },
             ]}
           />
           )}
@@ -358,9 +382,10 @@ export function MapView(props: MapViewProps) {
                 Opacity
                 <input type="range" min={0.2} max={1} step={0.05} value={opacity} onChange={(e) => setOpacity(Number(e.target.value))} aria-label="Layer opacity" style={{ width: 80 }} />
               </label>
-              <button type="button" className="btn small ghost" aria-pressed={!!lock} onClick={() => setLock(lock ? null : domain)} title="Keep the current colour scale when switching layers">
+              <button ref={lockTip.ref} type="button" className="btn small ghost" aria-pressed={!!lock} {...lockTip.props({ onClick: () => setLock(lock ? null : domain) })}>
                 {lock ? "Scale locked" : "Lock scale"}
               </button>
+              {lockTip.bubble}
             </>
           )}
           <IconButton icon="image" label="Export map as PNG (4×, with legend)" size="small" onClick={() => void exportPng()} />
@@ -435,7 +460,7 @@ export function MapView(props: MapViewProps) {
                         const mask = maskFromRange(showValues, showDomain.mult, lo, hi);
                         let n = 0;
                         for (let i = 0; i < mask.length; i++) n += mask[i];
-                        props.onSelection?.({ spec: null, mask, label: `${showMeta.label} ${fmtNum(r[0], showMeta.decimals)} to ${fmtNum(r[1], showMeta.decimals)} · ${n.toLocaleString("en-US")} cells`, portable: false, source: "legend" });
+                        props.onSelection?.({ spec: null, mask, label: `${showMeta.label} ${fmtNum(r[0], showMeta.decimals)} to ${fmtNum(r[1], showMeta.decimals)} · ${n.toLocaleString("en-US")} places`, portable: false, source: "legend" });
                       }
                     : undefined
                 }
@@ -462,10 +487,10 @@ export function MapView(props: MapViewProps) {
             props.inspector ? (
               props.inspector(pinned, () => pin(null), meta)
             ) : (
-              <section className="card" aria-label="Pinned cell">
+              <section className="card" aria-label={MAP_WORDS.pinned}>
                 <header>
-                  <h3>Pinned cell</h3>
-                  <IconButton icon="x" label="Unpin cell" size="small" onClick={() => pin(null)} />
+                  <h3>{MAP_WORDS.pinned}</h3>
+                  <IconButton icon="x" label="Unpin this place" size="small" onClick={() => pin(null)} />
                 </header>
                 <p className="num">{describe(pinned, { px: grid.ix[pinned] + 0.5, py: grid.ny - 1 - grid.iy[pinned] + 0.5 })}</p>
               </section>

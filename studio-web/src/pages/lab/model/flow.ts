@@ -10,6 +10,7 @@
 // "layer:people", or of zones/regions, and the map tools' shapes).
 import type { CompileResult, Edit, EditMode, Lever, Region } from "../../../api/lab";
 import type { SelectionSpec } from "../../../api/types";
+import { lever as glossaryLever, mode as glossaryMode } from "../../../content/glossary";
 import { fmtInt, fmtPct, fmtSig, unitLabel } from "../../../theme/format";
 import type { ColumnOption, MapPick } from "../components/SelectionBuilder";
 import { describeSelection, editProblems, withMode } from "./doc";
@@ -18,18 +19,19 @@ import { MODE_WORDS, WHERE_PRESET_ORDER, leverUnitWord, modeFits, titleCase, typ
 // ---------------------------------------------------------------- words of the flow's sentences
 
 /**
- * The step flow's own sentence pieces and control labels (planner words). They belong with
- * words.ts; phase 4 folds both into the shared glossary.
+ * The step flow's own sentence pieces and control labels (planner words). The modes of levers that
+ * cool by going down come from the shared glossary (as words.ts's modes do); the rest are the
+ * flow's own sentences.
  */
 export const FLOW_WORDS = {
   pickFirst: "Pick what to change first.",
   noLevers: "This run has no levers to change.",
   notALever: "This change edits a model input directly (expert mode).",
-  // step 03 modes for levers that cool by going down (less paving)
-  takeAway: "Take away",
-  takeAwayHint: "Takes this much away everywhere you chose.",
-  bringDown: "Bring down to at most",
-  bringDownHint: "Lowers places above this level down to it; places already below stay as they are.",
+  // step 03 modes for levers that cool by going down (less paving): glossary modes take_away / bring_down
+  takeAway: glossaryMode("take_away").label,
+  takeAwayHint: glossaryMode("take_away").help,
+  bringDown: glossaryMode("bring_down").label,
+  bringDownHint: glossaryMode("bring_down").help,
   howToChange: "How to change it",
   howMuchAdd: "How much to add",
   howMuchTakeAway: "How much to take away",
@@ -73,11 +75,12 @@ export function fill(template: string, values: Record<string, string>): string {
   return template.replace(/\{(\w+)\}/g, (m, k: string) => (k in values ? values[k] : m));
 }
 
-/** What a lever changes, as a noun for sentences ("tree canopy"), by lever role. */
+/** What a lever changes, as a noun for sentences ("tree canopy"), by lever role (the glossary lever's `measure`). */
+const measureOf = (role: "canopy" | "impervious" | "albedo") => glossaryLever(role)?.measure ?? role;
 export const LEVER_MEASURE: Record<"canopy" | "impervious" | "albedo", string> = {
-  canopy: "tree canopy",
-  impervious: "paving",
-  albedo: "surface reflectivity",
+  canopy: measureOf("canopy"),
+  impervious: measureOf("impervious"),
+  albedo: measureOf("albedo"),
 };
 
 type LeverLike = Pick<Lever, "var" | "label" | "role" | "direction" | "unit"> & Partial<Pick<Lever, "min" | "max" | "doses" | "sd" | "design_dose" | "headroom_available">>;

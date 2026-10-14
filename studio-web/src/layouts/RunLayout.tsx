@@ -4,12 +4,14 @@
 // aggregates its views' entries in GET /api/runs/{rid}/outputs → tabs[] (SPEC §3.2, §12.3).
 import { createContext, useContext, useEffect, type ReactNode } from "react";
 import type { Availability, RunOutputs, RunTabId } from "../api/types";
-import { Badge, modeLabel } from "../components/ui/Badge";
 import { EmptyState } from "../components/ui/EmptyState";
+import { TermTipBody } from "../components/ui/InfoTip";
 import { StatusChip } from "../components/ui/StatusChip";
-import { Link, runTabForRoute, runTabHref, useRegistry, useRoute, type RunTabEntry } from "../router";
+import { useTooltip } from "../components/ui/Tooltip";
+import { runTabForRoute, runTabHref, useRegistry, useRoute, type RunTabEntry } from "../router";
 import { useUi } from "../stores/ui";
 import { useRunDetail, useRunOutputs, type RunDetailHead } from "./resources";
+import { DemoTag, ModeBadge, RefLink } from "./tips";
 
 export type RunContextValue = { rid: string; detail: RunDetailHead | undefined; outputs: RunOutputs | undefined };
 
@@ -25,7 +27,7 @@ const AVAIL_TEXT: Record<Availability, string> = {
   partial: "partly available",
   running: "being computed",
   missing: "not available yet",
-  stale: "stale",
+  stale: "may be out of date",
 };
 
 /** Severity of the unavailable states, worst last (the dot of an all-unavailable tab). */
@@ -56,18 +58,25 @@ export function tabStatus(outputs: RunOutputs | undefined, views: RunTabId | rea
 
 function RunTabLink({ tab, rid, outputs, active }: { tab: RunTabEntry; rid: string; outputs: RunOutputs | undefined; active: boolean }) {
   const st = tabStatus(outputs, tab.views);
+  // Only a tab that is not ready explains itself (what is missing, and what writes it).
+  const tip = st && st.availability !== "ready" ? <TermTipBody tip={`${tab.label}: ${AVAIL_TEXT[st.availability]}.`} technical={st.reason} /> : null;
+  const t = useTooltip<HTMLAnchorElement>({ content: tip, side: "bottom", bubbleClassName: "tip-term" });
   return (
-    <Link
-      to={runTabHref(tab, rid)}
-      className={tab.advanced ? "run-tab advanced" : "run-tab"}
-      data-tab={tab.id}
-      aria-current={active ? "page" : undefined}
-      title={st ? `${tab.label}: ${AVAIL_TEXT[st.availability]}${st.reason ? ` (${st.reason})` : ""}` : tab.label}
-    >
-      {st ? <span className="tab-dot" data-a={st.availability} aria-hidden="true" /> : null}
-      {tab.label}
-      {st && st.availability !== "ready" ? <span className="sr-only"> ({AVAIL_TEXT[st.availability]})</span> : null}
-    </Link>
+    <>
+      <RefLink
+        ref={t.anchorRef}
+        to={runTabHref(tab, rid)}
+        className={tab.advanced ? "run-tab advanced" : "run-tab"}
+        data-tab={tab.id}
+        aria-current={active ? "page" : undefined}
+        {...(tip ? t.triggerProps : {})}
+      >
+        {st ? <span className="tab-dot" data-a={st.availability} aria-hidden="true" /> : null}
+        {tab.label}
+        {st && st.availability !== "ready" ? <span className="sr-only"> ({AVAIL_TEXT[st.availability]})</span> : null}
+      </RefLink>
+      {tip ? t.bubble : null}
+    </>
   );
 }
 
@@ -105,8 +114,8 @@ export function RunLayout({ rid, children }: { rid: string; children: ReactNode 
     <RunCtx.Provider value={{ rid, detail: detail.data, outputs: outputs.data }}>
       <div className="run-head">
         <h1 style={{ fontSize: "1.35rem" }}>{run ? run.label || detail.data?.header.name || run.id : rid}</h1>
-        {run ? <Badge tone="mode">{modeLabel(run.mode, run.coarse_m)}</Badge> : null}
-        {run?.demo ? <Badge tone="demo">DEMO</Badge> : null}
+        {run ? <ModeBadge mode={run.mode} coarse_m={run.coarse_m} /> : null}
+        {run?.demo ? <DemoTag /> : null}
         {run ? <StatusChip status={run.status} /> : null}
         <span className="cap mono">{rid}</span>
       </div>

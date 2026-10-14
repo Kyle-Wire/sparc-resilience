@@ -12,12 +12,15 @@ import type { CompareRuns } from "../../api/runs";
 import { getCompareLayer, postPriority, useCompareRuns, useGridMeta, useProjectRuns } from "../../api/runs";
 import type { LayerGroup, LayerMeta, RunSummary } from "../../api/types";
 import { Bars, DotRange, type DotRangeRow } from "../../charts";
-import { Badge, modeLabel } from "../../components/ui/Badge";
+import { modeLabel } from "../../components/ui/Badge";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Pill } from "../../components/ui/Pill";
 import { Table } from "../../components/ui/Table";
 import { MapView } from "../../map/MapView";
 import { runLayerLoader, useRunGrid, useRunLayers } from "../../map/data";
+import { isTermId, term } from "../../content/glossary";
+import { DemoTag, ModeBadge, TipSpan } from "../../layouts/tips";
 import { Link, codecs, useRoute, useUrlState } from "../../router";
 import { fmtDateTime, fmtDuration, fmtNum, fmtSigned, unitLabel } from "../../theme/format";
 import { Block } from "./common";
@@ -25,8 +28,24 @@ import { agreementWords, cellText, humanize, likelyText } from "./format";
 
 const runName = (r: RunSummary) => `${r.label || r.id} · ${modeLabel(r.mode, r.coarse_m)} · ${fmtDateTime(r.created_utc)}`;
 
+/** A stage's plain name from the glossary ("S2_S3" → "Train the models (S2_S3)"); other ids as they are. */
+function stageWords(id: string): string {
+  const t = `stage_${id.toLowerCase()}`;
+  return isTermId(t) ? `${term(t).label} (${id})` : id;
+}
+
+/** A metric's plain name: a glossary term ("r2" → "Accuracy score"), else the key in words. */
+function metricWords(key: string): string {
+  return isTermId(key) ? term(key).label : humanize(key);
+}
+
 function SameChip({ label, v }: { label: string; v: boolean | null }) {
-  if (v === null) return <Pill title="Not recorded for one of the runs">{label}: unknown</Pill>;
+  if (v === null)
+    return (
+      <TipSpan tip="Not recorded for one of the runs.">
+        <Pill>{label}: unknown</Pill>
+      </TipSpan>
+    );
   return (
     <Pill tone={v ? "good" : "warn"} icon={v ? "check" : "alert"}>
       {v ? `same ${label}` : `different ${label}`}
@@ -105,7 +124,7 @@ function ScenarioEffects({ rows, unit }: { rows: CompareRuns["scenarios"]; unit:
       title="Scenario effects in both runs"
       units={`${unit} (negative = cooler)`}
       rows={dot}
-      valueLabel="City-mean ΔT"
+      valueLabel={`${term("citywide").label} ${term("delta_t").label.toLowerCase()}`}
       unit={unit}
       signed
       caption={`${both.length} scenarios in both runs; ${moved.length ? `B's estimate falls outside A's likely range for ${moved.map((r) => r.name).join(", ")}` : "every B estimate lies inside A's likely range"}. Grey rows are run B.`}
@@ -169,8 +188,8 @@ function DifferenceMap({ a, b, sameGrid }: { a: string; b: string; sameGrid: boo
   if (!sameGrid)
     return (
       <div className="callout" role="note" data-disabled="difference-map">
-        <strong>Difference map unavailable:</strong> the two runs have different grids (cell size or cell ids differ), so a cell-by-cell difference and priority agreement are not
-        defined. Compare their maps side by side from each run's Map tab instead.
+        <strong>Difference map unavailable:</strong> the two runs have different grids (different square sizes or places), so they cannot be compared place by place, and
+        neither can their priorities. Compare their maps side by side from each run's Map tab instead.
       </div>
     );
   if (mismatch)
@@ -211,20 +230,20 @@ function PriorityAgreement({ a, b, sameGrid, layers, catalogues }: { a: string; 
   if (!sameGrid)
     return (
       <p className="cap" data-disabled="priority">
-        Priority agreement needs the same grid.
+        Comparing priorities needs the same grid in both runs.
       </p>
     );
   if (catalogues === "loading") return <p className="cap">Loading the layer catalogues of both runs…</p>;
   if (catalogues instanceof Error) return <EmptyState error={catalogues} />;
-  if (!layers.length) return <p className="cap">No footprint (priority) layers in common.</p>;
+  if (!layers.length) return <p className="cap">No priority layers (total cooling, nearby included) in common.</p>;
   if (res.error instanceof ApiError && res.error.code === "grid_mismatch")
     return (
       <p className="cap" data-disabled="priority">
-        Priority agreement unavailable: {res.error.message} (grid_mismatch).
+        Comparing priorities is not possible: {res.error.message} (grid_mismatch).
       </p>
     );
   if (res.error) return <EmptyState error={res.error} />;
-  if (!res.data) return <p className="cap">Ranking cells in both runs…</p>;
+  if (!res.data) return <p className="cap">Ranking places in both runs…</p>;
   return (
     <Table
       caption="Priority agreement"
@@ -232,10 +251,23 @@ function PriorityAgreement({ a, b, sameGrid, layers, catalogues }: { a: string; 
       rowKey={(r) => r.layer}
       columns={[
         { key: "layer", label: "Priority layer", value: (r) => r.layer, render: (r) => <span className="mono">{r.layer}</span> },
-        { key: "tau", label: "Kendall τ", align: "right", value: (r) => r.r.kendall_tau, render: (r) => fmtSigned(r.r.kendall_tau, 2) },
-        { key: "j", label: "Top-decile Jaccard", align: "right", value: (r) => r.r.top_decile_jaccard, render: (r) => fmtNum(r.r.top_decile_jaccard, 2) },
-        { key: "n", label: "Cells", align: "right", value: (r) => r.r.n },
-        { key: "w", label: "Reading", value: (r) => agreementWords(r.r.kendall_tau) },
+        { key: "tau", label: term("kendall_tau").label, align: "right", tip: <InfoTip term="kendall_tau" />, value: (r) => r.r.kendall_tau, render: (r) => fmtSigned(r.r.kendall_tau, 2) },
+        {
+          key: "j",
+          label: "Top-10% overlap",
+          align: "right",
+          tip: (
+            <InfoTip
+              label="Top-10% overlap"
+              text="Of the places each run ranks in its top 10%, the share both runs pick. 1 means the same places, 0 means none in common."
+              technical="Top-decile Jaccard index"
+            />
+          ),
+          value: (r) => r.r.top_decile_jaccard,
+          render: (r) => fmtNum(r.r.top_decile_jaccard, 2),
+        },
+        { key: "n", label: "Places", align: "right", value: (r) => r.r.n },
+        { key: "w", label: "In words", value: (r) => agreementWords(r.r.kendall_tau) },
       ]}
       rows={res.data}
     />
@@ -301,6 +333,7 @@ export default function Compare() {
       {c ? (
         <>
           <div className="row" aria-label="Provenance">
+            <InfoTip label="these checks" text="Whether the two runs used the same temperature readings, settings, code version and map grid. Differences explain differences in the results." technical={`Provenance: data, config, ${term("code_version").technical}, grid`} />
             <SameChip label="data" v={c.same.data} />
             <SameChip label="config" v={c.same.config} />
             <SameChip label="code" v={c.same.code} />
@@ -310,13 +343,16 @@ export default function Compare() {
             {[c.a, c.b].map((r, i) => (
               <Block key={r.id} title={`${i ? "B" : "A"}: ${r.label || r.id}`} actions={<Link to={`/r/${encodeURIComponent(r.id)}`}>Open</Link>}>
                 <p className="cap">
-                  <Badge tone="mode">{modeLabel(r.mode, r.coarse_m)}</Badge> {r.status} · {fmtDateTime(r.created_utc)} · {r.n_points ?? "?"} cells{" "}
-                  {r.demo ? <Badge tone="demo">DEMO</Badge> : null}
+                  <ModeBadge mode={r.mode} coarse_m={r.coarse_m} /> {r.status} · {fmtDateTime(r.created_utc)} · {r.n_points ?? "?"} places{" "}
+                  {r.demo ? <DemoTag /> : null}
                 </p>
               </Block>
             ))}
           </div>
-          <Block title="Config differences">
+          <Block
+            title="Settings that differ"
+            tip={<InfoTip label="Settings that differ" text="Settings of the two runs that are not the same, by section of the settings file. Settings left at their defaults are hidden." technical="Effective config diff" />}
+          >
             {c.config_diff.length ? (
               <div className="stack" style={{ gap: 4 }} aria-label="Config diff tree">
                 {configTree(c.config_diff).map((sec) => (
@@ -339,17 +375,17 @@ export default function Compare() {
                 ))}
               </div>
             ) : (
-              <p className="cap">Same effective configuration (defaults hidden).</p>
+              <p className="cap">The same settings (defaults hidden).</p>
             )}
           </Block>
           <div className="grid2">
-            <Block title="Metrics">
+            <Block title="Accuracy and other measures">
               <Table
                 caption="Metrics"
                 csvName="compare-metrics"
                 rowKey={(r) => r.key}
                 columns={[
-                  { key: "key", label: "Metric", value: (r) => humanize(r.key) },
+                  { key: "key", label: "Measure", value: (r) => metricWords(r.key) },
                   { key: "a", label: "A", align: "right", value: (r) => r.a, render: (r) => fmtNum(r.a, 3) },
                   { key: "b", label: "B", align: "right", value: (r) => r.b, render: (r) => fmtNum(r.b, 3) },
                   { key: "d", label: "B − A", align: "right", value: (r) => r.delta, render: (r) => fmtSigned(r.delta, 3) },
@@ -358,9 +394,9 @@ export default function Compare() {
               />
             </Block>
             <Bars
-              title="Stage timings"
+              title="Time per stage"
               units="seconds"
-              categories={c.timings.map((t) => t.stage)}
+              categories={c.timings.map((t) => stageWords(t.stage))}
               orientation="h"
               series={[
                 { id: "a", label: "A", values: c.timings.map((t) => t.a) },
@@ -376,7 +412,7 @@ export default function Compare() {
                   const d = t.a !== null && t.b !== null ? t.b - t.a : null;
                   return d !== null && (!m || Math.abs(d) > Math.abs(m.d)) ? { stage: t.stage, d } : m;
                 }, null);
-                return `A took ${fmtDuration(ta)} in total, B ${fmtDuration(tb)}.${slow && slow.d !== 0 ? ` The largest difference is ${slow.stage}: B ${slow.d > 0 ? "slower" : "faster"} by ${fmtDuration(Math.abs(slow.d))}.` : ""}`;
+                return `A took ${fmtDuration(ta)} in total, B ${fmtDuration(tb)}.${slow && slow.d !== 0 ? ` The largest difference is ${stageWords(slow.stage)}: B ${slow.d > 0 ? "slower" : "faster"} by ${fmtDuration(Math.abs(slow.d))}.` : ""}`;
               })()}
             />
           </div>
@@ -400,27 +436,27 @@ export default function Compare() {
             {(() => {
               const [ca, cb] = splitSummary(c.climate);
               return ca || cb ? (
-                <Summary title="Climate" a={ca} b={cb} />
+                <Summary title="Future climate" a={ca} b={cb} />
               ) : (
-                <Block title="Climate">
-                  <p className="cap">No climate stage in either run.</p>
+                <Block title="Future climate">
+                  <p className="cap">No future-climate stage in either run.</p>
                 </Block>
               );
             })()}
             {(() => {
               const [ca, cb] = splitSummary(c.causal);
               return ca || cb ? (
-                <Summary title="Causal" a={ca} b={cb} />
+                <Summary title="Cause-and-effect checks" a={ca} b={cb} />
               ) : (
-                <Block title="Causal">
-                  <p className="cap">No causal stage in either run.</p>
+                <Block title="Cause-and-effect checks">
+                  <p className="cap">No cause-and-effect checks (S6) in either run.</p>
                 </Block>
               );
             })()}
           </div>
-          <Block title="Environment">
+          <Block title="Software versions">
             {!c.environment.added.length && !c.environment.removed.length && !c.environment.changed.length ? (
-              <p className="cap">Identical package lists.</p>
+              <p className="cap">The same software packages and versions.</p>
             ) : (
               <div className="stack" style={{ gap: 6 }}>
                 {c.environment.changed.length ? (
@@ -441,14 +477,14 @@ export default function Compare() {
               </div>
             )}
           </Block>
-          <Block title="Outputs">
+          <Block title="Result files">
             <p className="cap">Only in A: {c.outputs.a_only.join(", ") || "none"}</p>
             <p className="cap">Only in B: {c.outputs.b_only.join(", ") || "none"}</p>
           </Block>
-          <Block title="Difference map">
+          <Block title="Difference map (B − A)">
             <DifferenceMap a={c.a.id} b={c.b.id} sameGrid={c.same.grid} />
           </Block>
-          <Block title="Priority agreement">
+          <Block title="Do the runs agree on where to act first?" tip={<InfoTip label="priority agreement" text="Both runs rank places by the total cooling a change there brings, nearby included. These numbers say how alike the two rankings are." technical="Priority agreement: Kendall τ and top-decile Jaccard of the footprint layers" />}>
             <PriorityAgreement
               a={c.a.id}
               b={c.b.id}

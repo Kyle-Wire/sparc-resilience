@@ -18,6 +18,7 @@ import { IconButton } from "../../components/ui/IconButton";
 import { Markdown } from "../../components/ui/Markdown";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { useProjects } from "../../layouts/resources";
+import { TipSpan } from "../../layouts/tips";
 import { codecs, Link, navigate, useRegistry, useRoute, useUrlState } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtRelative } from "../../theme/format";
@@ -136,9 +137,11 @@ function FindingItem({ f, index, count, reorderable, projectName, onMove, onPatc
       <div className="fd-handle">
         {reorderable ? (
           <>
-            <span className="grip" aria-hidden="true" title="Drag to reorder">
-              ⠿
-            </span>
+            <TipSpan tip="Drag to reorder, or use the arrows.">
+              <span className="grip" aria-hidden="true">
+                ⠿
+              </span>
+            </TipSpan>
             <IconButton icon="chevronUp" size="small" label={`Move “${f.title}” up`} disabled={index === 0} onClick={() => onMove(index, index - 1)} />
             <IconButton icon="chevronDown" size="small" label={`Move “${f.title}” down`} disabled={index === count - 1} onClick={() => onMove(index, index + 1)} />
           </>
@@ -158,8 +161,10 @@ function FindingItem({ f, index, count, reorderable, projectName, onMove, onPatc
               Run <Link to={`/r/${enc(f.run_id)}`}>{f.run_id}</Link>
             </span>
           ) : null}
-          <span title={f.view}>{viewTitle}</span>
-          <span title={f.created_utc}>pinned {fmtRelative(f.created_utc)}</span>
+          <TipSpan tip="The page it was pinned from." technical={f.view}>
+            {viewTitle}
+          </TipSpan>
+          <TipSpan tip={`Pinned ${f.created_utc}`}>pinned {fmtRelative(f.created_utc)}</TipSpan>
         </div>
         {editing ? (
           <div className="fd-note">
@@ -218,7 +223,7 @@ function FindingItem({ f, index, count, reorderable, projectName, onMove, onPatc
         </div>
       </div>
       {f.image_url ? (
-        <a href={f.image_url} target="_blank" rel="noopener noreferrer" title="Open the image">
+        <a href={f.image_url} target="_blank" rel="noopener noreferrer">
           <img className="fd-thumb" src={f.image_url} alt={`Pinned image: ${f.title}`} loading="lazy" />
         </a>
       ) : null}

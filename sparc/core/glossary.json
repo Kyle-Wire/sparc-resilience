@@ -1,0 +1,746 @@
+{
+  "version": 1,
+  "about": "Plain words for SPARC's technical terms, shared by SPARC Studio (studio-web/src/content/glossary.ts) and the standalone results page. Each term: a plain label for the page, a 1-2 sentence tip (max 240 characters), the technical name, and optionally a longer explanation. The lever, mode, confidence, trust and engine sections hold the Scenario Lab's wording verbatim.",
+  "terms": {
+    "r2": {
+      "label": "Accuracy score",
+      "tip": "How much of the temperature differences between places the model gets right in areas it was not trained on. 1 is perfect; 0 is no better than guessing the city average.",
+      "technical": "R² (held-out, cross-validated)",
+      "more": "R² is measured on areas held out from training, so it shows how well the model predicts places it has never seen. At or above 0.6 counts as Good, 0.4 to 0.6 as Fair, and below 0.4 as Limited."
+    },
+    "rmse": {
+      "label": "Typical error",
+      "tip": "How far a prediction typically lands from the measured temperature, in areas the model was not trained on. In the run's temperature units; smaller is better.",
+      "technical": "RMSE (root-mean-square error, held-out)"
+    },
+    "coverage": {
+      "label": "Range reliability",
+      "tip": "How often the real measurement falls inside the model's prediction range. A 90% range should hold about 9 times in 10; much less means the ranges are too narrow.",
+      "technical": "90% interval coverage",
+      "more": "Coverage is checked on areas held out from training. Within 5 percentage points of its target, the ranges count as holding; further off, the trust grade drops one step."
+    },
+    "interval_honesty": {
+      "label": "Do the ranges hold?",
+      "tip": "Checks, test area by test area, whether the prediction ranges contain the real measurements as often as they claim to.",
+      "technical": "Interval honesty (coverage by held-out fold)"
+    },
+    "trust_grade": {
+      "label": "Trust grade",
+      "tip": "Good, Fair or Limited: how well the model predicts places it was not trained on, and whether its prediction ranges hold.",
+      "technical": "Held-out R² with an interval-coverage check"
+    },
+    "stacker": {
+      "label": "Model blend",
+      "tip": "The final prediction blends several models. Each one counts according to how well it predicts areas it was not trained on.",
+      "technical": "Stacker (stacked ensemble)"
+    },
+    "blend_weights": {
+      "label": "Blend weights",
+      "tip": "How much each model counts in the final blend. A bigger weight means that model did better in areas it was not trained on.",
+      "technical": "Stacker weights"
+    },
+    "physics_card": {
+      "label": "Physics model settings",
+      "tip": "The values the built-in heat-physics model settled on, such as how far heat spreads, and how much they vary between test areas.",
+      "technical": "Physics card (physics base-model parameters)"
+    },
+    "advection": {
+      "label": "Wind carrying heat",
+      "tip": "Whether the model lets the wind carry warm air from one place to its neighbours, and whether that made its predictions better.",
+      "technical": "Advection (fitted wind term)"
+    },
+    "forcing": {
+      "label": "Weather inputs",
+      "tip": "The weather that drives the model for the day it describes: sunshine, heat from the sky and wind, from a weather station or a weather dataset.",
+      "technical": "Forcing (radiation and wind inputs)"
+    },
+    "cv_design": {
+      "label": "How the model was tested",
+      "tip": "The city is split into areas. The model is trained without one area and tested on it, so every score comes from places it had not seen.",
+      "technical": "Cross-validation design (spatial blocks)"
+    },
+    "held_out_fold": {
+      "label": "Test area",
+      "tip": "One of the areas kept out of training and used only to test the model.",
+      "technical": "Held-out fold"
+    },
+    "ring_kernel": {
+      "label": "Reach of a change",
+      "tip": "How a change in one place also cools the places around it, fading with distance in rings.",
+      "technical": "Ring kernel (distance-weighted neighbourhood)"
+    },
+    "footprint": {
+      "label": "Total cooling, nearby included",
+      "tip": "All the cooling a change in one place causes: on the spot, plus in the places around it.",
+      "technical": "Footprint effect (summed over neighbours)"
+    },
+    "anisotropy": {
+      "label": "Direction matters",
+      "tip": "Whether a feature's influence reaches further in one direction than another, e.g. downwind. 1 means the same in every direction.",
+      "technical": "Anisotropy (minor/major range ratio)"
+    },
+    "priors": {
+      "label": "Starting assumptions",
+      "tip": "The values the model starts from before it sees the data, such as how far heat typically spreads. The data then adjusts them.",
+      "technical": "Priors"
+    },
+    "length_scale": {
+      "label": "Influence distance",
+      "tip": "How far, in metres, a feature such as tree cover still affects the temperature around it.",
+      "technical": "Length scale (influence range)"
+    },
+    "cate": {
+      "label": "Effect by place",
+      "tip": "How much the same change cools in different kinds of places. Some places gain more than others.",
+      "technical": "CATE (conditional average treatment effect)"
+    },
+    "dag_audit": {
+      "label": "Cause-and-effect check",
+      "tip": "Checks the model's cooling against a separate cause-and-effect analysis, to rule out effects that are only coincidence.",
+      "technical": "DAG audit (causal-graph check)"
+    },
+    "partial_dependence": {
+      "label": "Response curve",
+      "tip": "How the predicted temperature changes as one feature goes up or down, with everything else left as it is.",
+      "technical": "Partial dependence"
+    },
+    "dose_response": {
+      "label": "Cooling by amount",
+      "tip": "How much cooling each amount of change brings, from a small step to a large one.",
+      "technical": "Dose–response curve"
+    },
+    "saturation": {
+      "label": "Diminishing returns",
+      "tip": "Whether each extra step of a change cools less than the last, and by how much change most of the possible cooling is reached.",
+      "technical": "Saturation (response-curve shape)",
+      "more": "Each place's cooling curve is sorted into one of four shapes: Diminishing, Steady, Slow start then strong, or Hit the limit (still cooling at the largest amount the space allows)."
+    },
+    "d90": {
+      "label": "Amount for 90% of the cooling",
+      "tip": "The amount of change by which a typical place gets 90% of all the cooling it can get. Past it, extra effort buys little.",
+      "technical": "Median dose for 90% of max (d90)"
+    },
+    "own_cell": {
+      "label": "Effect on the spot",
+      "tip": "The cooling in the place you change only, leaving out what spills over to its neighbours.",
+      "technical": "Own-cell effect"
+    },
+    "dose_scale": {
+      "label": "Size of the change",
+      "tip": "How big the tested amounts are next to how much the layer already varies across the city. Very large ones go beyond what was measured.",
+      "technical": "Dose scale (doses in standard deviations)"
+    },
+    "open_loop": {
+      "label": "Planned benefit",
+      "tip": "The cooling a plan should bring, adding up each place's expected response. A quick sum, not yet checked with the full model.",
+      "technical": "Open loop (sum of per-cell responses)"
+    },
+    "closed_loop": {
+      "label": "Checked benefit",
+      "tip": "The whole plan run through the full model, so neighbours, limits and knock-on effects all count.",
+      "technical": "Closed loop (plan re-run through the exact engine)"
+    },
+    "mediators": {
+      "label": "Knock-on effects",
+      "tip": "Related measures that move with a change, e.g. greenness follows tree cover. Including them gives a fuller picture.",
+      "technical": "Mediators"
+    },
+    "gini": {
+      "label": "Unevenness of benefit",
+      "tip": "How unevenly the cooling is shared. 0 means every place gains the same; near 1 means a few places get almost all of it.",
+      "technical": "Gini coefficient"
+    },
+    "kendall_tau": {
+      "label": "Ranking agreement",
+      "tip": "How closely two rankings of places agree. 1 is the same order, 0 is no relation, −1 is the reverse order.",
+      "technical": "Kendall's τ (tau)"
+    },
+    "multiverse": {
+      "label": "Stability across choices",
+      "tip": "Whether the answer holds when the analysis is redone with other reasonable choices, such as different settings or data versions.",
+      "technical": "Multiverse stability"
+    },
+    "noise_floor": {
+      "label": "Smallest possible error",
+      "tip": "The error that comes only from the measurements being rounded. No model can do better than this.",
+      "technical": "Rounding-noise floor"
+    },
+    "compile": {
+      "label": "Check the change",
+      "tip": "Works out which places a change touches and how much of it fits the space available, before anything runs.",
+      "technical": "Compile"
+    },
+    "portable": {
+      "label": "Reusable in other runs",
+      "tip": "The places are drawn on the map rather than taken from this run's grid, so other runs can use the same scenario.",
+      "technical": "Portable scenario"
+    },
+    "run_exact": {
+      "label": "Run full model",
+      "tip": "Runs your changes through the full model for the firm answer, with a likely range. Takes a few minutes.",
+      "technical": "Run exact (exact engine)"
+    },
+    "exact_engine": {
+      "label": "Full model",
+      "tip": "The complete model trained for this run. Slower than the quick estimate, but it gives the firm answer with a likely range.",
+      "technical": "Exact engine"
+    },
+    "emulator_preview": {
+      "label": "Quick estimate",
+      "tip": "An instant, approximate answer that updates as you make changes. Run the full model for the firm answer.",
+      "technical": "Emulator preview (linear emulator)"
+    },
+    "uniform_rel_error": {
+      "label": "Quick-estimate error, citywide",
+      "tip": "How far off the quick estimate can be when a change covers the whole city, as a share of the full model's answer.",
+      "technical": "Uniform rel. error (emulator vs exact)"
+    },
+    "hatched": {
+      "label": "Less certain here",
+      "tip": "Hatching marks places where a number is less reliable: rough on a quick estimate, or beyond anything measured on a full-model result.",
+      "technical": "Hatched areas"
+    },
+    "extrapolated": {
+      "label": "Beyond measured conditions",
+      "tip": "The change pushes some places past anything measured in the city today, so the model is less sure there.",
+      "technical": "Extrapolated"
+    },
+    "jackknife_se": {
+      "label": "Spread between test areas",
+      "tip": "How much the answer moves when each test area's model is left out in turn. It sets how wide the likely range is.",
+      "technical": "Jackknife standard error (over folds)"
+    },
+    "interval_95": {
+      "label": "Likely range",
+      "tip": "The real effect very probably lies in this range (95% of the time). A range that crosses zero means there might be no real effect.",
+      "technical": "95% interval"
+    },
+    "estimation": {
+      "label": "Model fit (the likely range)",
+      "tip": "Doubt from the model itself: how much the answer varies between models trained on different areas.",
+      "technical": "Estimation uncertainty (95%, fold jackknife)"
+    },
+    "specification": {
+      "label": "Across model versions and runs",
+      "tip": "Doubt from how the analysis was set up: how much the answer moves across other runs and model versions.",
+      "technical": "Specification uncertainty"
+    },
+    "attribution": {
+      "label": "Simulation check",
+      "tip": "Made-up data with a known effect, run through the same analysis, shows how far off the cooling estimate can be.",
+      "technical": "Attribution (simulation check)"
+    },
+    "causal_band": {
+      "label": "Independent cause-and-effect check",
+      "tip": "The range from a separate cause-and-effect analysis that does not use the main model.",
+      "technical": "Independent causal band"
+    },
+    "envelope": {
+      "label": "All sources together",
+      "tip": "The widest range, once every source of doubt is added up. If it stays on one side of zero, the direction of the effect is solid.",
+      "technical": "Uncertainty envelope (all sources)"
+    },
+    "clipped": {
+      "label": "Did not fit",
+      "tip": "The part of what you asked for that the space does not allow, e.g. more trees than there is ground to plant. It is left out.",
+      "technical": "Clipped share"
+    },
+    "realised": {
+      "label": "What actually changed",
+      "tip": "The change that went in once limits were applied. It can be less than you asked for.",
+      "technical": "Realised dose"
+    },
+    "realistic_limits": {
+      "label": "Keep changes within realistic limits",
+      "tip": "Never push a place beyond the range seen anywhere in the city today (the model is only trustworthy inside it).",
+      "technical": "Clip to the observed range"
+    },
+    "expert_mode": {
+      "label": "Expert mode",
+      "tip": "Edit any model input, not only the planning levers.",
+      "technical": "Non-lever edits"
+    },
+    "headroom": {
+      "label": "Available planting space",
+      "tip": "Open ground in a place that could take trees, leaving out buildings and roads.",
+      "technical": "Headroom (plantable area)"
+    },
+    "cell": {
+      "label": "Place",
+      "tip": "The map is split into equal squares, and each square is one place. Results are worked out for every place.",
+      "technical": "Grid cell"
+    },
+    "citywide": {
+      "label": "Citywide",
+      "tip": "Averaged over the whole city, including the places you did not change.",
+      "technical": "City mean ΔT"
+    },
+    "where_changed": {
+      "label": "Where you made changes",
+      "tip": "Averaged over the places you changed only.",
+      "technical": "Edited-cell mean ΔT"
+    },
+    "delta_t": {
+      "label": "Temperature change",
+      "tip": "How much warmer or cooler a place gets. A negative number means cooler.",
+      "technical": "ΔT"
+    },
+    "cost_per_degree": {
+      "label": "Cost per degree",
+      "tip": "What it costs to cool one place by 1 degree, with the cooling added up over every place.",
+      "technical": "Cost ÷ total cooling (cell·degrees)"
+    },
+    "reach": {
+      "label": "How far cooling reaches",
+      "tip": "How much of the cooling lands outside the places you changed, in rings by distance.",
+      "technical": "Spillover reach (distance rings)"
+    },
+    "pareto": {
+      "label": "Best trade-offs",
+      "tip": "Each point is the most cooling a given budget can buy. A plan below the line gets less for the same money.",
+      "technical": "Pareto front"
+    },
+    "placebo": {
+      "label": "Fake-change test",
+      "tip": "Runs the analysis on changes that should do nothing. Finding no effect shows the pipeline does not invent one.",
+      "technical": "Placebo test"
+    },
+    "independent_checks": {
+      "label": "Independent checks",
+      "tip": "Extra tests run on top of the model: a fake-change test, a simulation with a known effect, other reasonable analysis choices and a full repeat of the run. They show whether the results hold up.",
+      "technical": "Validation studies (placebo, simcheck, multiverse, reproduce)"
+    },
+    "keep_in_mind": {
+      "label": "Things to keep in mind",
+      "tip": "Points about this run, worked out from its own numbers, to read before using its results.",
+      "technical": "Caveats"
+    },
+    "distance_skill": {
+      "label": "Accuracy away from measurements",
+      "tip": "The model is tested again with bigger areas held out, so each test place lies farther from any reading. If the accuracy score holds up, the map can be trusted between measurements.",
+      "technical": "Skill vs CV block size (held-out R² or RMSE)"
+    },
+    "causal_audit": {
+      "label": "Cause or coincidence",
+      "tip": "A separate statistical analysis of the readings, which does not use the model, estimates each lever's effect. When the two agree, the model's effect is unlikely to be a coincidence.",
+      "technical": "Causal audit (double machine learning)"
+    },
+    "verdict_robust": {
+      "label": "Solid",
+      "tip": "Even with every source of doubt counted, the likely range stays on one side of zero, and every version of the analysis agrees on whether the change cools or warms.",
+      "technical": "Robust"
+    },
+    "verdict_direction": {
+      "label": "Direction clear",
+      "tip": "We can say whether the change cools or warms, but not by how much: the effect could be close to zero.",
+      "technical": "Direction only"
+    },
+    "verdict_not_established": {
+      "label": "Not proven",
+      "tip": "The effect cannot be told apart from no effect: it is no bigger than fake changes produce, the checks disagree, or most changed places lie beyond measured conditions.",
+      "technical": "Not established"
+    },
+    "e_value": {
+      "label": "Sensitivity to hidden causes",
+      "tip": "How strongly an unmeasured factor would have to be tied to both the change and the temperature to explain the effect away. Bigger is sturdier; 1 means it would take nothing.",
+      "technical": "E-value (sensitivity to unmeasured confounding)"
+    },
+    "bias_correction": {
+      "label": "Correction for under-estimation",
+      "tip": "If the simulation check finds the model recovers the same share of a planted effect (say 80%) for every kind of made-up data, citywide effects can be scaled by it. If the share varies, read them as a range.",
+      "technical": "Bias correction (median effect share across generators)"
+    },
+    "effect_share": {
+      "label": "Share of a known effect recovered",
+      "tip": "A known effect is planted in made-up data and the analysis is run on it. 1 means it was recovered exactly; below 1 the model understates it, above 1 it overstates it.",
+      "technical": "Effect share (recovered ÷ planted)"
+    },
+    "false_positive": {
+      "label": "False alarms",
+      "tip": "How often the analysis finds an effect in made-up data where none was planted. About 5% is expected by chance.",
+      "technical": "False-positive rate (null generator)"
+    },
+    "baselines": {
+      "label": "Simpler models",
+      "tip": "Simple reference models, such as the city average or a nearest-neighbour guess, scored on the same test areas. The full model should beat them.",
+      "technical": "Reference baselines (ΔMSE on the same CV blocks)"
+    },
+    "reproduce": {
+      "label": "Repeat run",
+      "tip": "Runs the analysis again from the same inputs and settings, and checks that the numbers come out the same.",
+      "technical": "Reproduction (re-run from the launch snapshot)"
+    },
+    "literature_check": {
+      "label": "Published studies",
+      "tip": "Cooling found by published studies of similar changes, next to this run's estimate. Agreement is a sanity check only: other cities and methods differ.",
+      "technical": "Literature check"
+    },
+    "benchmark": {
+      "label": "Known-effect test",
+      "tip": "Plants a known tree-cover effect in a made-up city and measures how much of it each model recovers. It needs no run.",
+      "technical": "Effect benchmark (synthetic city)"
+    },
+    "residual": {
+      "label": "Prediction miss",
+      "tip": "The measured minus the predicted temperature at a place. Positive means the model predicted too cool there; negative, too warm.",
+      "technical": "Residual (observed − predicted)"
+    },
+    "heat_index": {
+      "label": "Feels-like temperature",
+      "tip": "Air temperature and humidity combined into how hot it feels to the body, in °F.",
+      "technical": "NWS heat index"
+    },
+    "heat_risk_level": {
+      "label": "Heat-risk level",
+      "tip": "The US National Weather Service bands of the feels-like temperature: Caution, Extreme caution, Danger and Extreme danger.",
+      "technical": "NWS heat-index category"
+    },
+    "ssp": {
+      "label": "Emissions future",
+      "tip": "A storyline of how much greenhouse gas the world emits this century, from low to very high. Higher emissions bring more warming.",
+      "technical": "SSP (Shared Socioeconomic Pathway)"
+    },
+    "climate_period": {
+      "label": "Time period",
+      "tip": "The 20 years a future climate is averaged over, e.g. mid-century (2041–2060).",
+      "technical": "CMIP6 period"
+    },
+    "warming_offset": {
+      "label": "Share of warming cancelled",
+      "tip": "How much of the coming warming the change cancels out where you made it.",
+      "technical": "Warming offset"
+    },
+    "humidity_assumption": {
+      "label": "Humidity assumption",
+      "tip": "How muggy the afternoon is taken to be, as a dew point in °F. Humid air makes heat feel worse, so this changes the feels-like temperature. One value is used for the whole city.",
+      "technical": "Dewpoint (°C) for the NWS heat index"
+    },
+    "future_humidity": {
+      "label": "Future humidity",
+      "tip": "Nobody knows how muggy warmer afternoons will be, so two cases bracket it: the air holds the same amount of water as today, so it feels a little less muggy (low end), or it takes up more water and stays as muggy as today (high end).",
+      "technical": "Constant dewpoint (lower bound) / constant relative humidity (upper bound)"
+    },
+    "climate_models": {
+      "label": "Climate models",
+      "tip": "Each climate model gives its own answer for how much warmer it gets. We show the middle answer; most models fall within the range shown.",
+      "technical": "CMIP6 ensemble: median, 10th–90th percentile across models"
+    },
+    "campaign": {
+      "label": "Measured afternoon",
+      "tip": "The hot afternoon when the temperature readings this run is built on were taken.",
+      "technical": "Measurement campaign"
+    },
+    "person_mean": {
+      "label": "Average temperature where people live",
+      "tip": "The average temperature residents experience: each place counts by how many people live there, so busy neighbourhoods weigh more than empty land.",
+      "technical": "Person-weighted mean temperature"
+    },
+    "hot_days": {
+      "label": "Hot days per year",
+      "tip": "How many summer afternoons a year reach each temperature: the local weather station's daily record, shifted by how much hotter or cooler each place measured.",
+      "technical": "GHCN-Daily station record (1995–2014) plus each cell's campaign offset"
+    },
+    "quintile": {
+      "label": "Fifth",
+      "tip": "Places are ranked by a measure, such as population density, and split into five equal groups, from the lowest fifth to the highest.",
+      "technical": "Quintile"
+    },
+    "concentration_index": {
+      "label": "Who gets the cooling",
+      "tip": "Whether the cooling leans toward places ranked high or low on this measure. 0 means it is shared evenly; above 0, more goes to the higher fifths; below 0, to the lower fifths.",
+      "technical": "Concentration index (resident-weighted, −1 to +1)"
+    },
+    "climate_offset": {
+      "label": "Warming cancelled",
+      "tip": "How much of the expected warming a scenario cancels out, averaged over the whole city: its citywide cooling as a share of the climate models' middle estimate of warming.",
+      "technical": "Offset share of median warming (citywide mean ΔT ÷ median CMIP6 warming)"
+    },
+    "demo": {
+      "label": "Demo data",
+      "tip": "Made-up data for a fictional place, for trying SPARC out. Its numbers say nothing about a real city.",
+      "technical": "Synthetic demo data"
+    },
+    "checkpoint": {
+      "label": "Saved models",
+      "tip": "The trained models, saved during the run. The full model, the quick estimate and resuming an interrupted run all need them; without them the models must be trained again.",
+      "technical": "Checkpoint (checkpoint.pkl)"
+    },
+    "predictor": {
+      "label": "Map layer",
+      "tip": "A map layer the model uses to predict temperature, such as tree cover, paving or building height. The levers are the layers a plan can change.",
+      "technical": "Predictor (model feature)"
+    },
+    "coarse": {
+      "label": "Coarser grid",
+      "tip": "For a faster run, the input squares were averaged into bigger ones. The broad patterns hold, but street-level detail is lost.",
+      "technical": "Coarse aggregation (coarse_m)"
+    },
+    "grid_fill": {
+      "label": "Share of the grid with readings",
+      "tip": "The share of squares in the grid's rectangle that hold at least one reading. The rest lie outside the study area or have no data.",
+      "technical": "Grid fill fraction"
+    },
+    "fractional_part": {
+      "label": "Rounding in the readings",
+      "tip": "The digits after the decimal point of every reading. Real measurements spread evenly; readings piled on whole numbers or .5 were rounded or classed, which caps how precise any model can be.",
+      "technical": "Fractional part of the target"
+    },
+    "uncommitted_code": {
+      "label": "Unsaved code changes",
+      "tip": "The code had changes not yet committed to version control when the run started, so its commit alone cannot repeat the run exactly.",
+      "technical": "Dirty git working tree"
+    },
+    "provenance": {
+      "label": "Audit trail",
+      "tip": "Where the run came from: fingerprints of its input files and settings, and the exact code and software, so anyone can check or repeat it.",
+      "technical": "Provenance (hashes, environment, launch snapshot)"
+    },
+    "dose": {
+      "label": "Amount of change",
+      "tip": "How much a lever changes in a place, in the lever's own units, e.g. +10 percentage points of tree cover.",
+      "technical": "Dose"
+    },
+    "ladder": {
+      "label": "Amount ladder",
+      "tip": "The same change run at several growing amounts, to see how the cooling grows with the amount and where it levels off.",
+      "technical": "Scenario ladder"
+    },
+    "sweep": {
+      "label": "Try amounts",
+      "tip": "Runs one lever at several amounts through the full model, each with its likely range, to see how the cooling grows and where it levels off.",
+      "technical": "Dose sweep"
+    },
+    "neighbourhood_dose": {
+      "label": "Amount nearby",
+      "tip": "The change averaged over the area around each place, weighted by distance. For a change in one area it is smaller than the amount asked for there.",
+      "technical": "Neighbourhood dose (distance-smoothed dose)"
+    },
+    "paired_se": {
+      "label": "Uncertainty of the difference",
+      "tip": "How precisely the gap between two results is known. They are compared test area by test area, so doubt they share cancels out. It needs the full model's result for each test area.",
+      "technical": "Paired standard error, SE(A − B) over held-out folds"
+    },
+    "total_cooling": {
+      "label": "Total cooling",
+      "tip": "Cooling added up over every place it reaches, in degree·places (°F·places): 1 place cooled by 1 degree and 10 places cooled by 0.1 degree both count as 1.",
+      "technical": "ΔT summed over cells (target units · cells)"
+    },
+    "cost_units": {
+      "label": "Cost units",
+      "tip": "Spending in the units the project's costs are set in. By default one unit of change in one place costs 1, so +10 pts in 100 places costs 1,000.",
+      "technical": "Budget units (cost per unit × amount, summed over cells)"
+    },
+    "stale": {
+      "label": "Out of date",
+      "tip": "The model has changed since this result was worked out. It stays viewable; run the full model again to refresh it.",
+      "technical": "Stale result"
+    },
+    "configured_scenario": {
+      "label": "Set up with this run",
+      "tip": "Scenarios written in the project's settings and worked out when the run finished. They are read-only here: clone one to change it.",
+      "technical": "Configured scenarios (project config, stage S5)"
+    },
+    "budget_plan": {
+      "label": "Budget plan",
+      "tip": "Spends a fixed budget where the change cools most for its cost, one step at a time, until the budget runs out.",
+      "technical": "Budget allocation (stage S7 optimiser)"
+    },
+    "readiness": {
+      "label": "Readiness",
+      "tip": "How many of the project's setup checks pass: the data and its columns, what you can change, and the weather, climate and people data. A run can start once the data is in.",
+      "technical": "Readiness checks"
+    },
+    "levers": {
+      "label": "What you can change",
+      "tip": "The map layers a plan can change, such as tree cover, paving or roof colour. SPARC works out how much cooling each change brings.",
+      "technical": "Levers (actionable predictors)"
+    },
+    "peak_ram": {
+      "label": "Memory needed",
+      "tip": "The most computer memory (RAM) the run is expected to use at one time. If the computer has less free, the run slows down or stops.",
+      "technical": "Peak RAM (resident set size)"
+    },
+    "threads": {
+      "label": "Processor threads",
+      "tip": "How many parts of the computer's processor a job may use at once. More makes it faster but leaves less for other work.",
+      "technical": "Threads"
+    },
+    "config_version": {
+      "label": "Settings version",
+      "tip": "Each save of the project's settings makes a new numbered version. A run records the version it used, so you can see what changed between runs.",
+      "technical": "Config version"
+    },
+    "code_version": {
+      "label": "Code version",
+      "tip": "The version of the SPARC software that made the run. Runs made with the same code can be compared like for like.",
+      "technical": "Git commit"
+    },
+    "run_fast": {
+      "label": "Fast",
+      "tip": "A first look in minutes: fewer models and less tuning. Good for checking the setup, not for final decisions.",
+      "technical": "Run mode: fast"
+    },
+    "run_coarse": {
+      "label": "Coarse",
+      "tip": "The whole analysis on bigger squares: a faithful preview in a fraction of the time, without street-level detail.",
+      "technical": "Run mode: coarse (coarse_m)"
+    },
+    "run_full": {
+      "label": "Full",
+      "tip": "Every model at full detail. It takes the longest; use it for the results that decisions rest on.",
+      "technical": "Run mode: full"
+    },
+    "stage_s0": {
+      "label": "Check the data",
+      "tip": "Reads the temperature readings, flags doubtful ones and places them on the map grid.",
+      "technical": "S0 · Data and QA"
+    },
+    "stage_s1": {
+      "label": "Measure reach",
+      "tip": "Measures how far each map layer, such as tree cover, still affects the temperature around it, and sizes the test areas to match.",
+      "technical": "S1 · Area of influence"
+    },
+    "stage_s2_s3": {
+      "label": "Train the models",
+      "tip": "Trains several models, each tested on areas it did not see, and blends them into one prediction.",
+      "technical": "S2–S3 · Base models and stacker"
+    },
+    "stage_baselines": {
+      "label": "Simple-model check",
+      "tip": "Scores simple reference models, such as the city average, on the same test areas. The full model should beat them.",
+      "technical": "Reference baselines"
+    },
+    "stage_cv_curve": {
+      "label": "Distance test",
+      "tip": "Tests the model again with bigger areas held out, to see whether it stays accurate farther from any reading.",
+      "technical": "CV curve (skill vs block size)"
+    },
+    "stage_s4": {
+      "label": "Cooling by amount",
+      "tip": "Works out how much cooling each amount of every change brings, from a small step to a large one.",
+      "technical": "S4 · Response surfaces"
+    },
+    "stage_s5": {
+      "label": "Scenarios",
+      "tip": "Works out the cooling of the scenarios set up for the project, each with a likely range.",
+      "technical": "S5 · Scenarios"
+    },
+    "stage_climate": {
+      "label": "Future climate",
+      "tip": "Sets the cooling against the warming expected in future climates.",
+      "technical": "Climate and adaptation (CMIP6)"
+    },
+    "stage_s6": {
+      "label": "Cause checks",
+      "tip": "Separate statistical checks that the cooling comes from the change itself and is not a coincidence in the data.",
+      "technical": "S6 · Causal validation"
+    },
+    "stage_s7": {
+      "label": "Budget plan",
+      "tip": "Finds where a fixed budget buys the most cooling, then checks that plan with the full model.",
+      "technical": "S7 · Budget optimisation"
+    },
+    "stage_finish": {
+      "label": "Write the report",
+      "tip": "Writes the run's record of files, its report and the method notes.",
+      "technical": "Finish · manifest and report"
+    }
+  },
+  "levers": {
+    "canopy": { "name": "Trees & canopy", "oneLine": "More tree cover shades streets and cools the air around it.", "icon": "trees", "unitWord": "pts", "measure": "tree canopy" },
+    "impervious": { "name": "Less paving", "oneLine": "Swapping pavement for soil and plants keeps the ground cooler.", "icon": "paving", "unitWord": "pts", "measure": "paving" },
+    "albedo": { "name": "Cool roofs & surfaces", "oneLine": "Lighter roofs and pavements reflect sunlight instead of soaking it up.", "icon": "roofs", "unitWord": "0–1", "measure": "surface reflectivity" }
+  },
+  "modes": {
+    "add": { "label": "Add", "help": "Adds this much everywhere you chose.", "verb": "Add", "planner": true },
+    "floor": { "label": "Bring up to at least", "help": "Raises places below this level up to it; places already above stay as they are.", "verb": "Bring up to at least", "planner": true },
+    "fill_headroom": { "label": "Use available planting space", "help": "Plants trees on this share of the open ground that can take them (not buildings or roads).", "verb": "Plant", "planner": true },
+    "set": { "label": "Set to exactly", "help": "Every chosen place gets exactly this value.", "verb": "Set to", "planner": false },
+    "scale": { "label": "Multiply by", "help": "Multiplies today's value in every chosen place.", "verb": "Multiply by", "planner": false },
+    "ceiling": { "label": "Cap at", "help": "Lowers places above this level down to it; places below stay as they are.", "verb": "Cap at", "planner": false },
+    "to_percentile": { "label": "Bring up to a citywide level", "help": "Brings each chosen place up to the level that this share of the city already reaches.", "verb": "Bring up to the city's", "planner": false },
+    "per_cell": { "label": "Place by place (plan, brush or file)", "help": "A different change for each place, from a saved plan, brush strokes or an imported file.", "verb": "Apply", "planner": false },
+    "take_away": { "label": "Take away", "help": "Takes this much away everywhere you chose.", "verb": "Take away", "planner": true },
+    "bring_down": { "label": "Bring down to at most", "help": "Lowers places above this level down to it; places already below stay as they are.", "verb": "Bring down to at most", "planner": false }
+  },
+  "confidence": {
+    "confident_cools": { "chip": "Confident it cools", "sentence": "The whole likely range is below zero: the change cools." },
+    "confident_warms": { "chip": "Confident it warms", "sentence": "The whole likely range is above zero: the change warms." },
+    "could_be_zero": { "chip": "Might be no real effect", "sentence": "The likely range includes zero: the effect could be too small to tell apart from no change." },
+    "unknown": { "chip": "No range available", "sentence": "This result has no uncertainty estimate, so there is no likely range." }
+  },
+  "shapes": {
+    "saturating": { "label": "Diminishing", "tip": "Each extra step cools less than the last, so the cooling levels off.", "technical": "Saturating" },
+    "linear": { "label": "Steady", "tip": "Each extra step cools about the same, across the amounts tested.", "technical": "Linear" },
+    "sigmoid": { "label": "Slow start, then strong", "tip": "Little cooling at first, then a sharp gain once enough is added, then it levels off.", "technical": "Sigmoid (S-shaped)" },
+    "censored": { "label": "Hit the limit", "tip": "Still cooling at the largest amount the space allows, so we cannot see where it would level off.", "technical": "Censored (no saturation within headroom)" }
+  },
+  "heat": {
+    "below": { "label": "Below caution", "tip": "Heat index under 80 °F. No heat-risk category." },
+    "caution": { "label": "Caution", "tip": "Heat index 80–90 °F. Tiredness is possible with long exposure or activity." },
+    "extreme_caution": { "label": "Extreme caution", "tip": "Heat index 90–103 °F. Heat cramps and heat exhaustion are possible." },
+    "danger": { "label": "Danger", "tip": "Heat index 103–125 °F. Heat cramps or heat exhaustion are likely; heat stroke is possible with long exposure." },
+    "extreme_danger": { "label": "Extreme danger", "tip": "Heat index 125 °F or more. Heat stroke is highly likely." }
+  },
+  "trust": {
+    "good": { "label": "Good", "sentence": "Predicts well in places it was not trained on." },
+    "fair": { "label": "Fair", "sentence": "Gets the broad pattern right in places it was not trained on; treat street-level detail with care." },
+    "limited": { "label": "Limited", "sentence": "Struggles in places it was not trained on; use the results as a rough guide only." }
+  },
+  "trustRanges": {
+    "ok": "Its prediction ranges hold.",
+    "narrow": "Its prediction ranges are too narrow: real values fall outside them more often than stated.",
+    "wide": "Its prediction ranges are wider than they need to be."
+  },
+  "quickTrust": {
+    "tip": "How reliable the quick estimate is for this change. The full model is always the firm answer.",
+    "dot": {
+      "good": "Quick estimate reliable",
+      "rough": "Quick estimate rough",
+      "none": "No quick estimate"
+    },
+    "line": {
+      "good": "The quick estimate is reliable for this change.",
+      "hatched": "Rough in the hatched areas — run the full model for a firm answer.",
+      "rough": "The quick estimate is rough for this change — run the full model for a firm answer."
+    }
+  },
+  "hatch": {
+    "preview": { "label": "Rough estimate here", "note": "The quick estimate is less reliable in the hatched places. Run the full model for a firm answer." },
+    "result": { "label": "Less certain here", "note": "Conditions in the hatched places go beyond anything measured in the city." }
+  },
+  "engine": {
+    "states": {
+      "no_checkpoint": "Model not available for this run — quick estimate only",
+      "cold": "Model loads when you run it",
+      "queued": "Model waiting to load…",
+      "loading": "Loading model… {pct}",
+      "ready": "Model ready",
+      "busy": "Model busy — your run will wait its turn",
+      "incompatible": "Model not available for this run — quick estimate only",
+      "error": "Model could not load — see Advanced options"
+    },
+    "noModelNoEstimate": "Full model not available for this run — build the quick estimate above to explore changes",
+    "noCheckpoint": "Full model not available — this run did not save its trained models",
+    "checking": "Checking the model…"
+  },
+  "emissions": {
+    "ssp119": { "label": "very low emissions", "technical": "SSP1-1.9" },
+    "ssp126": { "label": "low emissions", "technical": "SSP1-2.6", "tip": "Emissions cut fast this century. The world ends up about 1.8 °C (likely 1.3–2.4 °C) warmer than pre-industrial by 2081–2100 (IPCC)." },
+    "ssp245": { "label": "moderate emissions", "technical": "SSP2-4.5", "tip": "Emissions roughly follow current policies. The world ends up about 2.7 °C (likely 2.1–3.5 °C) warmer than pre-industrial by 2081–2100 (IPCC)." },
+    "ssp370": { "label": "high emissions", "technical": "SSP3-7.0", "tip": "Emissions keep rising through the century. The world ends up about 3.6 °C (likely 2.8–4.6 °C) warmer than pre-industrial by 2081–2100 (IPCC)." },
+    "ssp434": { "label": "moderate emissions", "technical": "SSP4-3.4" },
+    "ssp460": { "label": "moderate-high emissions", "technical": "SSP4-6.0" },
+    "ssp534": { "label": "high, then falling emissions", "technical": "SSP5-3.4-OS" },
+    "ssp585": { "label": "very high emissions", "technical": "SSP5-8.5", "tip": "Fossil-fuelled growth with the highest emissions. The world ends up about 4.4 °C (likely 3.3–5.7 °C) warmer than pre-industrial by 2081–2100 (IPCC)." },
+    "rcp26": { "label": "low emissions", "technical": "RCP2.6" },
+    "rcp45": { "label": "moderate emissions", "technical": "RCP4.5" },
+    "rcp60": { "label": "moderate-high emissions", "technical": "RCP6.0" },
+    "rcp85": { "label": "very high emissions", "technical": "RCP8.5" }
+  },
+  "periods": {
+    "2021-2040": { "label": "near-term (2021–2040)" },
+    "2041-2060": { "label": "mid-century (2041–2060)" },
+    "2081-2100": { "label": "late century (2081–2100)" }
+  }
+}

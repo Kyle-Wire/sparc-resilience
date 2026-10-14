@@ -5,21 +5,26 @@
 // project's Runs page, the Pipeline Status Board (every run × every stage) below them.
 import { useEffect, useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
+import { useProjectConfig } from "../../api/projects";
 import { useResource } from "../../api/resource";
 import { getTimings, listRuns, type RunListQuery, type StageHistoryRow } from "../../api/tracking";
 import type { Page, RunSummary } from "../../api/types";
 import { Bars } from "../../charts";
-import { Badge, modeLabel } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Select } from "../../components/ui/Select";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table, type Column } from "../../components/ui/Table";
+import { term } from "../../content/glossary";
+import { ModeBadge, TipSpan } from "../../layouts/tips";
 import { codecs, Link, setQuery, useRoute, useUrlState } from "../../router";
 import { readLocal, toast, writeLocal } from "../../stores/ui";
-import { fmtBytes, fmtDate, fmtDuration, fmtNum, fmtPct } from "../../theme/format";
+import { fmtBytes, fmtDate, fmtDuration, fmtNum, fmtPct, unitLabel } from "../../theme/format";
 import { STAGE_IDS } from "../../stores/tracker";
+import { getString } from "../projects/model/dotted";
+import { STAGE_PLAIN } from "./model";
 import { StatusBoard } from "./StatusBoard";
 import "./tracking.css";
 
@@ -66,7 +71,7 @@ export function stageHistoryChart(rows: StageHistoryRow[], stage: string | null)
   }
   const series = stages.map((s) => ({
     id: s,
-    label: s,
+    label: STAGE_PLAIN[s as keyof typeof STAGE_PLAIN] ?? s,
     values: runs.map((run) => seconds.get(run.run_id)?.get(s) ?? null),
   }));
   return { categories, series };
@@ -84,18 +89,23 @@ function StageHistory({ pid }: { pid: string | null }) {
     <div className="stack">
       <div className="field" style={{ maxWidth: 260 }}>
         <label htmlFor="hist-stage">Stage</label>
-        <Select id="hist-stage" value={stage} onChange={setStage} options={[{ value: "", label: "All stages (stacked)" }, ...STAGE_IDS.map((s) => ({ value: s, label: s }))]} />
+        <Select
+          id="hist-stage"
+          value={stage}
+          onChange={setStage}
+          options={[{ value: "", label: "All stages (stacked)" }, ...STAGE_IDS.map((s) => ({ value: s, label: STAGE_PLAIN[s] }))]}
+        />
       </div>
       <Bars
         title="Stage duration by run"
-        caption="Runs grouped by code commit; a longer bar for the same stage and grid size after a commit points at a performance regression"
+        caption="Runs grouped by code version (commit). A longer bar for the same stage and grid size after a code change means that change made it slower."
         categories={categories}
         series={series}
         orientation="h"
         mode={stage ? "grouped" : "stacked"}
         valueLabel="Duration"
         unit="s"
-        categoryLabel="Commit · run"
+        categoryLabel="Code version · run"
         decimals={1}
         pin={{ view: "runs:stage-history" }}
       />
@@ -132,6 +142,9 @@ export default function RunHistory() {
   const toggle = (id: string) =>
     setSelected((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id].slice(-2)));
 
+  // the typical error in the target's unit ("0.34 °F"): the project's data.target_units (a project's runs only)
+  const config = useProjectConfig(pid);
+  const targetUnit = config.data ? unitLabel(getString(config.data.effective, "data.target_units") ?? getString(config.data.raw, "data.target_units") ?? "degF") : "";
   const cols: Column<RunSummary>[] = [
     {
       key: "sel",
@@ -140,23 +153,37 @@ export default function RunHistory() {
       render: (r) => <input type="checkbox" aria-label={`Select ${r.label || r.id} for comparison`} checked={selected.includes(r.id)} onChange={() => toggle(r.id)} />,
     },
     { key: "status", label: "Status", value: (r) => r.status, render: (r) => <StatusChip status={r.status} /> },
-    { key: "label", label: "Label", value: (r) => r.label ?? r.id, render: (r) => <Link to={`/r/${encodeURIComponent(r.id)}`}>{r.label || r.id}</Link> },
-    { key: "mode", label: "Mode", value: (r) => r.mode, render: (r) => <Badge tone="mode">{modeLabel(r.mode, r.coarse_m)}</Badge> },
+    { key: "label", label: "Run", value: (r) => r.label ?? r.id, render: (r) => <Link to={`/r/${encodeURIComponent(r.id)}`}>{r.label || r.id}</Link> },
+    { key: "mode", label: "Kind of run", value: (r) => r.mode, render: (r) => <ModeBadge mode={r.mode} coarse_m={r.coarse_m} /> },
     { key: "created", label: "Started", value: (r) => r.created_utc, render: (r) => fmtDate(r.created_utc) },
     { key: "duration", label: "Duration", align: "right", value: (r) => r.duration_s, render: (r) => fmtDuration(r.duration_s) },
-    { key: "r2", label: "R²", align: "right", value: (r) => r.r2, render: (r) => fmtNum(r.r2, 3) },
-    { key: "rmse", label: "RMSE", align: "right", value: (r) => r.rmse, render: (r) => fmtNum(r.rmse, 3) },
-    { key: "coverage", label: "Coverage", align: "right", value: (r) => r.coverage, render: (r) => fmtPct(r.coverage, 1) },
+    { key: "r2", label: term("r2").label, align: "right", tip: <InfoTip term="r2" />, value: (r) => r.r2, render: (r) => fmtNum(r.r2, 3) },
+    { key: "rmse", label: term("rmse").label, align: "right", tip: <InfoTip term="rmse" />, value: (r) => r.rmse, render: (r) => (r.rmse === null ? "—" : `${fmtNum(r.rmse, 2)}${targetUnit ? ` ${targetUnit}` : ""}`) },
+    { key: "coverage", label: term("coverage").label, align: "right", tip: <InfoTip term="coverage" />, value: (r) => r.coverage, render: (r) => fmtPct(r.coverage, 1) },
     { key: "scenarios", label: "Scenarios", align: "right", value: (r) => r.n_scenarios },
-    { key: "ckpt", label: "Checkpoint", align: "right", value: (r) => r.checkpoint_bytes, render: (r) => fmtBytes(r.checkpoint_bytes) },
-    { key: "studies", label: "Studies", value: (r) => r.studies.join(", "), render: (r) => (r.studies.length ? r.studies.join(", ") : "—") },
+    { key: "ckpt", label: term("checkpoint").label, align: "right", tip: <InfoTip term="checkpoint" />, value: (r) => r.checkpoint_bytes, render: (r) => fmtBytes(r.checkpoint_bytes) },
+    { key: "studies", label: term("independent_checks").label, tip: <InfoTip term="independent_checks" />, value: (r) => r.studies.join(", "), render: (r) => (r.studies.length ? r.studies.join(", ") : "—") },
     {
       key: "commit",
-      label: "Commit",
+      label: term("code_version").label,
+      tip: <InfoTip term="code_version" />,
       value: (r) => r.git_commit,
-      render: (r) => (r.git_commit ? <span className="mono" title={r.git_dirty ? "uncommitted changes when it ran" : undefined}>{r.git_commit.slice(0, 7)}{r.git_dirty ? " (dirty)" : ""}</span> : "—"),
+      render: (r) =>
+        r.git_commit ? (
+          r.git_dirty ? (
+            <TipSpan tip={term("uncommitted_code").tip} technical={term("uncommitted_code").technical}>
+              <span className="mono">
+                {r.git_commit.slice(0, 7)} (unsaved changes)
+              </span>
+            </TipSpan>
+          ) : (
+            <span className="mono">{r.git_commit.slice(0, 7)}</span>
+          )
+        ) : (
+          "—"
+        ),
     },
-    { key: "origin", label: "Origin", value: (r) => r.origin },
+    { key: "origin", label: "Came from", value: (r) => r.origin, render: (r) => r.origin.replace(/_/g, " ") },
   ];
 
   const values: Record<(typeof FILTER_KEYS)[number], string> = { status, mode, origin, q, sort };
@@ -179,11 +206,11 @@ export default function RunHistory() {
             <Select id="runs-status" value={status} onChange={setStatus} options={STATUS_OPTIONS.map((s) => ({ value: s, label: s ? s.replace(/_/g, " ") : "Any status" }))} />
           </div>
           <div className="field">
-            <label htmlFor="runs-mode">Mode</label>
-            <Select id="runs-mode" value={mode} onChange={setMode} options={MODE_OPTIONS.map((s) => ({ value: s, label: s || "Any mode" }))} />
+            <label htmlFor="runs-mode">Kind of run</label>
+            <Select id="runs-mode" value={mode} onChange={setMode} options={MODE_OPTIONS.map((s) => ({ value: s, label: s || "Any kind" }))} />
           </div>
           <div className="field">
-            <label htmlFor="runs-origin">Origin</label>
+            <label htmlFor="runs-origin">Came from</label>
             <Select id="runs-origin" value={origin} onChange={setOrigin} options={ORIGIN_OPTIONS.map((s) => ({ value: s, label: s ? s.replace(/_/g, " ") : "Any origin" }))} />
           </div>
           <div className="field">
@@ -192,7 +219,7 @@ export default function RunHistory() {
           </div>
           <div className="field">
             <label htmlFor="runs-sort">Sort</label>
-            <Select id="runs-sort" value={sort} onChange={setSort} options={[{ value: "created_desc", label: "Newest first" }, { value: "duration", label: "Duration" }, { value: "r2", label: "R²" }]} />
+            <Select id="runs-sort" value={sort} onChange={setSort} options={[{ value: "created_desc", label: "Newest first" }, { value: "duration", label: "Duration" }, { value: "r2", label: term("r2").label }]} />
           </div>
         </div>
         <div className="row">
@@ -237,9 +264,9 @@ export default function RunHistory() {
               Compare selected
             </Link>
           ) : (
-            <Button disabled title={cmp.reason ?? undefined}>
-              Compare selected
-            </Button>
+            <TipSpan tip={cmp.reason}>
+              <Button disabled>Compare selected</Button>
+            </TipSpan>
           )
         }
       >
@@ -265,11 +292,11 @@ export default function RunHistory() {
           </Button>
         ) : null}
       </Card>
-      <Card title="Stage-duration history" eyebrow="performance across runs">
+      <Card title="How long each stage took" eyebrow="speed across runs">
         <StageHistory pid={pid} />
       </Card>
       {pid ? (
-        <Card title="Pipeline Status Board" eyebrow="every run × every stage, post-run action and study">
+        <Card title="Status of every run" eyebrow="every run × every stage, after-run step and independent check">
           <StatusBoard pid={pid} />
         </Card>
       ) : null}

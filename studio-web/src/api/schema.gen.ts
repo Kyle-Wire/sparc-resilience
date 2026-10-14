@@ -3662,6 +3662,8 @@ export interface components {
             frac_extrapolated?: number | null;
             /** Has Folds */
             has_folds: boolean;
+            /** Label */
+            label?: string | null;
             /** Layer Key */
             layer_key: string;
             /** Mean Realized */

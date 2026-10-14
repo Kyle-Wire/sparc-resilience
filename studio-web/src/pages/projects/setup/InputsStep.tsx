@@ -30,6 +30,8 @@ import { Bars, HexbinScatter } from "../../../charts";
 import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/Button";
 import { Card } from "../../../components/ui/Card";
+import { InfoTip } from "../../../components/ui/InfoTip";
+import { periodLabel, sspLabel } from "../../../content/glossary";
 import { Chips } from "../../../components/ui/Chips";
 import { ActionButton } from "../../../components/ui/EmptyState";
 import { JobStrip } from "../../../components/ui/JobStrip";
@@ -42,7 +44,7 @@ import { MapView } from "../../../map/MapView";
 import { Link } from "../../../router";
 import { useJobs } from "../../../stores/jobs";
 import { toast } from "../../../stores/ui";
-import { fmtInt, fmtNum, fmtRelative, fmtSig } from "../../../theme/format";
+import { fmtInt, fmtNum, fmtRelative, fmtSig, unitLabel } from "../../../theme/format";
 import { useCfg } from "../components/cfg";
 import { LinkDialog } from "../components/LinkDialog";
 import { NetCheck } from "../components/NetCheck";
@@ -106,6 +108,7 @@ function JobState({ job }: { job: Job | null }) {
 function InputCard({
   kind,
   title,
+  tip,
   eyebrow,
   status,
   children,
@@ -117,6 +120,8 @@ function InputCard({
 }: {
   kind: InputKind;
   title: string;
+  /** The ⓘ beside the title. */
+  tip?: ReactNode;
   eyebrow: string;
   status: ReactNode;
   children: ReactNode;
@@ -133,7 +138,7 @@ function InputCard({
   const running = !!job && isActiveStatus(job.status);
   const reason = offline ? "Offline mode is on (Settings): network inputs are hidden." : disabledReason ?? null;
   return (
-    <Card title={title} eyebrow={eyebrow} className="input-card" data-input={kind} actions={status}>
+    <Card title={title} tip={tip} eyebrow={eyebrow} className="input-card" data-input={kind} actions={status}>
       <NetCheck hosts={hosts} auto={!offline} />
       {children}
       <div className="row">
@@ -317,11 +322,12 @@ function ForcingCard() {
   return (
     <InputCard
       kind="forcing"
-      title="Campaign forcing"
-      eyebrow="ERA5 + ISD station"
+      title="Weather on the measurement day"
+      tip={<InfoTip term="forcing" />}
+      eyebrow="Weather on the day · ERA5 + ISD weather station"
       job={job}
       status={f ? <StatusChip status={f.linked ? "done" : "present"} text={f.linked ? "linked" : "fetched"} /> : <StatusChip status="missing" />}
-      startLabel="Fetch forcing"
+      startLabel="Fetch the day's weather"
       disabledReason={!ready ? "Set the campaign date and hours." : where.lat === null && !station ? "Set a location (or a station)." : null}
       start={() =>
         startForcing(pid, {
@@ -387,8 +393,8 @@ function ForcingCard() {
     >
       <div className="grid3">
         <label className="field">
-          <span className="field-label">Campaign date</span>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Campaign date" />
+          <span className="field-label">Measurement day</span>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} aria-label="Measurement day" />
         </label>
         <div className="field">
           <span className="field-label">Hours (local, from–to)</span>
@@ -403,7 +409,7 @@ function ForcingCard() {
         </label>
       </div>
       <div className="field">
-        <span className="field-label">Location (default: climate.site or the data centroid)</span>
+        <span className="field-label">Location (default: the centre of your data)</span>
         <LatLon lat={where.lat} lon={where.lon} onChange={(lat, lon) => setPos({ lat, lon })} />
       </div>
       <StationPicker pid={pid} lat={where.lat} lon={where.lon} value={station} onChange={setStation} />
@@ -458,6 +464,7 @@ function LayersCard() {
     <InputCard
       kind="layers"
       title="People & land cover"
+      tip={<InfoTip label="People & land cover" text="Where people live and what covers the ground in each place. Heat risk and who benefits from cooling need them." technical="HRSL population + ESA WorldCover" />}
       eyebrow="HRSL + WorldCover"
       job={job}
       status={l ? <StatusChip status={l.linked ? "done" : "present"} text={l.linked ? "linked" : "fetched"} /> : <StatusChip status="missing" />}
@@ -468,7 +475,7 @@ function LayersCard() {
         l || done ? (
           <div className="stack" style={{ gap: 8 }}>
             <KpiRow label="Residents">
-              <Kpi label="Residents" value={fmtInt(people("people") ?? l?.people_total ?? null)} note="HRSL population on the grid" />
+              <Kpi label="Residents" value={fmtInt(people("people") ?? l?.people_total ?? null)} note="Residents on the map grid" />
               <Kpi label="Aged 60+" value={fmtInt(people("people_60_plus"))} />
               <Kpi label="Under 5" value={fmtInt(people("people_under_5"))} />
               <Kpi label="Cells" value={fmtInt(l?.n ?? null)} />
@@ -581,11 +588,12 @@ function FeaturesCard() {
   return (
     <InputCard
       kind="features"
-      title="Open predictors"
+      title="Extra map layers (open data)"
+      tip={<InfoTip label="Extra map layers" text="More map layers from open data, such as satellite greenness, that the model can learn from." technical="Open predictors: Sentinel-2 + open layers" />}
       eyebrow="Sentinel-2 + open layers"
       job={job}
       status={fs ? <StatusChip status={fs.linked ? "done" : "present"} text={fs.linked ? "linked" : "fetched"} /> : <StatusChip status="missing" />}
-      startLabel="Build open predictors"
+      startLabel="Build open map layers"
       disabledReason={crs ? null : "Needs data.crs (Data step)."}
       start={() => startFeatures(pid, { ...(list(months).length ? { months: list(months) } : {}), ...(cloud !== null ? { max_cloud: cloud } : {}), ...(list(tiles).length ? { s2_tiles: list(tiles) } : {}), target: tgt })}
       results={
@@ -593,7 +601,7 @@ function FeaturesCard() {
           <div className="stack" style={{ gap: 8 }}>
             {openProject ? (
               <p>
-                Created <Link to={`/p/${encodeURIComponent(openProject)}`}>the _open project</Link>.
+                Created <Link to={`/p/${encodeURIComponent(openProject)}`}>a copy of this project</Link> with the open map layers.
               </p>
             ) : null}
             {rolesMapped ? (
@@ -610,7 +618,7 @@ function FeaturesCard() {
             )}
             <div className="row">
               <LinkButton pid={pid} kind="features_join" path={path} linked={fs?.linked} label={fs?.linked ? "Linked: show the config diff" : "Use as this project's predictors"} />
-              {!openProject ? <LinkButton pid={pid} kind="features_new_project" path={path} label="Create _open project" /> : null}
+              {!openProject ? <LinkButton pid={pid} kind="features_new_project" path={path} label="Create a copy of this project" /> : null}
             </div>
           </div>
         ) : null
@@ -643,7 +651,7 @@ function FeaturesCard() {
           value={tgt}
           options={[
             { value: "this_project", label: "this project" },
-            { value: "new_project", label: "a new _open project" },
+            { value: "new_project", label: "a copy of this project" },
           ]}
           onChange={setTarget}
         />
@@ -677,14 +685,20 @@ function Cmip6Card() {
   const view = useInputView(pid, "climate", !!cl || done);
   const path = cl?.path ?? str(job?.result?.path);
   const skipped = Array.isArray(job?.result?.skipped_models) ? (job!.result!.skipped_models as unknown[]).map(String) : [];
+  // Warming comes in kelvin (a change, so the same as °C); show it in the project's temperature unit.
+  const target = getString(c.draft.raw, "data.target_units") ?? getString(c.draft.effective, "data.target_units") ?? "degF";
+  const inF = !/^(degC|°C|C|celsius|K)$/i.test(target);
+  const warmUnit = inF ? "°F" : unitLabel("degC");
+  const warm = (k: number | null | undefined) => (k === null || k === undefined ? null : inF ? (k * 9) / 5 : k);
   const validPeriods = periods.filter((p) => p.name && p.from !== null && p.to !== null && p.to >= p.from);
   const isDefault =
     validPeriods.length === 3 && validPeriods.every((p) => DEFAULT_PERIODS[p.name] && DEFAULT_PERIODS[p.name][0] === p.from && DEFAULT_PERIODS[p.name][1] === p.to);
   return (
     <InputCard
       kind="cmip6"
-      title="CMIP6 change factors"
-      eyebrow="Warming per SSP and period"
+      title="Future warming"
+      tip={<InfoTip term="climate_models" />}
+      eyebrow="CMIP6 change factors per emissions future and period"
       job={job}
       status={cl ? <StatusChip status={cl.linked ? "done" : "present"} text={cl.linked ? "linked" : "fetched"} /> : <StatusChip status="missing" />}
       startLabel="Fetch change factors"
@@ -707,15 +721,18 @@ function Cmip6Card() {
           <div className="stack" style={{ gap: 8 }}>
             {cl ? (
               <p className="cap">
-                {fmtInt(cl.n_models)} models · {cl.experiments.join(", ")} · {cl.periods.join(", ")}
+                {`${fmtInt(cl.n_models)} models · ${cl.experiments.map((e) => sspLabel(e)).join(", ")} · ${cl.periods.map((p) => periodLabel(p)).join(", ")}`}
               </p>
             ) : null}
             {skipped.length ? <p className="cap">Skipped models (no data): {skipped.join(", ")}</p> : null}
             {view.data ? (
-              <table className="tbl" aria-label="Warming by SSP and period">
+              <table className="tbl" aria-label="Warming by emissions future and period">
                 <thead>
                   <tr>
-                    <th scope="col">SSP</th>
+                    <th scope="col">
+                      Emissions future
+                      <InfoTip term="ssp" />
+                    </th>
                     <th scope="col">Period</th>
                     <th scope="col" className="r">
                       Median warming
@@ -728,11 +745,11 @@ function Cmip6Card() {
                 <tbody>
                   {view.data.summary.map((r) => (
                     <tr key={`${r.experiment}:${r.period}`}>
-                      <td>{SSPS.find((s) => s.value === r.experiment)?.label ?? r.experiment}</td>
-                      <td>{r.period}</td>
-                      <td className="r num">+{fmtNum(r.median, 2)} K</td>
+                      <td>{sentenceCase(sspLabel(r.experiment) === r.experiment ? (SSPS.find((s) => s.value === r.experiment)?.label ?? r.experiment) : sspLabel(r.experiment))}</td>
+                      <td>{sentenceCase(periodLabel(r.period))}</td>
+                      <td className="r num">+{fmtNum(warm(r.median), 1)} {warmUnit}</td>
                       <td className="r num">
-                        {fmtNum(r.p10, 2)}–{fmtNum(r.p90, 2)} K
+                        {fmtNum(warm(r.p10), 1)}–{fmtNum(warm(r.p90), 1)} {warmUnit}
                       </td>
                     </tr>
                   ))}
@@ -750,12 +767,12 @@ function Cmip6Card() {
       }
     >
       <div className="field">
-        <span className="field-label">Site (default: climate.site or the data centroid)</span>
+        <span className="field-label">Location (default: the centre of your data)</span>
         <LatLon lat={where.lat} lon={where.lon} onChange={(lat, lon) => setPos({ lat, lon })} />
       </div>
       <div className="field">
-        <span className="field-label">SSPs</span>
-        <Chips label="SSPs" items={SSPS} selected={ssps} onToggle={(v, on) => setSsps(on ? SSPS.map((s) => s.value).filter((x) => x === v || ssps.includes(x)) : ssps.filter((x) => x !== v))} />
+        <span className="field-label">Emissions futures</span>
+        <Chips label="Emissions futures" items={SSPS} selected={ssps} onToggle={(v, on) => setSsps(on ? SSPS.map((s) => s.value).filter((x) => x === v || ssps.includes(x)) : ssps.filter((x) => x !== v))} />
       </div>
       <div className="field">
         <span className="field-label">Periods</span>
@@ -790,8 +807,8 @@ function Cmip6Card() {
             label="CMIP6 variable"
             value={variable}
             options={[
-              { value: "tasmax", label: "tasmax" },
-              { value: "tas", label: "tas" },
+              { value: "tasmax", label: "Daily high" },
+              { value: "tas", label: "Daily average" },
             ]}
             onChange={setVariable}
           />
@@ -818,6 +835,9 @@ function Cmip6Card() {
   );
 }
 
+/** "moderate emissions" → "Moderate emissions" (table cells start a phrase). */
+const sentenceCase = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t);
+
 // ---------------------------------------------------------------- step
 
 function Summary() {
@@ -833,10 +853,10 @@ function Summary() {
   if (!s) return null;
   return (
     <ul className="inputs-summary" aria-label="Inputs">
-      {item("Campaign forcing", !!s.forcing, s.forcing?.linked, s.forcing ? `${s.forcing.date} · ${s.forcing.path}` : "")}
+      {item("Weather on the measurement day", !!s.forcing, s.forcing?.linked, s.forcing ? `${s.forcing.date} · ${s.forcing.path}` : "")}
       {item("People & land cover", !!s.layers, s.layers?.linked, s.layers ? `${fmtInt(s.layers.people_total)} residents` : "")}
-      {item("Open predictors", !!s.features, s.features?.linked, s.features?.path ?? "")}
-      {item("CMIP6 change factors", !!s.climate, s.climate?.linked, s.climate ? `${fmtInt(s.climate.n_models)} models` : "")}
+      {item("Extra map layers", !!s.features, s.features?.linked, s.features?.path ?? "")}
+      {item("Future warming", !!s.climate, s.climate?.linked, s.climate ? `${fmtInt(s.climate.n_models)} climate models` : "")}
       {s.ghcn ? item("GHCN daily", true, true, `${s.ghcn.station} · ${s.ghcn.years.map((y) => y ?? "?").join("–")}`) : null}
     </ul>
   );
@@ -849,9 +869,9 @@ export function InputsStep() {
     <div className="stack setup-step" data-step="inputs">
       <StepIssues issues={stepIssues("inputs", c.draft.issues)} />
       <p className="cap">
-        Each input is a tracked network job: it keeps running if you leave the page, and its progress is in the job tray. Every result ends with <b>Link into config</b>, which shows the YAML
-        change first.
-        {check ? "" : " Run the data check (Data step) first so the location defaults to the data centroid."}
+        Each download runs as a job: it keeps going if you leave the page, and its progress is in the job tray. Every result ends with <b>Link into config</b>, which shows the change
+        to the settings file first.
+        {check ? "" : " Run the data check (Data step) first, so the location starts at the centre of your data."}
       </p>
       <Summary />
       <div className="inputs-grid">

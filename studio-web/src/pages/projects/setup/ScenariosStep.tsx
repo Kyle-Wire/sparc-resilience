@@ -3,6 +3,8 @@
 // with U+2212). Richer scenarios (selections, brushes, budgets) live in the Scenario Lab.
 import { Button } from "../../../components/ui/Button";
 import { Card } from "../../../components/ui/Card";
+import { InfoTip } from "../../../components/ui/InfoTip";
+import { term } from "../../../content/glossary";
 import { CfgNumber, CfgNumberList, CfgSeg, CfgSelect, CfgText, IssueLines, useCfg, type Opt } from "../components/cfg";
 import { StepIssues } from "../components/StepIssues";
 import { getList, getRecord } from "../model/dotted";
@@ -47,7 +49,7 @@ export function ScenariosStep() {
       <div className="callout" data-tone="info">
         These are the configured scenarios S5 runs on every launch. Richer scenarios (selections, brushed edits, budgets) live in the Scenario Lab once a run has a checkpoint.
       </div>
-      <Card title="Ladders" eyebrow="One scenario per increment">
+      <Card title={term("ladder").label} eyebrow="Ladders · one scenario per step" tip={<InfoTip term="ladder" />}>
         {levers.length === 0 ? <p className="cap">Mark some predictors as levers first (Levers step).</p> : null}
         {ladders.map((l, i) => (
           <div key={i} className="ladder" data-cfg-path={`scenarios.${i}`}>
@@ -81,7 +83,7 @@ export function ScenariosStep() {
         </div>
         <IssueLines issues={c.issues("scenarios")} />
       </Card>
-      <Card title="Packages" eyebrow="Several edits applied together">
+      <Card title="Packages" eyebrow="Several changes applied together">
         {packages.map((p, i) => {
           const ivs = getList<Record<string, unknown>>(p, "interventions");
           return (
@@ -117,7 +119,7 @@ export function ScenariosStep() {
         </div>
         <IssueLines issues={c.issues("joint_scenarios")} />
       </Card>
-      <Card title="Every configured scenario" eyebrow={`${all.length} scenarios`}>
+      <Card title="Every scenario set up for the project" eyebrow={`${all.length} scenarios`} tip={<InfoTip term="configured_scenario" />}>
         <table className="tbl" aria-label="Configured scenarios">
           <thead>
             <tr>

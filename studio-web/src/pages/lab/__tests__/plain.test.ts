@@ -70,7 +70,7 @@ describe("qualifiers and headline", () => {
     expect(w.headline).toBe("Cools the edited area by 0.62 °F (likely range 0.44–0.80 °F).");
     expect(w.city).toBe("City-wide: 0.021 °F cooler.");
     expect(w.confidence).toBe("Confident it cools");
-    expect(w.qualifiers).toEqual(["A separate cross-check gives a different answer — see How sure are we", "preview only — not verified"]);
+    expect(w.qualifiers).toEqual(["The cause-and-effect check gives a different answer — see How sure are we", "preview only — not verified"]);
     expect(headline(L(0.3, 0.1, 0.5), "degF", "the city")).toBe("Warms the city by 0.30 °F (likely range 0.10–0.50 °F).");
     expect(cityLine(L(0.004, null, null), "degF")).toBe("City-wide: 0.004 °F warmer.");
     const cityOnly = plainWording({ edited: null, city: L(-0.1, -0.2, 0.05), unit: "degF", fracExtrapolatedEdited: null });
@@ -113,23 +113,23 @@ describe("qualifiers and headline", () => {
     expect(buysLines(r, "degF")).toEqual([
       "100 fewer residents feel an air temperature of 90 °F or more today; 400 fewer by mid-century (moderate emissions).",
       "Cancels out about 41% of the warming expected by 2041–2060 (moderate emissions).",
-      "0.400 °F·cells of cooling per 1,000 cost units.",
+      "0.400 °F·places of cooling per 1,000 cost units.",
     ]);
     // no pathway codes, no bare "below 90 °F" (that reads as the heat index of the card's Extreme caution fact)
     expect(buysLines(r, "degF").join(" ")).not.toMatch(/ssp|rcp|median|below 90/i);
     // the card leaves the residents line out when it shows its own residents fact
     expect(buysLines(r, "degF", { residents: false })).toEqual([
       "Cancels out about 41% of the warming expected by 2041–2060 (moderate emissions).",
-      "0.400 °F·cells of cooling per 1,000 cost units.",
+      "0.400 °F·places of cooling per 1,000 cost units.",
     ]);
   });
 
   it("says warming, not cooling, per cost for a scenario that warms (negative cooling_per_cost)", () => {
     // "Canopy loss −10 hottest": the server's plain.buys reads "−611.73 °F·cells of cooling per 1,000 cost units".
     const warm = { cost: { total: 100, per_lever: {}, cooling_per_cost: -0.6117 }, impacts: null } as Pick<Result, "cost" | "impacts">;
-    expect(buysLines(warm, "degF")).toEqual(["611.700 °F·cells of warming per 1,000 cost units."]);
-    expect(perCostText(-0.6117, "degF", "1k")).toBe("611.700 °F·cells of warming per 1k");
-    expect(perCostText(0.6117, "degF", "1k")).toBe("611.700 °F·cells of cooling per 1k");
+    expect(buysLines(warm, "degF")).toEqual(["611.700 °F·places of warming per 1,000 cost units."]);
+    expect(perCostText(-0.6117, "degF", "1k")).toBe("611.700 °F·places of warming per 1k");
+    expect(perCostText(0.6117, "degF", "1k")).toBe("611.700 °F·places of cooling per 1k");
   });
 
   it("words the server's own lines plainly until the impacts are in", () => {

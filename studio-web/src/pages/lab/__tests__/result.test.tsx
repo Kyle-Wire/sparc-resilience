@@ -89,7 +89,7 @@ describe("Answer card", () => {
     expect(h.textContent).toBe("Cools the places you changed");
     const card = a.container.querySelector(".answer-card")!;
     expect(card.querySelector(".kicker")!.textContent).toBe("FULL MODEL RESULT");
-    expect(card.querySelector(".answer-big")!.textContent).toBe("−0.62 °F");
+    expect(card.querySelector(".answer-big")!.textContent).toBe("0.62 °F cooler");
     expect(card.textContent).toContain("where you made changes");
     expect(card.querySelector(".badge")!.textContent).toBe("DEMO");
     expect(count(card.textContent ?? "", "0.62")).toBe(1); // the big number only
@@ -108,7 +108,7 @@ describe("Answer card", () => {
   });
 
   it("gives the citywide fact at the big number's precision, and leaves it out when it would repeat it", () => {
-    expect(citywideFact(result("r"), "degF")).toBe("−0.02 °F");
+    expect(citywideFact(result("r"), "degF")).toBe("0.02 °F cooler");
     // the changes cover the whole city: the big number is the citywide figure
     const all = result("r_all", { regions: [{ ...result("x").regions[0], n_cells: 7 }] });
     expect(citywideFact(all, "degF", 7)).toBeNull();
@@ -130,7 +130,7 @@ describe("Answer card", () => {
     fetchMock = mockFetch(routes(result("res_q", { causal_check: { delta: -0.4, lo: -0.55, hi: -0.27, model_within: false } })));
     const { container } = render(<ResultView rid={RID} resId="res_q" pid={PID} unit="degF" nFolds={3} />);
     const line = await waitFor(() => container.querySelector('.answer-card [data-qualifier="causal"]'), 5000, "causal qualifier");
-    expect(line.textContent).toBe("A separate cross-check finds more cooling — see How sure are we");
+    expect(line.textContent).toBe("The cause-and-effect check finds more cooling — see How sure are we");
     expect(line.textContent).toBe(causalQualifier(-0.4, -0.021));
     expect(container.textContent).not.toContain("independent causal check disagrees");
     expect(container.textContent).not.toContain("gives a different answer");
@@ -148,11 +148,11 @@ describe("Answer card", () => {
   });
 
   it("words the cross-check by direction: less or more cooling or warming, or the opposite effect", () => {
-    expect(causalQualifier(-0.41, -1.03)).toBe("A separate cross-check finds less cooling — see How sure are we");
-    expect(causalQualifier(-1.5, -1.03)).toBe("A separate cross-check finds more cooling — see How sure are we");
-    expect(causalQualifier(0.2, -1.03)).toBe("A separate cross-check finds the opposite effect — see How sure are we");
-    expect(causalQualifier(0.1, 0.5)).toBe("A separate cross-check finds less warming — see How sure are we");
-    expect(causalQualifier(null, -1)).toBe("A separate cross-check gives a different answer — see How sure are we");
+    expect(causalQualifier(-0.41, -1.03)).toBe("The cause-and-effect check finds less cooling — see How sure are we");
+    expect(causalQualifier(-1.5, -1.03)).toBe("The cause-and-effect check finds more cooling — see How sure are we");
+    expect(causalQualifier(0.2, -1.03)).toBe("The cause-and-effect check finds the opposite effect — see How sure are we");
+    expect(causalQualifier(0.1, 0.5)).toBe("The cause-and-effect check finds less warming — see How sure are we");
+    expect(causalQualifier(null, -1)).toBe("The cause-and-effect check gives a different answer — see How sure are we");
   });
 
   it("words the confidence chip per confidence and never paints cooling crimson", () => {
@@ -188,7 +188,7 @@ describe("Answer card", () => {
     const bar = bars[0];
     expect(dot).toBeLessThan(zero);
     expect(Number(bar.getAttribute("x")) + Number(bar.getAttribute("width"))).toBeLessThan(zero);
-    expect(svg.querySelector("title")!.textContent).toBe("Likely range −0.80 to −0.44 °F; the whole range is below zero. Confident it cools.");
+    expect(svg.querySelector("title")!.textContent).toBe("Likely 0.44–0.80 °F cooler; the whole range is below zero. Confident it cools.");
   });
 
   it("styles a result that might be no real effect as neutral, its range visibly straddling zero", async () => {
@@ -228,7 +228,7 @@ describe("Answer card", () => {
     await waitFor(() => container.querySelector('.answer-fact[data-fact="cost"]'), 5000, "cost fact");
     const facts = () => [...container.querySelectorAll(".answer-fact")].map((f) => f.getAttribute("data-fact"));
     expect(facts()).toEqual(["city", "heat", "cost", "per"]);
-    expect(container.querySelector('.answer-fact[data-fact="city"]')!.textContent).toContain("−0.02 °F");
+    expect(container.querySelector('.answer-fact[data-fact="city"]')!.textContent).toContain("0.02 °F cooler");
     expect(container.querySelector('.answer-fact[data-fact="cost"]')!.textContent).toContain("about 27,600");
     expect(container.querySelector('.answer-fact[data-fact="per"]')!.textContent).toContain("Cost per °F");
     // residents: worked out without asking, "Counting residents…" meanwhile, no button
@@ -237,18 +237,26 @@ describe("Answer card", () => {
     expect(heat().querySelector("button")).toBeNull();
     release();
     await waitFor(() => heat().textContent?.includes("120"), 5000, "residents fact");
-    expect(heat().querySelector("dt")!.textContent).toBe("Residents out of Extreme caution");
+    expect(heat().querySelector("dt")!.textContent).toBe("Residents no longer at Extreme caution or worse");
     expect(fetchMock.calls.filter((c) => c.method === "POST" && c.url === "/api/results/res_f/impacts")).toHaveLength(1);
-    expect(heat().querySelector("button")).toBeNull();
+    // no action, only an ⓘ that says what the heat-risk level means
+    expect(heat().querySelector("button:not(.infotip)")).toBeNull();
+    expect(heat().querySelector('dt button.infotip[data-term="heat_risk_level"]')).not.toBeNull();
+    expect(container.querySelector('.answer-fact[data-fact="per"] dt button.infotip[data-term="cost_per_degree"]')).not.toBeNull();
+    expect(container.querySelector(".answer-card [title]")).toBeNull();
     // and what it buys, by default: with the residents fact on the card, no second residents figure
     const notes = container.querySelector(".answer-notes")!.textContent ?? "";
     expect(notes).toContain("Cancels out about 7% of the warming expected by 2041–2060 (moderate emissions).");
     expect(notes).not.toMatch(/residents|SSP|ssp/);
   });
 
-  it("labels the likely range on the strip itself", () => {
+  it("labels the likely range on the strip itself, the same way round as the big number", () => {
     const { container } = render(<RangeStrip estimate={-1.03} lo={-1.58} hi={-0.48} unit="degF" confidence="confident_cools" />);
-    expect(container.querySelector(".answer-strip-label")!.textContent).toBe("likely range");
+    expect(container.querySelector(".answer-strip-label")!.textContent).toBe("likely 0.48–1.58 °F cooler");
+    // the ends by size, no minus signs ("← cooler" says which way)
+    expect([...container.querySelectorAll(".answer-strip-end")].map((t) => t.textContent)).toEqual(["1.58", "0.48"]);
+    expect(container.textContent).not.toContain("−");
+    expect(rangeStripText({ estimate: -1.03, lo: -1.58, hi: -0.48, unit: "degF", confidence: "confident_cools" })).toMatch(/^Likely 0\.48–1\.58 °F cooler; the whole range is below zero\./);
     // no range: no label
     const none = render(<RangeStrip estimate={-0.1} lo={null} hi={null} unit="degF" confidence="unknown" />);
     expect(none.container.querySelector(".answer-strip-label")).toBeNull();
@@ -317,7 +325,7 @@ describe("Result accordion", () => {
     // no KPI row anywhere in the result
     expect(container.querySelector(".kpi")).toBeNull();
     // map layer toggles live in Where it cools
-    click([...where.querySelectorAll("button")].find((b) => b.textContent === "Spread between model runs")!);
+    click([...where.querySelectorAll("button")].find((b) => b.textContent === "Spread between test areas")!);
     expect(onShowLayer).toHaveBeenCalledWith("res:res_o:delta_sd");
     // closing keeps the built body
     openSection(container, "where");
@@ -346,7 +354,7 @@ describe("Result accordion", () => {
     expect(where.querySelector('[aria-label="Show result layers on the map"]')).not.toBeNull();
     // How sure are we: one row per source, so no range hides inside a wider one
     const sure = container.querySelector('details[data-section="sure"]')!;
-    expect([...sure.querySelectorAll('svg text.t-label[aria-hidden="true"]')].map((t) => t.textContent)).toEqual(["Model fit", "Independent check", "All sources together"]);
+    expect([...sure.querySelectorAll('svg text.t-label[aria-hidden="true"]')].map((t) => t.textContent)).toEqual(["Model fit", "Cause-and-effect check", "All sources together"]);
     expect(sure.textContent).toContain("tick = estimate");
     expect(sure.textContent).not.toContain("black tick");
     // Technical details: a teaser without jargon; no citywide SE or edited-cells row repeating the card
@@ -362,7 +370,7 @@ describe("Result accordion", () => {
     const descs = resultLayerMetas("r", "degF", ["Pct_Canopy"]).map((m) => m.desc);
     expect(descs.slice(0, 3)).toEqual([
       "The full model's estimate of the temperature change in each place.",
-      "How much the model's repeat runs disagree in each place; more spread means less sure.",
+      "How much the change in each place moves between the models trained on different test areas; more spread means less sure.",
       "Places where the change goes beyond anything measured in this city (hatched).",
     ]);
     expect(descs.join(" ")).not.toMatch(/fold|ΔT|standard deviation|score/i);
@@ -377,14 +385,15 @@ describe("Result accordion", () => {
     expect([...heat.querySelectorAll("button")].some((b) => /work out/i.test(b.textContent ?? ""))).toBe(false);
     expect(fetchMock.calls.filter((c) => c.method === "POST" && c.url === "/api/results/res_i/impacts")).toHaveLength(1);
     // today in Heat risk & people, the future in Against future warming
-    expect(heat.textContent).toContain("Residents at or above each temperature today");
+    expect(heat.textContent).toContain("Residents at or above each air temperature today");
     expect(heat.textContent).not.toContain("2041-2060");
     const future = openSection(container, "future");
     await waitFor(() => future.querySelector(".rv-section-body"), 5000, "future body");
     // the futures in plain words (gauge title and table rows); the pathway code only in a tooltip
-    expect(count(future.textContent ?? "", "Mid-century, moderate emissions (2041–2060)")).toBeGreaterThanOrEqual(2);
+    expect(count(future.textContent ?? "", "Moderate emissions, mid-century (2041–2060)")).toBeGreaterThanOrEqual(2);
     expect(future.textContent).not.toMatch(/ssp|SSP|median warming/);
-    expect(future.querySelector('td [title="ssp245 2041-2060"]')).not.toBeNull();
+    expect(future.querySelector('td button.term[data-term="ssp"]')!.textContent).toBe("Moderate emissions, mid-century (2041–2060)");
+    expect(future.querySelector("[title]")).toBeNull();
     // the card's "What it buys" picks the impacts up: without a heat-risk fact, the residents line
     // stays, named by its own measure (air temperature, not the heat index)
     expect(container.querySelector(".answer-notes")!.textContent).toContain("100 fewer residents feel an air temperature of 90 °F or more today");

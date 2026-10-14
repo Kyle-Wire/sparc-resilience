@@ -77,7 +77,7 @@ class DataSection(_Section):
     crs: str | None = F(None, "data", "EPSG code of x/y (needed for open data, CMIP6 site, GeoTIFF, people objective)")
     reproject_to: str | None = F(None, "data", "Reproject coordinates to this CRS (metres)", advanced=True)
     background: float | str = F("median", "data", "ΔT reference: 'median', a number, or a column name")
-    subsample: int | None = F(None, "data", "Keep only this many points around the centre (smoke tests)",
+    subsample: int | None = F(None, "data", "Keep only this many readings around the centre, for a quick trial run",
                               advanced=True)
     cell_m: float | None = F(None, "data", "Grid cell size (default: inferred from the lattice)", advanced=True,
                              unit="m")

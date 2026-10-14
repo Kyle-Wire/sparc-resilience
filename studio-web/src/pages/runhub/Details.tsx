@@ -12,10 +12,15 @@
 // timings only for a run without a job log) over Mission Control of the run's latest job
 // (../tracking/RunTrack, `embedded`: its Outputs and Config & provenance tabs become links to
 // Files and Provenance); `/jobs/:jid` is unchanged.
-import { lazy, Suspense, useEffect, useRef, type ComponentType, type LazyExoticComponent } from "react";
+// Plain words (phase 4): the sections keep their technical names, but each intro says in plain
+// words what the section is for, with its jargon as glossary <Term>s, and a section with a
+// technical title gets an ⓘ beside it (TitleTipProvider: the page's ViewPage shows it).
+import { lazy, Suspense, useEffect, useRef, type ComponentType, type LazyExoticComponent, type ReactNode } from "react";
+import { InfoTip, type InfoTipProps } from "../../components/ui/InfoTip";
+import { Term } from "../../components/ui/Term";
 import { SectionLoading, SectionNav } from "../../layouts/SectionNav";
 import { DETAIL_SECTIONS, Link, runHref, useRoute, type DetailSection, type RunSection } from "../../router";
-import { SectionBoundary, type DetailPageProps } from "./common";
+import { SectionBoundary, TitleTipProvider, type DetailPageProps } from "./common";
 import "./details.css";
 
 /** What a section passes its pages: DetailPageProps, and `embedded` for the job log (../tracking/RunTrack). */
@@ -39,18 +44,72 @@ export const DETAIL_SECTION_LABELS: Record<DetailSection, string> = {
   files: "Files",
 };
 
-/** The one-line intro at the top of each section: what the section is for. */
-export const DETAIL_SECTION_INTROS: Record<DetailSection, string> = {
-  data: "Every check on the input data before training: the grid, the lever doses, the predictors and the weather forcing.",
-  accuracy: "The complete accuracy record behind the trust grade: the cross-validation design, every model and the blend.",
-  reach: "How far the model's skill holds up away from measurements, and how far each predictor's influence carries.",
-  response: "The full dose-response record of every lever, city-wide and cell by cell.",
-  causal: "The independent cause-and-effect check of every lever, with all its diagnostics.",
-  uncertainty: "Every source of uncertainty in the scenario estimates and how they add up.",
-  runlog: "How the run went: its record and the log of its latest job.",
-  provenance: "What it takes to audit or repeat this run exactly.",
-  docs: "The run's written reports: methods, model card and the study write-ups.",
-  files: "Every file the run wrote, to inspect or download.",
+/** The one-line intro at the top of each section: what the section is for, in plain words (its jargon as glossary terms). */
+export const DETAIL_SECTION_INTROS: Record<DetailSection, ReactNode> = {
+  data: (
+    <>
+      Checks on everything that went into the model before training: the temperature readings, the map grid, the <Term id="dose_scale">size of the tested changes</Term>, the{" "}
+      <Term id="predictor">map layers</Term> and the <Term id="forcing">weather inputs</Term>.
+    </>
+  ),
+  accuracy: (
+    <>
+      How close the model comes to measured temperatures in places it was not trained on, in full: <Term id="cv_design">how it was tested</Term>, every model, and{" "}
+      <Term id="stacker">how they are blended</Term>. The <Term id="trust_grade">trust grade</Term> comes from these numbers.
+    </>
+  ),
+  reach: (
+    <>
+      Whether the model stays accurate farther from the measurements, and <Term id="length_scale">how far each map layer&apos;s influence carries</Term>.
+    </>
+  ),
+  response: (
+    <>
+      How much each lever cools <Term id="dose_response">at each amount of change</Term>, from small to large, citywide and place by place, with the checks behind each curve.
+    </>
+  ),
+  causal: (
+    <>
+      A <Term id="dag_audit">separate cause-and-effect analysis</Term> of every lever, to rule out cooling that is only coincidence, with all its diagnostics.
+    </>
+  ),
+  uncertainty: (
+    <>
+      Every source of doubt in the scenario estimates, and how they add up to <Term id="envelope">the widest likely range</Term>.
+    </>
+  ),
+  runlog: "How the run went: its record and the log of its latest job, stage by stage.",
+  provenance: (
+    <>
+      What it takes to check or repeat this run exactly: <Term id="provenance">fingerprints of its inputs, settings and code</Term>, and the software it ran on.
+    </>
+  ),
+  docs: "The run's written reports: how it was done (methods), what the model is for and where it falls short (model card), and the study write-ups.",
+  files: "Every file the run wrote, to preview, convert or download.",
+};
+
+/** The ⓘ beside a section's technical title: what the name means, in plain words. Plain titles have none. */
+export const DETAIL_SECTION_TIPS: Partial<Record<DetailSection, InfoTipProps>> = {
+  accuracy: {
+    term: "r2",
+    label: "Accuracy",
+    text: "How close the model's predictions come to measured temperatures, always scored on test areas it was not trained on.",
+    technical: "Spatial-block cross-validation: held-out R², RMSE and interval coverage",
+  },
+  reach: {
+    label: "Reach & spatial structure",
+    text: "Two questions: does the model stay accurate farther from the measurements, and how far does each map layer, such as tree cover, affect the temperature around it?",
+    technical: "Skill vs CV block size; influence length scales and ring kernels",
+  },
+  response: { term: "partial_dependence", label: "Response curves" },
+  causal: { term: "dag_audit", label: "Cause-and-effect audit" },
+  uncertainty: {
+    term: "envelope",
+    label: "Uncertainty sources",
+    text: "Where the doubt in a scenario's answer comes from: the model fit, how the analysis was set up, a simulation check and a separate cause-and-effect check. Added up, they give the widest range.",
+    technical: "Estimation, specification, attribution and causal bands, and their envelope",
+  },
+  provenance: { term: "provenance", label: "Provenance" },
 };
 
 type PlainHome = { section: RunSection; label: string };
@@ -144,6 +203,8 @@ export default function Details() {
   const label = DETAIL_SECTION_LABELS[section];
   const headed = NEEDS_HEADING.has(section);
   const intro = <SectionIntro rid={rid} section={section} />;
+  const tipProps = DETAIL_SECTION_TIPS[section];
+  const tip = tipProps ? <InfoTip {...tipProps} /> : null;
   return (
     <div className="detail-layout" data-composer="details">
       <div className="detail-rail" ref={railRef}>
@@ -161,17 +222,20 @@ export default function Details() {
         {headed ? (
           // A section whose page has no heading: the composer titles it, its line under the title.
           <header className="stack detail-header">
+            {/* a composer-titled section (the Run log) has a plain title: no ⓘ */}
             <h2 className="detail-heading">{label}</h2>
             <p className="cap prose">{intro}</p>
           </header>
         ) : null}
         <SectionBoundary key={section} title={label}>
-          <Suspense fallback={<SectionLoading />}>
-            {PAGES[section].map(({ page: P, props }, i) => (
-              // Each page drops its own intro; the first takes the rail label as its title and the section's line as its intro.
-              <P key={`${section}:${i}`} {...(i === 0 && !headed ? { title: label, intro } : { intro: null })} {...props} />
-            ))}
-          </Suspense>
+          <TitleTipProvider tip={headed ? null : tip}>
+            <Suspense fallback={<SectionLoading />}>
+              {PAGES[section].map(({ page: P, props }, i) => (
+                // Each page drops its own intro; the first takes the rail label as its title and the section's line as its intro.
+                <P key={`${section}:${i}`} {...(i === 0 && !headed ? { title: label, intro } : { intro: null })} {...props} />
+              ))}
+            </Suspense>
+          </TitleTipProvider>
         </SectionBoundary>
       </div>
     </div>

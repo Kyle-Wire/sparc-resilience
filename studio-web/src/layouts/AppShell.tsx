@@ -11,14 +11,17 @@ import { Icon, type IconName } from "../components/ui/Icon";
 import { IconButton } from "../components/ui/IconButton";
 import { JobTray } from "../components/ui/JobTray";
 import { Toasts } from "../components/ui/Toast";
-import { Tooltip } from "../components/ui/Tooltip";
-import { Badge, modeLabel } from "../components/ui/Badge";
+import { TermTipBody } from "../components/ui/InfoTip";
+import { Tooltip, useTooltip } from "../components/ui/Tooltip";
+import { modeLabel } from "../components/ui/Badge";
+import { term } from "../content/glossary";
 import { TRUST_GRADE_LABEL, trustGrade as gradeOf, type TrustGrade } from "../content/trust";
 import { Link, matchRoute, navigate, runHref, runTabHref, useLocation, useRegistry, useRoute, type ProjectNavDef, type Registry, type RouteDef } from "../router";
 import { activeJobs, connectJobs, tabTitle, useJobs } from "../stores/jobs";
 import { useUi, type Command, type ThemePref } from "../stores/ui";
 import { fmtDateTime, fmtNum, fmtPct } from "../theme/format";
 import { useProject, useProjects, useRecentRuns, useRunDetail } from "./resources";
+import { DemoTag, RefLink } from "./tips";
 import "./shell.css";
 
 const THEMES: { value: ThemePref; icon: IconName; label: string }[] = [
@@ -36,19 +39,63 @@ function ThemeToggle() {
   return <IconButton icon={cur.icon} label={`${cur.label} (switch to ${next.value})`} onClick={() => setTheme(next.value)} />;
 }
 
-function EngineDot({ runId }: { runId: string | null }) {
+/** The engine chip's state word, after "Full model" ("Full model ready", "Full model loading 42%"). */
+const ENGINE_WORD: Record<string, string> = {
+  absent: "starts when needed",
+  starting: "starting",
+  cold: "not loaded",
+  queued: "waiting",
+  loading: "loading",
+  ready: "ready",
+  busy: "busy",
+  recycling: "restarting",
+  no_checkpoint: "not available",
+  incompatible: "not available",
+  error: "error",
+};
+
+/** What each engine state means, after the full model's glossary tip (the chip's tooltip). */
+const ENGINE_TIP: Record<string, string> = {
+  absent: "It is not running now; it starts by itself when a page needs it, such as the Scenario Lab.",
+  starting: "It is starting up.",
+  cold: "It is not loaded yet; it loads when you run a scenario.",
+  queued: "It is waiting for its turn to load.",
+  loading: "It is loading this run's saved models.",
+  ready: "It is loaded and ready to work out scenarios.",
+  busy: "It is working on a scenario; others wait their turn.",
+  recycling: "It is restarting to free memory.",
+  no_checkpoint: "This run saved no models, so only quick estimates are possible.",
+  incompatible: "This run's saved models do not fit this version of SPARC, so only quick estimates are possible.",
+  error: "It could not load. Try again from the Scenario Lab.",
+};
+
+/**
+ * The top bar's full-model chip. `noModels`: the current run saved no trained models, so the chip says
+ * "Full model not available", as the Scenario Lab and the Library say it, whatever the engine host is doing.
+ */
+export function EngineDot({ runId, noModels = false }: { runId: string | null; noModels?: boolean }) {
   const host = useJobs((s) => s.host);
   const perRun = useJobs((s) => (runId ? s.engineByRun[runId] : undefined));
   const info = perRun ?? host;
-  const state = info.state ?? "absent";
-  const text =
-    state === "loading" && info.progress !== null ? `loading ${fmtPct(info.progress)}` : state === "absent" ? "off" : String(state).replace(/_/g, " ");
+  const state = noModels ? "no_checkpoint" : (info.state ?? "absent");
+  const word = ENGINE_WORD[state] ?? String(state).replace(/_/g, " ");
+  const text = state === "loading" && info.progress !== null ? `${word} ${fmtPct(info.progress)}` : word;
   const shown = state === "absent" || state === "no_checkpoint" ? "cold" : state;
+  const name = term("exact_engine").label;
+  const mem = info.rss_mb ? ` Using ${fmtNum(info.rss_mb / 1024, 1)} GB of memory.` : "";
+  const t = useTooltip<HTMLSpanElement>({
+    content: <TermTipBody tip={`${term("exact_engine").tip} ${ENGINE_TIP[state] ?? ""}${mem}`.trim()} technical={`Scenario engine: ${String(state).replace(/_/g, " ")}`} />,
+    side: "bottom",
+    bubbleClassName: "tip-term",
+  });
   return (
-    <span className="engine-dot hide-narrow" data-state={shown} title={`Scenario engine: ${text}${info.rss_mb ? ` · ${fmtNum(info.rss_mb / 1024, 1)} GB` : ""}`} role="status" aria-label={`Engine ${text}`}>
-      <i aria-hidden="true" />
-      engine {text}
-    </span>
+    <>
+      <span ref={t.anchorRef} className="engine-dot hide-narrow" data-state={shown} role="status" aria-label={`${name}: ${text}`} tabIndex={0} {...t.triggerProps}>
+        <i aria-hidden="true" />
+        {name} {text}
+      </span>
+      {t.bubble}
+    </>
   );
 }
 
@@ -257,18 +304,27 @@ export function trustGrade(r2: number | null | undefined, coverage?: number | nu
 export function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: RunSummary[]; run: RunSummary | null; activeRunId: string | null }) {
   const current = run ?? projectRuns.find((r) => r.id === activeRunId) ?? null;
   const optionLabels = useMemo(() => runOptionLabels(projectRuns), [projectRuns]);
+  const assessed = current ? gradeOf({ r2: current.r2, coverage: current.coverage }) : null;
+  // Tooltips (hover, focus or tap) in place of native titles; each bubble exists only while open.
+  const runTip = useTooltip<HTMLSelectElement>({ content: current ? `Open run: ${optionLabels.get(current.id) ?? current.id}` : "Open one of this project's runs", side: "bottom" });
+  const trustTip = useTooltip<HTMLAnchorElement>({
+    content: assessed ? <TermTipBody tip={`${term("trust_grade").label}: ${assessed.label}. ${assessed.line} Open How much to trust this for the details.`} technical={term("trust_grade").technical} /> : null,
+    side: "bottom",
+    bubbleClassName: "tip-term",
+  });
   if (!current && !projectRuns.length) return null;
-  const grade = current ? trustGrade(current.r2, current.coverage) : null;
+  const grade = assessed?.grade ?? null;
   const switchable = projectRuns.length > 0;
   return (
     <span className="run-chip hide-narrow" data-grade={grade ?? undefined}>
-      {current?.demo ? <Badge tone="demo">DEMO</Badge> : null}
+      {current?.demo ? <DemoTag /> : null}
       {switchable ? (
         <select
+          ref={runTip.anchorRef}
           aria-label="Switch run"
           className="run-chip-select"
           value={current?.id ?? ""}
-          title={current ? (optionLabels.get(current.id) ?? undefined) : undefined}
+          {...runTip.triggerProps}
           onChange={(e) => e.target.value && navigate(runHref(e.target.value))}
         >
           {current ? null : <option value="">Open a run…</option>}
@@ -279,13 +335,15 @@ export function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: 
           ))}
         </select>
       ) : null}
+      {switchable ? runTip.bubble : null}
       {current && grade ? (
-        <Link to={runHref(current.id, "trust")} className="run-chip-trust" data-grade={grade} title={`Trust: ${TRUST_GRADE_LABEL[grade]}. Open How much to trust this`}>
+        <RefLink ref={trustTip.anchorRef} to={runHref(current.id, "trust")} className="run-chip-trust" data-grade={grade} {...trustTip.triggerProps}>
           <span className="trust-dot" data-grade={grade} aria-hidden="true" />
           <span className="sr-only">Trust: </span>
           {TRUST_GRADE_LABEL[grade]}
-        </Link>
+        </RefLink>
       ) : null}
+      {current && grade ? trustTip.bubble : null}
     </span>
   );
 }
@@ -318,12 +376,18 @@ function useBaseCommands(registry: Registry, project: Project | null, runId: str
   return useMemo(() => {
     const cmds: Command[] = [
       { id: "nav:home", label: "Home", group: "Go to", run: () => navigate("/") },
-      { id: "nav:projects", label: "Projects", group: "Go to", run: () => navigate("/projects") },
-      { id: "nav:runs", label: "Run history", group: "Go to", run: () => navigate("/runs") },
-      { id: "nav:jobs", label: "Activity (jobs)", group: "Go to", keywords: "queue", run: () => navigate("/jobs") },
-      { id: "nav:findings", label: "Findings", group: "Go to", run: () => navigate("/findings") },
+      { id: "nav:projects", label: "All projects", group: "Go to", keywords: "projects", run: () => navigate("/projects") },
+      { id: "nav:runs", label: "Run history", group: "Go to", keywords: "runs", run: () => navigate("/runs") },
+      { id: "nav:jobs", label: "Activity: running and queued work", group: "Go to", keywords: "jobs queue", run: () => navigate("/jobs") },
+      { id: "nav:findings", label: "Findings: pinned charts and notes", group: "Go to", keywords: "notes pins", run: () => navigate("/findings") },
       { id: "nav:settings", label: "Settings", group: "Go to", run: () => navigate("/settings") },
-      ...(["system", "light", "dark"] as ThemePref[]).map((t) => ({ id: `theme:${t}`, label: `Theme: ${t}`, group: "Action", keywords: "dark light mode", run: () => setTheme(t) })),
+      ...(["system", "light", "dark"] as ThemePref[]).map((t) => ({
+        id: `theme:${t}`,
+        label: t === "system" ? "Theme: match this computer" : `Theme: ${t}`,
+        group: "Action",
+        keywords: "dark light mode system",
+        run: () => setTheme(t),
+      })),
     ];
     if (project)
       for (const n of registry.projectNav) {
@@ -331,9 +395,9 @@ function useBaseCommands(registry: Registry, project: Project | null, runId: str
         if (to && !n.disabledReason?.(project)) cmds.push({ id: `pnav:${n.id}`, label: n.label, group: project.name, run: () => navigate(to) });
       }
     if (runId) for (const t of registry.runTabs) cmds.push({ id: `tab:${t.id}`, label: t.label, group: "This run", keywords: t.views.join(" "), run: () => navigate(runTabHref(t, runId)) });
-    for (const j of activeJobs(jobs)) cmds.push({ id: `job:${j.id}`, label: j.label || j.kind, group: "Job", hint: j.status, keywords: j.kind, run: () => navigate(`/jobs/${j.id}`) });
+    for (const j of activeJobs(jobs)) cmds.push({ id: `job:${j.id}`, label: j.label || j.kind, group: "Running work", hint: j.status.replace(/_/g, " "), keywords: `${j.kind} job`, run: () => navigate(`/jobs/${j.id}`) });
     for (const p of projects ?? []) cmds.push({ id: `project:${p.id}`, label: p.name, group: "Project", run: () => navigate(`/p/${p.id}`) });
-    for (const r of runs?.items ?? []) cmds.push({ id: `run:${r.id}`, label: r.label || r.id, group: "Run", hint: `${r.mode} · ${r.status}`, keywords: r.id, run: () => navigate(runHref(r.id)) });
+    for (const r of runs?.items ?? []) cmds.push({ id: `run:${r.id}`, label: r.label || r.id, group: "Run", hint: `${r.mode} run · ${r.status.replace(/_/g, " ")}`, keywords: `${r.id} ${r.mode}`, run: () => navigate(runHref(r.id)) });
     return cmds;
   }, [registry, project, runId, jobs, projects, runs, setTheme]);
 }
@@ -421,7 +485,7 @@ export function AppShell({ children, pageTitle, fullWidth }: { children: ReactNo
           {project ? <ActiveRunChip projectRuns={projectDetail?.runs ?? []} run={run} activeRunId={project.active_run_id} /> : null}
           <JobTray />
           {/* the Lab's Design page says the engine state under its Run button (its own words) */}
-          {route.route?.hideEngine ? null : <EngineDot runId={context.runId} />}
+          {route.route?.hideEngine ? null : <EngineDot runId={context.runId} noModels={!!context.runId && runDetail?.checkpoint?.present === false} />}
           <ConnectionPill />
           <IconButton icon="search" label="Command palette (Ctrl+K)" onClick={() => setPaletteOpen(true)} />
           <ThemeToggle />

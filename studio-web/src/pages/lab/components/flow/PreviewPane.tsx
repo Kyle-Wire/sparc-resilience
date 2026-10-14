@@ -9,11 +9,12 @@ import { useState } from "react";
 import { errorMessage, type ApiError } from "../../../../api/client";
 import type { Action, Job } from "../../../../api/types";
 import { Button } from "../../../../components/ui/Button";
-import { Icon } from "../../../../components/ui/Icon";
 import { runAction } from "../../../../components/ui/EmptyState";
+import { InfoTip } from "../../../../components/ui/InfoTip";
 import { JobStrip } from "../../../../components/ui/JobStrip";
 import { Tooltip } from "../../../../components/ui/Tooltip";
 import { useRunDetail } from "../../../../layouts/resources";
+import { Link } from "../../../../router";
 import { useJobs } from "../../../../stores/jobs";
 import { toast } from "../../../../stores/ui";
 import { QUICK_WORDS, approxTemp, buildLabel, quickView } from "../../model/quick";
@@ -46,7 +47,9 @@ import "./quick.css";
  *   hero carry `data-superseded="true"`: the kicker reads "Quick estimate (before the full model)" and
  *   the big number is smaller and muted (the answer card's number leads);
  * - without an emulator the box `[data-no-emulator]` says what building it gives, worded by the engine
- *   state (words.noQuickEstimateText) so it never contradicts the engine line under Run full model.
+ *   state (words.noQuickEstimateText) so it never contradicts the engine line under Run full model;
+ *   on a run that saved no trained models it carries `data-no-checkpoint="true"` and a "Launch a run"
+ *   link to /p/{pid}/launch instead of the build button.
  */
 export type PreviewPaneProps = { model: WorkbenchModel };
 
@@ -68,16 +71,29 @@ function BuildLabel({ text }: { text: string }) {
   );
 }
 
-/** No emulator yet: say what the quick estimate is for and offer to build it. */
+/**
+ * No emulator yet: say what the quick estimate is for and offer to build it. A run that saved no
+ * trained models (engine state no_checkpoint) cannot get one either (the build unpickles
+ * checkpoint.pkl), so the box links to Launch instead of offering a build that would fail.
+ */
 function BuildQuickEstimate({ model, action }: { model: WorkbenchModel; action: Action | null }) {
   const [busy, setBusy] = useState(false);
-  const mode = useRunDetail(model.rid).data?.run.mode ?? null;
+  const run = useRunDetail(model.rid).data?.run;
+  const mode = run?.mode ?? null;
+  const pid = model.pid ?? run?.project_id ?? null;
   const job = useEmulatorJob(model.rid);
+  const noModels = model.engineState === "no_checkpoint" && !job;
   return (
-    <div className="qe-empty" data-no-emulator="true">
+    <div className="qe-empty" data-no-emulator="true" data-no-checkpoint={noModels || undefined}>
       <p className="qe-empty-title">{job ? QUICK_WORDS.building : LAB_WORDS.noQuickEstimateTitle}</p>
       <p className="cap">{noQuickEstimateText(model.engineState)}</p>
-      {action && !job ? (
+      {noModels ? (
+        pid ? (
+          <Link className="btn" to={`/p/${encodeURIComponent(pid)}/launch`}>
+            {LAB_WORDS.launchRun}
+          </Link>
+        ) : null
+      ) : action && !job ? (
         <Button
           busy={busy}
           icon="bolt"
@@ -91,7 +107,6 @@ function BuildQuickEstimate({ model, action }: { model: WorkbenchModel; action: 
               setBusy(false);
             }
           }}
-          title={action.label}
         >
           <BuildLabel text={buildLabel(mode, model.levers.length)} />
         </Button>
@@ -167,6 +182,7 @@ export function PreviewPane({ model }: PreviewPaneProps) {
     >
       <header className="qe-head">
         <span className="kicker">{live && superseded ? LAB_WORDS.quickEstimateBefore : LAB_WORDS.quickEstimateKicker}</span>
+        <InfoTip term="emulator_preview" />
         {model.previewBusy && !noEmulator ? <span className="spinner qe-spin" role="status" aria-label="Updating the quick estimate" /> : null}
       </header>
       {noEmulator ? (
@@ -177,14 +193,20 @@ export function PreviewPane({ model }: PreviewPaneProps) {
         <>
           <dl className="qe-hero" data-tone={v.big.tone} data-numeric={v.big.numeric || undefined} data-superseded={superseded || undefined} data-city-mean={String(s.mean)}>
             <div className="qe-hero-main">
-              <dt>{LAB_WORDS.whereChanged}</dt>
+              <dt>
+                {LAB_WORDS.whereChanged}
+                <InfoTip term="where_changed" />
+              </dt>
               <dd className="qe-big" data-edited-mean={String(s.edited_mean)}>
                 {v.big.text}
               </dd>
             </div>
             {showCity ? (
               <div className="qe-hero-city">
-                <dt>{LAB_WORDS.citywide}</dt>
+                <dt>
+                  {LAB_WORDS.citywide}
+                  <InfoTip term="citywide" />
+                </dt>
                 <dd>{v.city}</dd>
               </div>
             ) : null}
@@ -199,18 +221,17 @@ export function PreviewPane({ model }: PreviewPaneProps) {
               <div className="qe-fact" data-cost="true">
                 <dt>{QUICK_WORDS.cost}</dt>
                 <dd>
-                  <span className="qe-value">{v.cost}</span>{" "}
-                  <Tooltip content={QUICK_WORDS.costTip} className="qe-info">
-                    <span tabIndex={0}>
-                      <Icon name="info" size={13} label="About the cost" />
-                    </span>
-                  </Tooltip>
+                  <span className="qe-value">{v.cost}</span>
+                  <InfoTip label="the estimated cost" text={QUICK_WORDS.costTip} className="qe-info" />
                 </dd>
               </div>
             ) : null}
             {v.heat ? (
               <div className="qe-fact" data-heat="true">
-                <dt>{QUICK_WORDS.heat}</dt>
+                <dt>
+                  {QUICK_WORDS.heat}
+                  <InfoTip term="heat_risk_level" label={QUICK_WORDS.heat.toLowerCase()} text={QUICK_WORDS.heatTip} />
+                </dt>
                 <dd>
                   <span className="qe-value">{v.heat}</span>
                   {caveats.length ? (
@@ -230,7 +251,10 @@ export function PreviewPane({ model }: PreviewPaneProps) {
           <div className="qe-trust" data-tone={v.trust.tone} role="note">
             <span className="qe-trust-mark" aria-hidden="true" />
             <div className="qe-trust-text">
-              <p className="lab-trust-line">{v.trust.line}</p>
+              <p className="lab-trust-line">
+                {v.trust.line}
+                {v.trust.tone === "hatched" ? <InfoTip term="hatched" /> : null}
+              </p>
               {v.trust.reasons.length ? (
                 <ul className="qe-reasons cap">
                   {v.trust.reasons.map((r) => (

@@ -1,4 +1,6 @@
 import { Children, type CSSProperties, type ReactNode } from "react";
+import type { TermId } from "../../content/glossary";
+import { InfoTip } from "./InfoTip";
 
 export type KpiProps = {
   label: ReactNode;
@@ -6,14 +8,25 @@ export type KpiProps = {
   unit?: ReactNode;
   note?: ReactNode;
   tone?: "good" | "warn" | "crit";
+  /** Glossary term the number is: an InfoTip (ⓘ) after the label explains it. */
+  term?: TermId;
+  /** A one-off explanation in an InfoTip (ⓘ) after the label; with `term`, it replaces the glossary tip. */
+  tip?: ReactNode;
+  /** @deprecated Use `tip`: shown the same way (an InfoTip), no longer a native title. */
   title?: string;
 };
 
-/** KPI tile: label, big tabular value with unit, optional note. */
-export function Kpi({ label, value, unit, note, tone, title }: KpiProps) {
+/** KPI tile: label (with an optional ⓘ), big tabular value with unit, optional note. */
+export function Kpi({ label, value, unit, note, tone, term, tip, title }: KpiProps) {
+  const text = tip ?? (title || undefined);
+  const name = typeof label === "string" || typeof label === "number" ? String(label) : "this number";
+  const info = term ? <InfoTip term={term} text={text ?? undefined} /> : text !== undefined && text !== null && text !== "" && text !== false ? <InfoTip label={name} text={text} /> : null;
   return (
-    <div className="kpi" data-tone={tone} title={title}>
-      <span className="label">{label}</span>
+    <div className="kpi" data-tone={tone}>
+      <span className="label">
+        {label}
+        {info}
+      </span>
       <span className="value">
         {value}
         {unit ? <small>{unit}</small> : null}

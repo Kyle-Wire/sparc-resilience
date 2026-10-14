@@ -22,6 +22,7 @@ from pathlib import Path
 
 import numpy as np
 
+from sparc.core.glossary import label as gl
 from sparc.studio import db as dbmod
 from sparc.studio.exports import narrative as N
 from sparc.studio.workspace import read_json, utc_now
@@ -31,11 +32,11 @@ __all__ = ["SECTIONS", "build_report", "render_html", "render_markdown", "png_by
 
 SECTIONS = ("summary", "accuracy", "validation", "scenarios", "plans", "climate", "heat", "equity", "caveats",
             "limitations", "provenance", "findings")
-_TITLES = {"summary": "Summary", "accuracy": "How accurate is the model?", "validation": "Validation",
+_TITLES = {"summary": "Summary", "accuracy": "How accurate is the model?", "validation": "How we checked the results",
            "scenarios": "Scenarios", "plans": "Budget plans", "climate": "Climate futures",
-           "heat": "Heat stress: who is exposed, what helps, how sure", "equity": "Equity",
+           "heat": "Heat risk: who is exposed, what helps, how sure", "equity": "Who benefits",
            "caveats": "Read these before using the numbers", "limitations": "Limitations",
-           "provenance": "Provenance", "findings": "Findings"}
+           "provenance": "Where these numbers come from", "findings": "Findings"}
 SEQ = ("#cde2fb", "#9ec5f4", "#6da7ec", "#3987e5", "#256abf", "#184f95", "#0d366b")
 DIV = ("#0d366b", "#256abf", "#6da7ec", "#f0efec", "#f19a8f", "#d6403f", "#8a1f22")
 MAX_MAPS = 6
@@ -179,8 +180,9 @@ def _summary(env) -> list[dict]:
     if env.can_map() and pred is not None and "pred" in pred.columns and len(pred) == (ctx.grid.n if ctx.grid else -1):
         bg = float(np.nanmedian(pred["pred"].to_numpy(np.float64)))
         out.append(env.map(pred["pred"].to_numpy(np.float64), center=bg, alt="Predicted air temperature",
-                           caption=f"Held-out prediction of afternoon air temperature, centred on the city median "
-                                   f"({N.fmt(bg, 1)} {env.unit})"))
+                           caption=f"Predicted afternoon air temperature, each place predicted by a model that did "
+                                   f"not see it in training; colours centred on the city median ({N.fmt(bg, 1)} "
+                                   f"{env.unit})"))
     return out
 
 
@@ -191,13 +193,13 @@ def _accuracy(env) -> list[dict]:
     rows = [[N.MODEL_LABELS.get(k, k), N.fmt(v.get("r2")), N.fmt(v.get("rmse"))] for k, v in met.items()
             if k != "base_mean" and isinstance(v, dict) and v.get("r2") is not None]
     if rows:
-        out.append(_table(["Model", "Held-out R²", f"RMSE ({env.unit})"], rows, "Scored on spatial blocks the "
-                                                                                 "models never saw."))
+        out.append(_table(["Model", f"{gl('r2')} (R², 1 = perfect)", f"{gl('rmse')} ({env.unit})"], rows,
+                          "Scored on test areas the models never saw in training."))
     st = met.get("stacker") or {}
     if st.get("interval_coverage") is not None:
-        out.append(_p(f"Prediction intervals: target {N.pct(st.get('interval_target') or 0.9)}, coverage "
-                      f"{N.pct(st['interval_coverage'], 1)}, mean half-width ±{N.fmt(st.get('interval_mean_halfwidth'))} "
-                      f"{env.unit}."))
+        out.append(_p(f"{gl('coverage')}: the model's prediction ranges should hold {N.pct(st.get('interval_target') or 0.9)} "
+                      f"of the time and held {N.pct(st['interval_coverage'], 1)} in test areas. A typical range "
+                      f"spans ±{N.fmt(st.get('interval_mean_halfwidth'))} {env.unit} around the prediction."))
     return out
 
 
@@ -220,18 +222,19 @@ def _validation(env) -> list[dict]:
         return f"{N.sfmt(x[0])} … {N.sfmt(x[1])}" if isinstance(x, (list, tuple)) and len(x) == 2 else "—"
 
     if rows:
-        out.append(_table(["Scenario", f"Estimate ({env.unit})", "Estimation 95%", "Specification", "Attribution",
-                           "Envelope"],
+        out.append(_table(["Scenario", f"Estimate ({env.unit})", gl("estimation"), gl("specification"),
+                           gl("attribution"), gl("envelope")],
                           [[r.get("scenario"), N.sfmt(r.get("estimate")), rng(r.get("estimation_95")),
                             rng(r.get("specification")), rng(r.get("attribution")), rng(r.get("envelope"))]
-                           for r in rows], "Uncertainty envelopes (a plausible range, not a confidence interval)."))
+                           for r in rows], "Ranges from each source of doubt. The last column adds them all up: a "
+                                           "plausible range, not a statistical confidence interval."))
     lit = (env.ctx.manifest or {}).get("literature") or {}
     lrows = [r for r in lit.get("rows") or [] if r.get("sparc_C") is not None]
     if lrows:
-        out.append(_table(["Lever", "Published", "SPARC (°C per +0.10)", "Within ×2"],
+        out.append(_table(["Lever", "Published studies", "This run (°C per +0.10)", "Within a factor of 2"],
                           [[r.get("quantity"), r.get("value"), N.fmt(r.get("sparc_C")),
                             "yes" if r.get("within_factor_2") else "no"] for r in lrows],
-                          "Against published cooling rates (other cities and methods)."))
+                          "Compared with published cooling rates from other cities and methods."))
     return out
 
 
@@ -267,10 +270,13 @@ def _scenarios(env) -> list[dict]:
     out = [_p(s) for s in N.scenario_sentences(allrows, env.unit)]
     if allrows:
         out.append({"t": "svg", "svg": bar_chart_svg(allrows, env.unit, "Scenario effects"),
-                    "caption": f"City-mean change in afternoon air temperature ({env.unit}); whiskers: likely range "
-                               "(95%); hollow bars: more than 20% of edited cells beyond observed conditions."})
-        out.append(_table(["Scenario", "Kind", f"Mean ΔT ({env.unit})", "Likely range", "Beyond observed"],
-                          [[r["name"], r["kind"], N.sfmt(r["estimate"]),
+                    "caption": f"Change in the city's average afternoon air temperature ({env.unit}). Whiskers "
+                               "show the likely range (95%). Hollow bars: more than 20% of the changed places go "
+                               "beyond conditions measured in the city."})
+        kinds = {"configured": "Set up in the run", "exact": gl("exact_engine")}
+        out.append(_table(["Scenario", "Kind", f"Citywide change ({env.unit})", gl("interval_95"),
+                           "Changed places beyond measured conditions"],
+                          [[r["name"], kinds.get(r["kind"], r["kind"]), N.sfmt(r["estimate"]),
                             f"{N.sfmt(r['lo'])} to {N.sfmt(r['hi'])}" if r.get("lo") is not None else "—",
                             N.pct(r.get("extrapolated"))] for r in allrows]))
     for r in exact:
@@ -284,7 +290,7 @@ def _scenarios(env) -> list[dict]:
 
                 d = pd.read_parquet(cells, columns=["delta"])["delta"].to_numpy(np.float64)
                 if env.ctx.grid is not None and d.size == env.ctx.grid.n:
-                    out.append(env.map(d, alt=f"ΔT of {r['name']}",
+                    out.append(env.map(d, alt=f"Temperature change from {r['name']}",
                                        caption=f"Change in afternoon air temperature: {r['name']}"))
     return out
 
@@ -305,16 +311,17 @@ def _plans(env) -> list[dict]:
         if env.can_map() and (pdir / "dose.npy").exists():
             dose = np.load(pdir / "dose.npy").astype(np.float64)
             if env.ctx.grid is not None and dose.size == env.ctx.grid.n:
-                out.append(env.map(np.where(dose > 0, dose, np.nan), diverging=False, alt="Planned dose",
-                                   caption=f"Where “{plan['name']}” acts (dose per cell; untreated cells blank)",
+                out.append(env.map(np.where(dose > 0, dose, np.nan), diverging=False, alt="Planned change",
+                                   caption=f"Where “{plan['name']}” makes changes (amount per place; blank where "
+                                           "nothing changes)",
                                    unit=str(plan["params"].get("lever") or "")))
     if not out:
         o = env.ctx.json("optimize.json") or (env.ctx.manifest or {}).get("optimize") or {}
         if o.get("budget"):
             from sparc.core.results_page import pareto_caption
 
-            out.append(_p(f"The configured budget optimisation spends {N.fmt(o.get('budget'), 0)} dose units of "
-                          f"{o.get('variable')} on {int(o.get('n_cells_treated') or 0):,} cells."))
+            out.append(_p(f"The run's budget plan spends {N.fmt(o.get('budget'), 0)} units of {o.get('variable')} "
+                          f"across {int(o.get('n_cells_treated') or 0):,} places."))
             cap = pareto_caption(o, env.unit)
             if cap:
                 out.append(_p(cap))
@@ -328,7 +335,8 @@ def _climate(env) -> list[dict]:
     out = [_p(s) for s in N.climate_sentences(m, env.unit)]
     P = [p for p in (m.get("climate") or {}).get("projections") or [] if isinstance(p, dict)]
     if P:
-        out.append(_table(["Pathway", "Period", "Models", f"Median warming ({env.unit})", "10–90% of models"],
+        out.append(_table([gl("ssp"), gl("climate_period"), "Climate models", f"Median warming ({env.unit})",
+                           "Range across models (10th–90th percentile)"],
                           [[p.get("label"), p.get("period"), p.get("n_models"), N.sfmt((p.get("warming") or {}).get("median"), 1),
                             f"{N.sfmt((p.get('warming') or {}).get('p10'), 1)} to {N.sfmt((p.get('warming') or {}).get('p90'), 1)}"]
                            for p in P]))
@@ -343,13 +351,13 @@ def _heat(env) -> list[dict]:
     v = heat_view(env.ctx)
     h = v.get("humidity") or {}
     if not v.get("today"):
-        return [_p("Heat stress needs the campaign's humidity (a forcing file with a station or ERA5 dewpoint); this "
-                   "run has none. The Heat tab can still show what-if dewpoints.")]
+        return [_p("Heat risk needs the humidity on the measurement day (a weather file with a station or ERA5 "
+                   "dewpoint); this run has none. The Heat risk tab can still show what-if dewpoints.")]
     out = [_p(f"{b['title']}. {b['text']}") for b in v.get("brief") or []]
     t = v["today"]
     who = "Residents" if t["measure"] == "people" else "Cells"
     n = lambda x: f"{x:,.0f}"  # noqa: E731
-    rows = [["Campaign afternoon", "—", n(t["unadapted"]["ec_or_worse"]), n(t["unadapted"]["danger_or_worse"]),
+    rows = [["Measurement-day afternoon", "—", n(t["unadapted"]["ec_or_worse"]), n(t["unadapted"]["danger_or_worse"]),
              N.fmt(t["unadapted"]["mean_hi"], 1)]]
     if t.get("adapted"):
         rows.append([f"With {t.get('package') or 'the package'}", "—", n(t["adapted"]["ec_or_worse"]),
@@ -361,21 +369,23 @@ def _heat(env) -> list[dict]:
                      f"{n(dg[0])}–{n(dg[1])}", f"{N.fmt(u['constant_dewpoint']['mean_hi'], 1)}–"
                                               f"{N.fmt(u['constant_rh']['mean_hi'], 1)}"])
     out.append(_table(["Case", "Warming (°F)", f"{who} at Extreme caution or worse", f"{who} at Danger or worse",
-                       "Heat index felt (°F)"], rows,
-                      f"NWS heat index with a dewpoint of {N.fmt(h.get('dewpoint_C'), 1)} °C ({h.get('source')}). "
-                      "Future ranges span the climate models' 10th–90th percentile warming and the two humidity "
-                      "assumptions (constant dewpoint to constant relative humidity)."))
+                       f"{gl('heat_index')} (°F)"], rows,
+                      f"{gl('heat_index')} (NWS heat index) with a dewpoint of {N.fmt(h.get('dewpoint_C'), 1)} °C "
+                      f"({h.get('source')}). Future ranges span the climate models' 10th–90th percentile warming and "
+                      "two humidity assumptions (the dewpoint stays the same, or the relative humidity stays the "
+                      "same)."))
     ver = v.get("verdicts") or []
     if ver:
-        out.append(_table(["Scenario", f"City-mean change ({env.unit})", "Plausible range", "Verdict", "Why"],
+        out.append(_table(["Scenario", f"Citywide change ({env.unit})", "Plausible range", "Verdict", "Why"],
                           [[r["scenario"], N.sfmt(r["estimate"], 2),
                             (f"{N.sfmt(r['envelope'][0], 2)} to {N.sfmt(r['envelope'][1], 2)}"
                              if r.get("envelope") else "—"), r.get("label") or "—",
                             "; ".join((r.get("reasons") or []) + [f"note: {q}" for q in r.get("qualifiers") or []])]
                            for r in ver],
-                          "Robust: the plausible range excludes no change and the analysis variants agree on the sign. "
-                          "Direction only: the sign holds but the size could be near zero. Not established: it cannot "
-                          "be told apart from no effect, or the model is extrapolating."))
+                          "Robust: the plausible range excludes no change and the model versions agree on the "
+                          "direction. Direction only: the direction holds but the size could be near zero. Not "
+                          "established: it cannot be told apart from no effect, or the change goes beyond measured "
+                          "conditions."))
     return out
 
 
@@ -389,8 +399,9 @@ def _equity(env) -> list[dict]:
         q = (e or {}).get("quintiles") or []
         rows.append([k, *[N.fmt(x.get("mean_cooling")) for x in q[:5]], N.sfmt(e.get("concentration_index"), 3)])
     if rows:
-        out.append(_table(["Ranking", "Q1", "Q2", "Q3", "Q4", "Q5", "Concentration"], rows,
-                          f"Mean cooling ({env.unit}) of the package by quintile (1 = lowest)."))
+        out.append(_table(["Ranked by", "Q1", "Q2", "Q3", "Q4", "Q5", "Concentration index"], rows,
+                          f"Average cooling ({env.unit}) from the package in each fifth of places, ranked by the "
+                          "measure (Q1 = lowest)."))
     return out
 
 

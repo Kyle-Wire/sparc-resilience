@@ -111,7 +111,11 @@ describe("Compare runs", () => {
     expect(container.querySelector('[role="application"]')!.getAttribute("aria-label")).toContain("B − A");
     const req = m.calls.find((c) => c.url.startsWith("/api/compare/layer.bin"))!;
     expect(req.url).toContain("key=");
-    expect(container.textContent).toContain("Kendall τ");
+    // the priority columns in plain words; the technical names (Kendall τ, Jaccard) are in their ⓘ
+    await waitFor(() => container.querySelector('thead button.infotip[data-term="kendall_tau"]'), 3000, "priority table");
+    expect(container.textContent).toContain("Ranking agreement");
+    expect(container.textContent).toContain("Top-10% overlap");
+    expect(container.textContent).not.toContain("Kendall τ");
     expect(unframedCharts(container)).toEqual([]);
     expect(container.querySelectorAll("figure.chart-frame").length).toBeGreaterThanOrEqual(2); // timings, scenario effects
     m.restore();

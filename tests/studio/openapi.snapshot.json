@@ -14080,6 +14080,17 @@
             "type": "string",
             "title": "Name"
           },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
           "city": {
             "$ref": "#/components/schemas/Likely"
           },

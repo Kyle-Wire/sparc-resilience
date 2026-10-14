@@ -5,6 +5,7 @@
 import type { ArtifactRow, LogLine, StatusBoard, StatusCell } from "../../api/tracking";
 import type { Job, PlanNode, RunTabId, StageId } from "../../api/types";
 import type { GanttRow } from "../../charts";
+import { term, type TermId } from "../../content/glossary";
 import { VIEW_HREF } from "../../router";
 import { STAGE_IDS, stageOf, type SpanRow, type TrackerState } from "../../stores/tracker";
 
@@ -24,7 +25,25 @@ export const STAGE_LABELS: Record<StageId, string> = {
   finish: "Manifest and report",
 };
 
-/** Short chip names (S0 … finish) as the rail shows them. */
+/** Glossary term of each stage: its plain name (label), what it does (tip) and the technical name. */
+export const STAGE_TERM: Record<StageId, TermId> = {
+  S0: "stage_s0",
+  S1: "stage_s1",
+  S2_S3: "stage_s2_s3",
+  baselines: "stage_baselines",
+  cv_curve: "stage_cv_curve",
+  S4: "stage_s4",
+  S5: "stage_s5",
+  climate: "stage_climate",
+  S6: "stage_s6",
+  S7: "stage_s7",
+  finish: "stage_finish",
+};
+
+/** Plain stage names ("Check the data", "Train the models"): the rail, panels and charts show these; the technical name goes in the tooltip. */
+export const STAGE_PLAIN = Object.fromEntries(STAGE_IDS.map((id) => [id, term(STAGE_TERM[id]).label])) as Record<StageId, string>;
+
+/** Short chip names (S0 … finish), the stage codes that reasons and logs use. */
 export const STAGE_SHORT: Record<StageId, string> = {
   S0: "S0", S1: "S1", S2_S3: "S2–S3", baselines: "Baselines", cv_curve: "CV curve", S4: "S4", S5: "S5", climate: "Climate", S6: "S6", S7: "S7", finish: "Finish",
 };
@@ -37,7 +56,7 @@ export function reasonText(reason: string | null | undefined): string {
   if (!reason) return "";
   if (reason === "checkpoint") return "loaded from the checkpoint";
   if (reason === "not_requested") return "not requested for this run";
-  if (reason.startsWith("disabled_by_config:")) return `disabled in the config (${reason.slice("disabled_by_config:".length)})`;
+  if (reason.startsWith("disabled_by_config:")) return "turned off in the project settings";
   if (reason.startsWith("required_by:")) return `needed by ${reason.slice("required_by:".length)}`;
   const words: Record<string, string> = {
     no_budget: "no budget configured",
@@ -581,10 +600,27 @@ export function budgetTotals(s: TrackerState): { variable: string; planned: numb
 
 // ---------------------------------------------------------------- gantt
 
-function spanLabel(sp: { kind: string; name: string; key: string | null; k: number | null; n: number | null }): string {
+/** Plain words for the pipeline's span names on the job timeline (the model terms stay in the logs). */
+const SPAN_WORDS: Record<string, string> = {
+  fold: "test area",
+  advection: "wind check",
+  advection_check: "wind check",
+  adv_refit: "wind-check refit",
+  stacker_candidate: "blend option",
+  stacker_fold: "blend test area",
+  baseline_model: "simple model",
+  base_model: "model fit",
+};
+
+export function spanLabel(sp: { kind: string; name: string; key: string | null; k: number | null; n: number | null }): string {
   if (sp.kind === "run") return `run ${sp.name}`;
-  if (sp.kind === "stage") return STAGE_LABELS[sp.name as StageId] ? `${sp.name} · ${STAGE_LABELS[sp.name as StageId]}` : sp.name;
-  const base = sp.name.replace(/_/g, " ");
+  if (sp.kind === "stage") {
+    const plain = STAGE_PLAIN[sp.name as StageId];
+    if (!plain) return sp.name;
+    // the S-numbered stages keep their number ("S2–S3 · Train the models"); the checks read by name only
+    return /^S\d/.test(sp.name) ? `${STAGE_SHORT[sp.name as StageId] ?? sp.name} · ${plain}` : plain;
+  }
+  const base = SPAN_WORDS[sp.name] ?? sp.name.replace(/_/g, " ");
   if (sp.k !== null && sp.n !== null) return `${base} ${sp.k}/${sp.n}${sp.key ? ` (${sp.key})` : ""}`;
   if (sp.key) return `${base} ${sp.key}`;
   return base;
@@ -784,9 +820,9 @@ export function queueMovePatches(lane: readonly QueuedJob[], i: number, dir: -1 
 
 export type BoardGroup = { group: "stage" | "post" | "study"; label: string; columns: StatusBoard["columns"] };
 
-/** Columns grouped as the board header shows them (stages | post-run | studies), in server order. */
+/** Columns grouped as the board header shows them (run stages | after-run steps | independent checks), in server order. */
 export function boardGroups(board: StatusBoard): BoardGroup[] {
-  const labels = { stage: "Pipeline stages", post: "Post-run actions", study: "Studies" } as const;
+  const labels = { stage: "Run stages", post: "After-run steps", study: term("independent_checks").label } as const;
   const out: BoardGroup[] = [];
   for (const c of board.columns) {
     const last = out[out.length - 1];

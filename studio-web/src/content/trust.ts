@@ -2,6 +2,8 @@
 // areas it was not trained on (held-out R²) and whether its likely ranges hold (interval
 // coverage near its target). Pure, unit-tested (src/test/trust.test.ts). The Summary's trust
 // card, How much to trust this and the top bar's trust dot (layouts/AppShell) all use it.
+// The words (grade labels, sentences, the scenario verdicts) come from the shared glossary.
+import { GLOSSARY, term, trustWord, type TermId } from "./glossary";
 
 export type TrustGrade = "good" | "fair" | "limited";
 
@@ -17,7 +19,7 @@ export const TRUST_RULE = {
   defaultTarget: 0.9,
 } as const;
 
-export const TRUST_GRADE_LABEL: Record<TrustGrade, string> = { good: "Good", fair: "Fair", limited: "Limited" };
+export const TRUST_GRADE_LABEL: Record<TrustGrade, string> = { good: trustWord("good").label, fair: trustWord("fair").label, limited: trustWord("limited").label };
 
 export type TrustInput = {
   /** Held-out (cross-validated) R² of the final model. */
@@ -44,17 +46,9 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 
 const STEP_DOWN: Record<TrustGrade, TrustGrade> = { good: "fair", fair: "limited", limited: "limited" };
 
-const BASE_LINE: Record<TrustGrade, string> = {
-  good: "Predicts well in places it was not trained on.",
-  fair: "Gets the broad pattern right in places it was not trained on; treat street-level detail with care.",
-  limited: "Struggles in places it was not trained on; use the results as a rough guide only.",
-};
+const BASE_LINE: Record<TrustGrade, string> = { good: trustWord("good").sentence, fair: trustWord("fair").sentence, limited: trustWord("limited").sentence };
 
-const RANGES_LINE: Record<"ok" | "narrow" | "wide", string> = {
-  ok: "Its likely ranges hold.",
-  narrow: "Its likely ranges are too narrow: real values fall outside them more often than stated.",
-  wide: "Its likely ranges are wider than they need to be.",
-};
+const RANGES_LINE: Record<"ok" | "narrow" | "wide", string> = GLOSSARY.trustRanges;
 
 /** The grade from held-out R² alone. */
 export function r2Grade(r2: number): TrustGrade {
@@ -80,4 +74,26 @@ export function trustGrade({ r2, coverage, coverageTarget }: TrustInput): TrustA
   const grade = ranges === "narrow" || ranges === "wide" ? STEP_DOWN[base] : base;
   const line = ranges ? `${BASE_LINE[base]} ${RANGES_LINE[ranges]}` : BASE_LINE[base];
   return { grade, label: TRUST_GRADE_LABEL[grade], line, r2Grade: base, ranges };
+}
+
+// ---------------------------------------------------------------- scenario verdicts
+
+/** What the uncertainty report's evidence supports for a scenario (Verdict.verdict). */
+export type VerdictKey = "robust" | "direction" | "not_established" | "unknown";
+
+/**
+ * The glossary term of each verdict: planner pages show its plain label ("Solid", "Direction
+ * clear", "Not proven") with the tip; Model details keeps the server's technical label.
+ */
+export const VERDICT_TERMS: Record<Exclude<VerdictKey, "unknown">, TermId> = {
+  robust: "verdict_robust",
+  direction: "verdict_direction",
+  not_established: "verdict_not_established",
+};
+
+/** A verdict in plain words: its glossary label and term, else the server's label (no term). */
+export function verdictWord(verdict: string, fallback?: string | null): { label: string; term: TermId | null } {
+  const id = Object.prototype.hasOwnProperty.call(VERDICT_TERMS, verdict) ? VERDICT_TERMS[verdict as keyof typeof VERDICT_TERMS] : null;
+  if (id) return { label: term(id).label, term: id };
+  return { label: fallback?.trim() || verdict.replace(/_/g, " "), term: null };
 }

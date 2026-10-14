@@ -1,3 +1,4 @@
+import { act } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearResources } from "../api/resource";
 import { RUN_TAB_IDS, type Availability, type Project, type RunOutputs, type RunTabId } from "../api/types";
@@ -129,7 +130,13 @@ describe("route registry", () => {
     expect(acc.querySelector(".tab-dot")!.getAttribute("data-a")).toBe("running");
     expect(acc.textContent).toContain("being computed");
     const causal = container.querySelector('a[data-tab="causal"]')!;
-    expect(causal.getAttribute("title")).toContain("produced by stage:S6");
+    // what is missing shows in a tooltip (focus, hover or tap), not a native title
+    expect(causal.hasAttribute("title")).toBe(false);
+    act(() => (causal as HTMLElement).focus());
+    const tip = document.querySelector('[role="tooltip"]')!;
+    expect(tip.textContent).toContain("not available yet");
+    expect(tip.textContent).toContain("produced by stage:S6");
+    act(() => (causal as HTMLElement).blur());
     // mixed views → partial; all running → running
     expect(container.querySelector('a[data-tab="trust"] .tab-dot')!.getAttribute("data-a")).toBe("partial");
     expect(container.querySelector('a[data-tab="lab"] .tab-dot')!.getAttribute("data-a")).toBe("running");

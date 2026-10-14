@@ -2,8 +2,16 @@
 // conversion of raster shapes to SelectionSpec coordinates (lon/lat when the grid has a CRS,
 // else run metres, flagged non-portable).
 import type { SelectionCrs } from "../../api/types";
+import { term } from "../../content/glossary";
+import { fmtInt } from "../../theme/format";
 import { rasterToLonLat, rasterToXY, type GridData } from "../grid";
 import type { RasterPoint } from "./types";
+
+/** A count of grid cells in a planner's words (glossary `cell` → "place"): "1 place", "1,234 places". */
+export function placesText(n: number): string {
+  const word = term("cell").label.toLowerCase();
+  return `${fmtInt(n)} ${n === 1 ? word : word + "s"}`;
+}
 
 export function crsOf(g: GridData): SelectionCrs {
   return g.meta.has_lonlat && g.meta.corners ? "EPSG:4326" : "run_xy_m";

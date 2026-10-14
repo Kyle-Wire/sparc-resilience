@@ -202,10 +202,10 @@ describe("computed captions", () => {
   it("counts cooling, warming and could-be-zero envelopes separately", () => {
     const row = (label: string, lo: number, hi: number) => ({ id: label, label, estimate: (lo + hi) / 2, layers: [{ id: "envelope", label: "Envelope", lo, hi }] });
     expect(envelopeCaption([row("A", -1, -0.1), row("B", 0.1, 0.4), row("C", -0.5, 0.2)])).toBe(
-      "1 of 3 scenarios still cool under the widest (envelope) interval (A); 1 still warms (B); 1 could be zero.",
+      "1 of 3 scenarios still cool when every source of doubt is counted (A); 1 still warms (B); 1 might have no real effect.",
     );
-    expect(envelopeCaption([row("A", -1, -0.1)])).toBe("1 of 1 scenarios still cool under the widest (envelope) interval (A).");
-    expect(envelopeCaption([{ id: "x", label: "X", estimate: -1, layers: [{ id: "estimation", label: "Estimation", lo: -2, hi: -0.5 }] }])).toContain("no envelope interval yet");
+    expect(envelopeCaption([row("A", -1, -0.1)])).toBe("1 of 1 scenarios still cool when every source of doubt is counted (A).");
+    expect(envelopeCaption([{ id: "x", label: "X", estimate: -1, layers: [{ id: "estimation", label: "Estimation", lo: -2, hi: -0.5 }] }])).toContain("no combined range from every source of doubt yet");
   });
 
   it("reads the BLP calibration test from its p-value, not the slope alone", () => {

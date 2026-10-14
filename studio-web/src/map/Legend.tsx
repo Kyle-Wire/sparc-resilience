@@ -1,7 +1,7 @@
-// Map legend (SPEC §6.3, §6.5): the colour ramp (a rounded 6px strip) with mono domain ticks
-// and units, "← cooler · warmer →" labels on diverging layers, category swatches for
-// categorical layers, an embedded brushable histogram of the layer, and the layer summary
-// (n, mean, p10/median/p90 or class shares).
+// Map legend (SPEC §6.3, §6.5): the colour ramp (a rounded 6px strip) with mono domain ticks,
+// "← cooler · warmer →" labels on diverging layers, the units in plain words ("°F, negative =
+// cooler"), category swatches for categorical layers, an embedded brushable histogram of the
+// layer, and the layer summary (n, mean, p10/median/p90 or class shares).
 import { useMemo } from "react";
 import type { LayerMeta } from "../api/types";
 import { MeasureWidth } from "../charts/ChartFrame";
@@ -39,16 +39,36 @@ const TICKS = { fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--mute
 
 const TEMP_UNITS = new Set(["°F", "°C", "K"]);
 
+const isTempUnit = (u: string) => TEMP_UNITS.has(u) || u.startsWith("°F") || u.startsWith("°C");
+
+/** Units in words where the symbol is not plain ("pp" → "percentage points"); "" for a unitless layer. */
+const UNIT_WORDS: Record<string, string> = { pp: "percentage points", "1": "" };
+
+/**
+ * The legend's units line in plain words: "°F, negative = cooler", "percentage points",
+ * "°F, positive = warmer than predicted". The sign part is the layer's sign note, or "negative =
+ * cooler" for a temperature change centred on zero; `withSign` false leaves it out (a compact
+ * diverging legend, whose end words already say it). Empty when there is nothing to say.
+ */
+export function legendUnits(meta: Pick<LayerMeta, "unit" | "sign_note">, domain: Pick<Domain, "kind" | "center">, withSign = true): string {
+  const u = unitLabel(meta.unit);
+  const words = Object.prototype.hasOwnProperty.call(UNIT_WORDS, u) ? UNIT_WORDS[u] : u;
+  const sign = withSign ? meta.sign_note || (domain.kind === "div" && (domain.center ?? 0) === 0 && isTempUnit(u) ? "negative = cooler" : "") : "";
+  return [words, sign].filter(Boolean).join(", ");
+}
+
 /** Words for the two ends of a diverging ramp: cooler/warmer for temperatures (SPEC §6.1). */
 export function divergingEnds(meta: Pick<LayerMeta, "unit" | "sign_note">): [string, string] {
   const u = unitLabel(meta.unit);
   const note = (meta.sign_note ?? "").toLowerCase();
-  if (TEMP_UNITS.has(u) || u.startsWith("°F") || u.startsWith("°C")) return /positive\s*=\s*cooler/.test(note) ? ["less cooling", "more cooling"] : ["cooler", "warmer"];
+  if (isTempUnit(u)) return /positive\s*=\s*cooler/.test(note) ? ["less cooling", "more cooling"] : ["cooler", "warmer"];
   return ["lower", "higher"];
 }
 
 export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: LegendProps) {
   const u = unitLabel(meta.unit);
+  // a compact diverging legend's end words ("← cooler · warmer →") already give the sign
+  const units = legendUnits(meta, domain, !(compact && domain.kind === "div"));
   const d = meta.decimals ?? 2;
   const signed = domain.kind === "div" && (domain.center ?? 0) === 0;
   const f = (v: number) => (signed ? fmtSigned(v, d) : fmtNum(v, d));
@@ -107,9 +127,7 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
         <div className="legend-ticks" style={TICKS}>
           <span>≤ {f(domain.lo)}</span>
           {domain.kind === "div" && domain.center !== null ? <span>{f(domain.center)}</span> : null}
-          <span>
-            ≥ {f(domain.hi)} {u}
-          </span>
+          <span>≥ {f(domain.hi)}</span>
         </div>
         {domain.kind === "div" ? (
           <div className="legend-ticks" style={TICKS}>
@@ -123,10 +141,9 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
             </span>
           </div>
         ) : null}
-        {domain.zeroBlank ? <p className="cap">Cells at or below zero are shown as no data.</p> : null}
+        {units ? <p className="cap legend-units">{units}</p> : null}
+        {domain.zeroBlank ? <p className="cap">Places at or below zero are shown as no data.</p> : null}
         {meta.mult && meta.mult !== 1 ? <p className="cap">Values are shown × {fmtNum(meta.mult, 2)}.</p> : null}
-        {/* a compact diverging legend's end words ("← cooler · warmer →") already give the sign */}
-        {meta.sign_note && !(compact && domain.kind === "div") ? <p className="cap">{meta.sign_note}</p> : null}
       </div>
       {!compact && bins ? (
         bins.counts.some((c) => c > 0) ? (
@@ -147,14 +164,14 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
             />
           </MeasureWidth>
         ) : (
-          <p className="cap">No cells with a value to chart.</p>
+          <p className="cap">No places with a value to chart.</p>
         )
       ) : null}
       {summary ? (
         <dl className="kv" aria-label="Layer summary">
-          <dt>Cells</dt>
+          <dt>Places</dt>
           <dd>{fmtInt(summary.n)}</dd>
-          <dt>Mean</dt>
+          <dt>Average</dt>
           <dd>
             {f(summary.mean ?? NaN)} {u}
           </dd>

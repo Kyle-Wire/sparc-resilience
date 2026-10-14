@@ -4,6 +4,7 @@
 import { useId } from "react";
 import type { Lever } from "../../../../api/lab";
 import { StageNum } from "../../../../components/ui/StageRail";
+import { useTooltip } from "../../../../components/ui/Tooltip";
 import { FLOW_WORDS, newChangeInit, switchLever } from "../../model/flow";
 import { LAB_WORDS, TRUST_TIP, TRUST_WORDS, leverWords, type LeverIcon } from "../../model/words";
 import type { StepProps } from "./types";
@@ -31,6 +32,23 @@ export function LeverGlyph({ icon, size = 20 }: { icon: LeverIcon; size?: number
   );
 }
 
+/**
+ * The card's trust dot: its words are read with the card (aria-describedby); hovering or tapping
+ * the dot shows them with what they mean, in a tooltip (the card itself is the button, so the dot
+ * cannot be a second one).
+ */
+function TrustDot({ id, label, tone }: { id: string; label: string; tone: string }) {
+  const t = useTooltip<HTMLSpanElement>({ content: `${label}. ${TRUST_TIP}` });
+  return (
+    <span ref={t.anchorRef} className="flow-step-trust" data-tone={tone} onMouseEnter={t.triggerProps.onMouseEnter} onMouseLeave={t.triggerProps.onMouseLeave} onPointerDown={t.triggerProps.onPointerDown} onClick={t.triggerProps.onClick}>
+      <span className="sr-only" id={id}>
+        {label}.
+      </span>
+      {t.bubble}
+    </span>
+  );
+}
+
 function LeverCard({ lever, pressed, onPick }: { lever: Lever; pressed: boolean; onPick: () => void }) {
   const id = useId();
   const w = leverWords(lever);
@@ -55,11 +73,7 @@ function LeverCard({ lever, pressed, onPick }: { lever: Lever; pressed: boolean;
           {w.oneLine}
         </span>
       </span>
-      <span className="flow-step-trust" data-tone={t.tone} title={`${t.label}. ${TRUST_TIP}`}>
-        <span className="sr-only" id={`${id}-trust`}>
-          {t.label}.
-        </span>
-      </span>
+      <TrustDot id={`${id}-trust`} label={t.label} tone={t.tone} />
     </button>
   );
 }

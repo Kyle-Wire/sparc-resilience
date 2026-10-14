@@ -277,7 +277,7 @@ export function GridCanvas(props: GridCanvasProps) {
   const announce = useCallback(
     (p: RasterPoint) => {
       const row = rowAt(grid, p.px, p.py);
-      setLive(describe ? describe(row, p) : row < 0 ? "No observation" : `Cell row ${row}`);
+      setLive(describe ? describe(row, p) : row < 0 ? "No reading here" : `Place, row ${row}`);
     },
     [grid, describe],
   );
@@ -405,7 +405,7 @@ export function GridCanvas(props: GridCanvasProps) {
         const row = rowAt(grid, cursor.px, cursor.py);
         if (row >= 0) {
           onPick?.(row);
-          setLive(`Pinned. ${describe ? describe(row, cursor) : `Cell row ${row}`}`);
+          setLive(`Pinned. ${describe ? describe(row, cursor) : `Place, row ${row}`}`);
         }
         break;
       }
@@ -480,7 +480,7 @@ export function GridCanvas(props: GridCanvasProps) {
       {passive ? null : (
         <>
           <span id={helpId} className="sr-only">
-            Arrow keys move the cell cursor (Shift for 10 cells), Enter pins the inspector, plus and minus zoom, 0 fits the map, Escape cancels the current tool.
+            Arrow keys move from place to place (Shift jumps 10), Enter pins the place under the cursor, plus and minus zoom, 0 fits the map, Escape cancels the current tool.
           </span>
           <div className="sr-only" aria-live="polite" role="status" data-testid="map-live">
             {live}

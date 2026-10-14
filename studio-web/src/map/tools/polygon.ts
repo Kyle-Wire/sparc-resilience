@@ -1,8 +1,7 @@
 // Polygon selection: click to add vertices; double-click, Enter or clicking the first vertex
 // closes it. Produces {kind: "polygon"} with one closed ring.
-import { fmtInt } from "../../theme/format";
 import type { GridData } from "../grid";
-import { countMask, crsOf, maskWhere, pointInPolygon, toCrs } from "./shapes";
+import { countMask, crsOf, maskWhere, placesText, pointInPolygon, toCrs } from "./shapes";
 import type { MapTool, RasterPoint, ToolPreview, ToolResult } from "./types";
 
 export function polygonSelection(g: GridData, pts: RasterPoint[]): ToolResult | null {
@@ -11,7 +10,7 @@ export function polygonSelection(g: GridData, pts: RasterPoint[]): ToolResult | 
   ring.push(ring[0]);
   const mask = maskWhere(g, (px, py) => pointInPolygon(px, py, pts));
   const crs = crsOf(g);
-  return { kind: "selection", spec: { kind: "polygon", crs, rings: [ring] }, mask, label: `Polygon · ${fmtInt(countMask(mask))} cells`, portable: crs === "EPSG:4326" };
+  return { kind: "selection", spec: { kind: "polygon", crs, rings: [ring] }, mask, label: `Shape · ${placesText(countMask(mask))}`, portable: crs === "EPSG:4326" };
 }
 
 export function polygonTool(g: GridData): MapTool {

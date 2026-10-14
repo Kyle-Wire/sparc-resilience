@@ -1361,7 +1361,7 @@ def optimizer_layers(cfg: CoreConfig, data: CoreData, var: str, ranges: dict):
 
         share = float((cfg.raw.get("planner") or {}).get("paved_plantable_share", 0.2))
         cap = plantable_headroom(data.frame[var].to_numpy(float), layers, share)
-        constraint = f"plantable space (WorldCover open land + {share:.0%} of built-up area)"
+        constraint = f"open ground that can take trees, plus {share:.0%} of built-up ground"
     if layers is not None and ocfg.get("objective", "cooling") == "people":
         g = data.grid
         r = g.rasterize(np.nan_to_num(layers["people"].to_numpy(float)))

@@ -97,8 +97,10 @@ export function EditRow(p: EditRowProps) {
         <label htmlFor={`${id}-mode`}>Mode</label>
         <select id={`${id}-mode`} value={edit.mode} onChange={(e) => p.onChange(withMode(edit, e.target.value as EditMode, e.target.value === "add" ? lever?.design_dose ?? 0 : undefined))}>
           {EDIT_MODES.map((m) => (
-            <option key={m} value={m} disabled={!modeOk(m) && m !== edit.mode} title={!modeOk(m) ? "Canopy only, and needs the planner layers" : undefined}>
+            <option key={m} value={m} disabled={!modeOk(m) && m !== edit.mode}>
               {MODE_INFO[m].label}
+              {/* an option cannot hold a tooltip: why it is off is part of its text */}
+              {!modeOk(m) ? " (trees & canopy only, with the planting-space layers)" : ""}
             </option>
           ))}
         </select>

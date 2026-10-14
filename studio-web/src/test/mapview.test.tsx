@@ -3,7 +3,7 @@ import { lastDownload } from "../components/ui/download";
 import { act } from "react";
 import type { LayerGroup, LayerMeta } from "../api/types";
 import { MapView, type MapSelectionEvent } from "../map/MapView";
-import { Legend, divergingEnds } from "../map/Legend";
+import { Legend, divergingEnds, legendUnits } from "../map/Legend";
 import { computeDomain } from "../map/domain";
 import { runLayerLoader } from "../map/data";
 import { grid3 } from "./grid";
@@ -33,7 +33,7 @@ describe("MapView", () => {
     await flush(4);
     expect(loads).toEqual(["obs"]);
     expect(container.querySelector(".map-side h3")!.textContent).toBe("Observed");
-    expect(container.querySelector('[aria-label="Layer summary"]')!.textContent).toContain("Cells7");
+    expect(container.querySelector('[aria-label="Layer summary"]')!.textContent).toContain("Places7");
     expect(container.textContent).toContain("cooler");
     expect(container.querySelector('[role="application"]')!.getAttribute("aria-label")).toBe("Map of Observed");
     typeInto(container.querySelector("select#" + CSS.escape(container.querySelector("label.cap[for]")!.getAttribute("for")!)), "resid");
@@ -61,7 +61,9 @@ describe("MapView", () => {
     await flush(4);
     const diffBtn = byText(diff.container, "button", "Difference")!;
     expect(diffBtn.hasAttribute("disabled")).toBe(true);
-    expect(diffBtn.getAttribute("title")).toBe("Difference needs the same grid");
+    // why it is disabled: a tooltip on hover (never a native title), and the button's description
+    expect(diffBtn.hasAttribute("title")).toBe(false);
+    expect(document.getElementById(diffBtn.getAttribute("aria-describedby")!)!.textContent).toBe("Difference needs both maps on the same grid of places.");
   });
 
   it("turns a legend-histogram brush into a selection mask", async () => {
@@ -87,7 +89,7 @@ describe("MapView", () => {
     const { container } = render(<MapView grid={grid3()} groups={[{ id: "t", label: "T", layers: [meta] }]} layerKey="obs" onSelection={(e) => events.push(e)} loadLayer={async () => data.obs} />);
     await flush(4);
     const bars = container.querySelectorAll('.map-side svg.chart rect[role="img"]');
-    const counts = [...bars].map((b) => Number(/: (\d+) cells/.exec(b.getAttribute("aria-label")!)![1]));
+    const counts = [...bars].map((b) => Number(/: (\d+) places/.exec(b.getAttribute("aria-label")!)![1]));
     expect(counts.reduce((a, b) => a + b, 0)).toBe(7); // every observed cell is in a bin
     expect([counts[0], counts[counts.length - 1]]).toEqual([2, 2]);
     key(bars[bars.length - 1], "Enter"); // the hottest bin
@@ -105,13 +107,14 @@ describe("MapView", () => {
     expect([...container.querySelectorAll('[role="listitem"]')].map((li) => li.textContent)).toEqual(["Class 0 · 42.9%", "Class 1 · 28.6%", "Class 2 · 28.6%"]);
   });
 
-  it("Legend shows ramp ends with units and the zero_blank note", () => {
+  it("Legend shows ramp ends, the units in plain words and the zero_blank note", () => {
     const meta = { ...groups[0].layers[0], key: "alloc_dose", label: "Planned canopy", unit: "pp", scale: "seq" as const, center: null, zero_blank: true };
     const vals = Float32Array.from([0, 0, 2, 4, 6, 8, 10]);
     const { container } = render(<Legend meta={meta} domain={computeDomain(meta, vals)} dark={false} values={vals} />);
-    expect(container.querySelector(".legend-ticks")!.textContent).toMatch(/^≤ 0\.0≥ \d+\.\d pp$/);
-    expect(container.textContent).toContain("at or below zero are shown as no data");
-    expect(container.querySelector('[aria-label="Layer summary"]')!.textContent).toContain("Cells5");
+    expect(container.querySelector(".legend-ticks")!.textContent).toMatch(/^≤ 0\.0≥ \d+\.\d$/);
+    expect(container.querySelector(".legend-units")!.textContent).toBe("percentage points");
+    expect(container.textContent).toContain("Places at or below zero are shown as no data");
+    expect(container.querySelector('[aria-label="Layer summary"]')!.textContent).toContain("Places5");
   });
 
   it("drives the rect tool with the pointer and pins cells with a click (pan tool)", async () => {
@@ -133,7 +136,7 @@ describe("MapView", () => {
     fire("pointerdown", at(0.5, 0.5));
     fire("pointerup", at(0.5, 0.5), 0);
     await flush(2);
-    expect(container.querySelector('[aria-label="Pinned cell"]')!.textContent).toContain("row 0");
+    expect(container.querySelector('[aria-label="Pinned place"]')!.textContent).toContain("row 0");
     // rect tool
     click(container.querySelector('button[aria-label="Box: select a rectangle"]'));
     expect(container.querySelector('[role="application"]')!.getAttribute("data-tool")).toBe("rect");
@@ -150,6 +153,36 @@ describe("MapView", () => {
     expect(divergingEnds({ unit: "degF", sign_note: "negative = cooler" })).toEqual(["cooler", "warmer"]);
     expect(divergingEnds({ unit: "degF", sign_note: "positive = cooler" })).toEqual(["less cooling", "more cooling"]);
     expect(divergingEnds({ unit: "pp", sign_note: null })).toEqual(["lower", "higher"]);
+  });
+
+  it("words a legend's units plainly, with the sign of a temperature change", () => {
+    const div0 = { kind: "div" as const, center: 0 };
+    const seq = { kind: "seq" as const, center: null };
+    expect(legendUnits({ unit: "degF", sign_note: null }, div0)).toBe("°F, negative = cooler");
+    expect(legendUnits({ unit: "degF", sign_note: "negative = cooler" }, div0)).toBe("°F, negative = cooler");
+    expect(legendUnits({ unit: "degF", sign_note: "positive = warmer than predicted" }, div0)).toBe("°F, positive = warmer than predicted");
+    expect(legendUnits({ unit: "degF", sign_note: null }, div0, false)).toBe("°F"); // a compact legend's end words give the sign
+    expect(legendUnits({ unit: "degF", sign_note: null }, seq)).toBe("°F");
+    expect(legendUnits({ unit: "degF", sign_note: null }, { kind: "div", center: 83 })).toBe("°F"); // centred on the mean, not a change
+    expect(legendUnits({ unit: "pp", sign_note: null }, seq)).toBe("percentage points");
+    expect(legendUnits({ unit: "1", sign_note: null }, seq)).toBe("");
+    expect(legendUnits({ unit: "", sign_note: null }, div0)).toBe("");
+  });
+
+  it("the map's own controls explain themselves in tooltips, not native titles", async () => {
+    const { container } = render(<MapView grid={grid3()} groups={groups} layerKey="resid" tools={["pan", "rect"]} loadLayer={async (m) => data[m.key]} />);
+    await flush(4);
+    expect(container.querySelector(".legend-units")!.textContent).toBe("°F, negative = cooler");
+    expect(container.querySelector("[title]")).toBeNull();
+    const box = container.querySelector<HTMLButtonElement>('button[aria-label="Box: select a rectangle"]')!;
+    act(() => box.focus());
+    expect(document.querySelector('[role="tooltip"]')!.textContent).toBe("Box: select a rectangle");
+    // the tooltip repeats the button's name, so it does not describe it a second time
+    expect(box.hasAttribute("aria-describedby")).toBe(false);
+    act(() => box.blur());
+    const lock = byText(container, "button", "Lock scale")!;
+    act(() => (lock as HTMLButtonElement).focus());
+    expect(document.getElementById(lock.getAttribute("aria-describedby")!)!.textContent).toMatch(/^Keep the current colour scale/);
   });
 });
 

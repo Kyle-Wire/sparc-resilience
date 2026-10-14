@@ -167,24 +167,28 @@ import type { RouteDef } from "../../router";
 
 export const routes: RouteDef[] = [
   {
-    path: "/r/:rid/validation",
-    component: lazy(() => import("./Validation")),     // code-split per page
-    title: "Validation",
-    runTab: { id: "validation", label: "Validation", group: "Trust", order: 10 },
+    path: "/r/:rid/trust",
+    component: lazy(() => import("./Trust")),          // code-split per page
+    title: "How much to trust this",
+    // the tab's status dot is the worst status across the server views it shows
+    runTab: { id: "trust", label: "How much to trust this", order: 60, views: ["accuracy", "validation", "uncertainty", "distance"] },
   },
   {
     path: "/p/:pid/studies",
     component: lazy(() => import("./StudiesHub")),
     title: "Studies",
-    projectNav: { id: "studies", label: "Studies", order: 70, to: (pid) => `/p/${encodeURIComponent(pid)}/studies` },
+    projectNav: { id: "studies", label: "Studies", order: 70, group: "advanced", to: (pid) => `/p/${encodeURIComponent(pid)}/studies` },
   },
   { path: "/studies/:stid", component: lazy(() => import("./StudyPage")), title: "Study" },
+  // an old URL kept working: a route with a redirect and no component (src/pages/legacy/routes.ts)
+  { path: "/r/:rid/validation", title: "Validation", redirect: (p, search) => withSearch(runHref(p.rid, "trust"), search) },
 ];
 ```
 
-- A new **page** needs only a `RouteDef` (and its component). `fullWidth: true` drops the page margins (maps, Mission Control, the Lab). The router logs a console warning (`[routes] …`) for a duplicate route, run tab or nav entry and for an unknown tab id or group.
-- A new **project nav entry** is a `projectNav` on the route that owns its target. `to` returning `null` hides it; `disabledReason(project)` greys it out with a tooltip. Orders in use: Overview 10, Setup 20, Inputs 30, Launch 40, Runs 50, Scenario Lab 60, Studies 70, Exports 80, Findings 90.
-- A new **run tab** is a `runTab` on its route, but tab ids are a fixed vocabulary shared with the server, because the server computes each tab's status dot. Adding one means: add the id to `RUN_TAB_IDS` in `sparc/studio/meta.py` and `sparc/studio/runs/outputs.py` and in `studio-web/src/api/types.ts`; point the relevant `OutputSpec.view` entries in `sparc/core/catalog.py` at it (or give it a fixed rule in `runs/outputs.py`, as `track`, `map`, `files`, `provenance`, `lab` and `validation` have); update the OpenAPI snapshot and the generated types ([§8](#8-regenerating-fixtures-api-types-built-assets-and-docs-checks)); and document it in SPEC §3.2. Groups are Model · Effects · Decisions · Trust · Run; orders inside a group are spaced by 10.
+- A new **page** needs only a `RouteDef` (and its component). `fullWidth: true` drops the page margins (maps, Mission Control, the Lab). The router logs a console warning (`[routes] …`) for a duplicate route, run tab or nav entry and for an unknown tab id. When a page moves, keep its old path as a `redirect` route in `src/pages/legacy/routes.ts` (tested by `legacy.test.ts`).
+- A new **project nav entry** is a `projectNav` on the route that owns its target. `to` returning `null` hides it; `disabledReason(project)` greys it out with a tooltip; `group: "advanced"` puts it in the sidebar's collapsed Advanced group; `claims` lists other paths that highlight it. Orders in use: Overview 10, Set up 20, Runs 30, Scenario Lab 40, Reports 50, then Advanced: Studies 70, Config editor 80, Activity 90.
+- A new **run tab** is rare: a run has seven (Summary 10, Map 20, What cools 30, Heat risk 40, Scenario Lab 50, How much to trust this 60, Model details 100), each the one home of its facts, and a new technical view belongs in a **Model details** section (`DETAIL_SECTIONS` in `src/pages/runhub/Details.tsx`) instead. A tab is a `runTab` on its route; its `views` are ids from the fixed vocabulary shared with the server, which computes each view's status (`RUN_TAB_IDS` in `sparc/studio/meta.py`, `sparc/studio/runs/outputs.py` and `studio-web/src/api/types.ts`). Adding a server view id means adding it there, pointing the relevant `OutputSpec.view` entries in `sparc/core/catalog.py` at it (or giving it a fixed rule in `runs/outputs.py`, as `track`, `map`, `files`, `provenance`, `lab` and `validation` have), updating the OpenAPI snapshot and the generated types ([§8](#8-regenerating-fixtures-api-types-built-assets-and-docs-checks)), and documenting it in SPEC §3.2.
+- **Plain words and tooltips.** Pages are written for a city planner: plain labels by default, the precise or technical meaning in a tooltip. Repeated concepts take their words from the shared glossary, `sparc/core/glossary.json` (read by Studio through `src/content/glossary.ts` and by the standalone results page; `tests/core/test_glossary.py` checks it): `term(id)` gives `{label, tip, technical}`, and `lever()`, `mode()`, `confidence()` and the heat, trust, emissions and period sections cover the rest. Explain a label with `<InfoTip term="r2" />` (an ⓘ button), `<Term id="r2">…</Term>` (dotted underline), `<Tooltip content=…>` around any trigger, or `useTipOn` for a component's own element (`src/components/ui/`); they open on hover, keyboard focus and tap and close on Escape. Never use a native `title="…"` attribute on an HTML element: `src/test/no-native-title.test.ts` scans `src/pages` and `src/components` and fails on one (an `<iframe>`'s `title`, its accessible name, is allowed). Numbers carry their unit and, where there is one, a likely range.
 
 Data for pages comes through `useResource(key, fetcher, {immutable})` (`src/api/resource.ts`), whose tags the global stream invalidates (`run:<rid>`, `job:<jid>`, `scenario:<sid>`, `project:<pid>`). Finished-run resources are immutable and never refetched. Per-group endpoint functions and types live in `src/api/<group>.ts`; `src/api/contract.check.ts` (type-only) checks that they agree with the generated `schema.gen.ts`, so `npm run typecheck` fails when the server and the client drift.
 

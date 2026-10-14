@@ -1,15 +1,18 @@
 // Summary (the run's planner landing page): four headline cards that link to their tabs, no
 // run metadata / timings / outputs grid / accuracy numbers, caveats behind one closed
 // disclosure, next steps, the stage rail while the run is still going, and the cards'
-// fallbacks (configured scenarios, the overview's warming KPI, missing views).
+// fallbacks (configured scenarios, the overview's warming KPI, missing views). Plain words:
+// each card's ⓘ explains its number (the trust card's names the four checks), no native titles.
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearResources } from "../../../api/resource";
 import type { RunStageRow } from "../../../api/runs";
+import { term } from "../../../content/glossary";
 import { navigate } from "../../../router";
 import { useJobs } from "../../../stores/jobs";
 import { flush, mockFetch, render, waitFor, type MockHandler } from "../../../test/render";
 import { viewFixture } from "../__fixtures__/views";
-import Summary, { coolingPick, keepInMind, trustInputs, warmingPick } from "../Summary";
+import Summary, { TRUST_CARD_TIP, coolingPick, keepInMind, trustInputs, warmingPick } from "../Summary";
 import { runDetail } from "./helpers";
 
 let seq = 0;
@@ -25,6 +28,15 @@ async function mount(rid: string, routes: Record<string, MockHandler>, hash = ""
 }
 
 const card = (c: HTMLElement, id: string) => c.querySelector<HTMLElement>(`[data-card="${id}"]`)!;
+
+/** Focus an element and return the tooltip it opens (InfoTip, TipChip), then close it. */
+function tipOf(el: HTMLElement): HTMLElement {
+  act(() => el.focus());
+  const tip = document.querySelector<HTMLElement>('[role="tooltip"]:not([hidden])')!;
+  const copy = tip.cloneNode(true) as HTMLElement;
+  act(() => el.blur());
+  return copy;
+}
 
 function views(rid: string, extra: Record<string, MockHandler> = {}): Record<string, MockHandler> {
   return {
@@ -48,7 +60,9 @@ describe("Summary", () => {
     expect(container.querySelector(".summary-head")).toBeNull();
     expect(container.querySelector("h1")).toBeNull();
     // the only h2s are the four headline cards' titles (the run header is RunLayout's h1)
-    expect([...container.querySelectorAll("h2")].every((h) => h.matches(".summary-card > .label"))).toBe(true);
+    expect([...container.querySelectorAll("h2")].every((h) => h.matches(".summary-card .label"))).toBe(true);
+    // no native tooltips: every explanation is an ⓘ or a tooltip chip
+    expect(container.querySelector("[title]")).toBeNull();
     expect(container.textContent).not.toContain("Fast demo run");
 
     const cards = [...container.querySelectorAll<HTMLElement>("[data-card]")];
@@ -58,15 +72,13 @@ describe("Summary", () => {
     const cooling = card(container, "cooling");
     expect(cooling.querySelector(".label")!.textContent).toBe("Cooling potential");
     expect(cooling.querySelector(".value")!.textContent).toBe("1.31°F cooler");
-    expect(cooling.textContent).toContain("Cooling package, city-wide average");
-    expect(cooling.textContent).toContain("likely 0.56–2.05 °F cooler");
+    expect(cooling.querySelector(".note")!.textContent).toBe("The cooling package (the run's combined trees, paving and roof changes), averaged over the whole city. Likely 0.56–2.05 °F cooler.");
     expect(cooling.querySelector("a")!.getAttribute("href")).toBe(`/r/${rid}/lab/library`);
 
     const heat = card(container, "heat");
     expect(heat.querySelector(".label")!.textContent).toBe("Residents at heat risk");
     expect(heat.querySelector(".value")!.textContent).toBe("36,669residents");
-    expect(heat.textContent).toContain("Extreme caution or worse");
-    expect(heat.textContent).toContain("21% of 173,661 residents");
+    expect(heat.querySelector(".note")!.textContent).toBe("live where a hot afternoon already feels like Extreme caution or worse. That is 21% of 173,661 residents.");
     expect(heat.querySelector("a")!.getAttribute("href")).toBe(`/r/${rid}/heat`);
 
     const trust = card(container, "trust");
@@ -77,12 +89,37 @@ describe("Summary", () => {
 
     const climate = card(container, "climate");
     expect(climate.querySelector(".value")!.textContent).toBe("3.2°F warmer");
-    expect(climate.textContent).toContain("by 2041–2060 (SSP2-4.5)");
-    expect(climate.textContent).toContain("2.5–4.1 °F across 6 climate models");
+    expect(climate.querySelector(".note")!.textContent).toBe("Summer afternoons by mid-century (2041–2060), with moderate emissions. Most of 6 climate models: 2.5–4.1 °F warmer.");
     expect(climate.querySelector("a")!.getAttribute("href")).toBe(`/r/${rid}/heat/future`);
 
     // the package KPI is in the overview: the configured scenarios are not fetched
     expect(m.calls.some((c) => c.url.includes("/views/scenarios"))).toBe(false);
+    m.restore();
+  });
+
+  it("explains each card in an ⓘ beside its title, with the technical name under the tip", async () => {
+    const rid = nextRid();
+    const { container, m } = await mount(rid, views(rid));
+    const tips = [...container.querySelectorAll<HTMLButtonElement>("[data-card] .summary-card-head > button.infotip")];
+    expect(tips.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "What is Cooling potential?",
+      "What is Residents at heat risk?",
+      "What is How much to trust this?",
+      "What is Climate outlook?",
+    ]);
+    // beside the title, not inside it: the card is still named by its title alone
+    expect(card(container, "trust").querySelector("h2")!.querySelector("button")).toBeNull();
+    const cooling = tipOf(tips[0]);
+    expect(cooling.querySelector(".tip-text")!.textContent).toMatch(/^How much cooler the whole city gets, on average/);
+    expect(cooling.querySelector(".tip-tech code")!.textContent).toBe(term("citywide").technical);
+    expect(tipOf(tips[1]).textContent).toContain("Extreme caution or worse");
+    // the trust grade's ⓘ names the four checks behind it
+    const trust = tipOf(tips[2]);
+    expect(trust.querySelector(".tip-text")!.textContent).toBe(TRUST_CARD_TIP.text);
+    for (const check of ["places it never saw", "prediction ranges hold", "far from the measurements", "cause, not coincidence"]) expect(trust.textContent).toContain(check);
+    expect(trust.querySelector(".tip-tech code")!.textContent).toBe(term("trust_grade").technical);
+    expect(tipOf(tips[3]).querySelector(".tip-tech code")!.textContent).toMatch(/^CMIP6/);
+    expect(card(container, "trust").querySelector("a")!.textContent).toBe("See the four checks →");
     m.restore();
   });
 
@@ -150,11 +187,12 @@ describe("Summary", () => {
     const progress = container.querySelector<HTMLElement>('[aria-label="Run progress"]')!;
     expect(progress.dataset.progress).toBe("running");
     expect(progress.querySelector('a[href$="/details/runlog"]')!.getAttribute("href")).toBe(`/r/${rid}/details/runlog`);
-    const rail = progress.querySelector('ol[aria-label="Pipeline stages"]')!;
+    const rail = progress.querySelector('ol[aria-label="Run stages"]')!;
     expect([...rail.querySelectorAll("li")].map((li) => li.getAttribute("data-status"))).toEqual(["done", "done", "running", "todo"]);
     expect(rail.querySelector('[aria-current="step"]')!.getAttribute("data-stage")).toBe("S2_S3");
-    // stage labels come from the overview's timings when it has them
-    expect(rail.querySelector('[data-stage="S2_S3"] [title]')!.getAttribute("title")).toBe("Models + stacker");
+    // stage labels come from the overview's timings when it has them, in a tooltip (no native title)
+    expect(rail.querySelector("[title]")).toBeNull();
+    expect(tipOf(rail.querySelector<HTMLElement>('[data-stage="S2_S3"] [data-tip-chip]')!).textContent).toBe("Models + stacker");
 
     expect(card(container, "cooling").dataset.state).toBe("absent");
     expect(card(container, "cooling").textContent).toContain("Appears once the scenarios stage finishes");
@@ -183,7 +221,7 @@ describe("Summary", () => {
       }),
     );
     await waitFor(() => card(container, "cooling").dataset.state === "ready", 5000, "scenarios fallback");
-    expect(card(container, "cooling").textContent).toContain("Canopy Increase +20, city-wide average");
+    expect(card(container, "cooling").textContent).toContain("Canopy Increase +20, averaged over the whole city.");
     expect(card(container, "cooling").querySelector(".value")!.textContent).toBe("1.50°F cooler");
     expect(card(container, "climate").querySelector(".value")!.textContent).toBe("3.2°F warmer");
     expect(card(container, "climate").textContent).toContain("Mid-century warming (SSP2-4.5)");

@@ -73,7 +73,7 @@ export function HeatPreviewCard({ heat }: { heat: HeatPreview }) {
         <dd className="num">
           {n(s.dangerBefore)} → {n(s.dangerAfter)}
         </dd>
-        <dt>Heat index felt</dt>
+        <dt>Change in feels-like temperature</dt>
         <dd className="num">{`${s.meanHiChange <= 0 ? "−" : "+"}${fmtNum(Math.abs(s.meanHiChange), 2)} °F`}</dd>
       </dl>
       {heat.caveats.length ? (
@@ -172,9 +172,9 @@ export function CompilePanel(p: CompilePanelProps) {
             <Badge tone="warn">Run exact</Badge> recommended: {advice.reasons.join("; ")}.
           </div>
         ) : c ? (
-          <p className="cap">The preview is a good guide here. Uncertainty, comparisons, impacts and decision packs still come only from exact results.</p>
+          <p className="cap">The preview is a good guide here. Uncertainty, comparisons, impacts and decision packs still come only from full model results.</p>
         ) : null}
-        <Button variant="primary" icon="play" busy={p.running} disabled={!p.canRun || blocking.length > 0} onClick={p.onRunExact} title={p.runReason ?? undefined}>
+        <Button variant="primary" icon="play" busy={p.running} disabled={!p.canRun || blocking.length > 0} onClick={p.onRunExact}>
           Run exact
         </Button>
         {blocking.length ? <p className="cap">Fix the blocked edits first (or enable expert mode where allowed).</p> : p.runReason ? <p className="cap">{p.runReason}</p> : null}

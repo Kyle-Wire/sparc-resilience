@@ -2,6 +2,8 @@ import type { CSSProperties, HTMLAttributes, ReactNode } from "react";
 
 export type CardProps = Omit<HTMLAttributes<HTMLElement>, "title"> & {
   title?: ReactNode;
+  /** An explanation of the title (an InfoTip ⓘ), beside the heading rather than inside it, so the heading's name stays its title. */
+  tip?: ReactNode;
   eyebrow?: ReactNode;
   actions?: ReactNode;
   variant?: "default" | "flat" | "tight";
@@ -9,7 +11,7 @@ export type CardProps = Omit<HTMLAttributes<HTMLElement>, "title"> & {
   children?: ReactNode;
 };
 
-export function Card({ title, eyebrow, actions, variant = "default", as = "section", className, children, ...rest }: CardProps) {
+export function Card({ title, tip, eyebrow, actions, variant = "default", as = "section", className, children, ...rest }: CardProps) {
   const Tag = as;
   const cls = ["card", variant !== "default" ? variant : "", className ?? ""].filter(Boolean).join(" ");
   return (
@@ -18,7 +20,8 @@ export function Card({ title, eyebrow, actions, variant = "default", as = "secti
         <header>
           <div>
             {eyebrow ? <p className="eyebrow">{eyebrow}</p> : null}
-            {title ? <h3>{title}</h3> : null}
+            {title ? <h3 style={tip ? { display: "inline" } : undefined}>{title}</h3> : null}
+            {title && tip ? tip : null}
           </div>
           {actions ? <div className="row">{actions}</div> : null}
         </header>

@@ -7,7 +7,12 @@ import { fmtDuration, fmtDurationRange, fmtInt } from "../../../theme/format";
 
 export const STAGE_ORDER: readonly StageId[] = ["S0", "S1", "S2_S3", "baselines", "cv_curve", "S4", "S5", "climate", "S6", "S7", "finish"];
 
-const STAGE_SHORT: Record<string, string> = { S2_S3: "S2–S3", cv_curve: "CV curve" };
+/**
+ * The stage number a plan row shows before its plain name ("S2–S3 Simple-model check"): the checks that
+ * test the trained models share S2–S3, future climate belongs with the scenarios (S5), and writing the
+ * report has none (""). Raw stage ids ("baselines", "cv_curve") never show.
+ */
+const STAGE_SHORT: Record<string, string> = { S2_S3: "S2–S3", baselines: "S2–S3", cv_curve: "S2–S3", climate: "S5", finish: "" };
 
 export function stageShort(id: string): string {
   return STAGE_SHORT[id] ?? id;
@@ -16,8 +21,12 @@ export function stageShort(id: string): string {
 /** Plain text for a plan node reason. */
 export function planReasonText(reason: string | null | undefined): string | null {
   if (!reason) return null;
-  if (reason.startsWith("required_by:")) return `required by ${stageShort(reason.slice("required_by:".length))}`;
-  if (reason.startsWith("disabled_by_config:")) return `disabled in the config (${reason.slice("disabled_by_config:".length)})`;
+  if (reason.startsWith("required_by:")) {
+    const by = reason.slice("required_by:".length);
+    return `required by ${stageShort(by) || "the report"}`;
+  }
+  // The config key (e.g. cv.distance_curve.enabled) is for the settings editor, not the page.
+  if (reason.startsWith("disabled_by_config:")) return "turned off in the project settings";
   switch (reason) {
     case "not_requested":
       return "not requested";
@@ -41,16 +50,19 @@ export function planReasonText(reason: string | null | undefined): string | null
 const UNIT_WORDS: Record<string, [string, string]> = {
   s0_load: ["data load", "data loads"],
   s1_influence: ["influence pass", "influence passes"],
-  engine_pass: ["engine pass", "engine passes"],
-  checkpoint_save: ["checkpoint save", "checkpoint saves"],
-  adv_refit: ["advection refit", "advection refits"],
+  engine_pass: ["model pass", "model passes"],
+  checkpoint_save: ["model save", "model saves"],
+  adv_refit: ["wind-check refit", "wind-check refits"],
+  base_fit: ["model fit", "model fits"],
+  stacker_fit: ["blend fit", "blend fits"],
+  causal_step: ["cause-check step", "cause-check steps"],
   climate_model: ["climate model", "climate models"],
-  pareto: ["Pareto pass", "Pareto passes"],
+  pareto: ["budget pass", "budget passes"],
 };
 
 /**
- * Units grouped by family: `base_fit:mgwr` + `base_fit:gam` → "10 base fits",
- * `stacker_fit:*` → "stacker fits", `causal_step:*` → "causal steps".
+ * Units grouped by family, in plain words: `base_fit:mgwr` + `base_fit:gam` → "10 model fits",
+ * `stacker_fit:*` → "blend fits", `causal_step:*` → "cause-check steps".
  */
 export function unitSummary(units: Record<string, number>): string {
   const groups = new Map<string, number>();

@@ -1,9 +1,10 @@
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { App } from "../App";
 import { clearResources } from "../api/resource";
 import { StreamManager, setStreams, type EventSourceLike } from "../api/sse";
 import type { RunSummary } from "../api/types";
-import { ActiveRunChip, trustGrade } from "../layouts/AppShell";
+import { ActiveRunChip, EngineDot, trustGrade } from "../layouts/AppShell";
 import { navigate } from "../router";
 import { useJobs } from "../stores/jobs";
 import { useUi } from "../stores/ui";
@@ -60,8 +61,31 @@ describe("AppShell", () => {
     expect(document.title).toBe("Not found · SPARC Studio");
     expect(container.querySelector(".conn-pill")).not.toBeNull();
     expect(container.querySelector(".engine-dot")!.getAttribute("data-state")).toBe("ready");
+    // the top-bar chips speak plainly and explain themselves in tooltips, not native titles
+    const engine = container.querySelector<HTMLElement>(".engine-dot")!;
+    expect(engine.textContent).toBe("Full model ready");
+    expect(container.querySelector(".shell-topbar [title]:not(button)")).toBeNull();
+    act(() => engine.focus());
+    expect(document.querySelector('[role="tooltip"]')!.textContent).toContain("loaded and ready to work out scenarios");
+    act(() => engine.blur());
+    const conn = container.querySelector<HTMLElement>(".conn-pill")!;
+    act(() => conn.focus());
+    expect(document.querySelector('[role="tooltip"]')!.textContent).toMatch(/live|Connecting|retrying|every 5 seconds|Not connected/);
+    act(() => conn.blur());
     // every button has an accessible name
     for (const b of container.querySelectorAll("button")) expect((b.getAttribute("aria-label") ?? b.textContent ?? "").trim().length).toBeGreaterThan(0);
+  });
+
+  it("says the full model's state in one plain phrase: starts when needed, or not available for a run without saved models", () => {
+    useJobs.setState({ host: { ...useJobs.getState().host, state: "absent" } });
+    const idle = render(<EngineDot runId={null} />);
+    expect(idle.container.querySelector(".engine-dot")!.textContent).toBe("Full model starts when needed");
+    idle.unmount();
+    // the same words as the Scenario Lab and the Library on a run that saved no trained models
+    const none = render(<EngineDot runId="r_1" noModels />);
+    const dot = none.container.querySelector<HTMLElement>(".engine-dot")!;
+    expect(dot.textContent).toBe("Full model not available");
+    expect(dot.getAttribute("data-state")).toBe("cold");
   });
 
   it("mirrors the most important running job in the tab title and the job tray", async () => {
@@ -149,15 +173,27 @@ describe("AppShell", () => {
     expect(chip.textContent).not.toContain("0.812");
     // the closed switcher reads "name · start time" in full (mode and status are in the open list and its tooltip)
     expect(sel.selectedOptions[0].textContent).toMatch(/^Summer run · \d{4}-\d\d-\d\d \d\d:\d\d$/);
-    expect(sel.title).toContain("FAST");
+    // mode and status are in its tooltip (on focus here), not a native title
+    expect(sel.hasAttribute("title")).toBe(false);
+    act(() => sel.focus());
+    expect(document.querySelector('[role="tooltip"]')!.textContent).toContain("FAST");
+    act(() => sel.blur());
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
     // the grade sits inside the chip right after the switcher, as a ringed dot with its word
-    const dot = chip.querySelector("a.run-chip-trust")!;
+    const dot = chip.querySelector<HTMLAnchorElement>("a.run-chip-trust")!;
     expect(sel.nextElementSibling).toBe(dot);
     expect(dot.querySelector(".trust-dot")).not.toBeNull();
     expect(dot.getAttribute("data-grade")).toBe("good");
     expect(dot.getAttribute("href")).toBe("/r/r_1/trust");
     expect(dot.textContent).toBe("Trust: Good");
     expect([...dot.childNodes].filter((n) => !(n instanceof HTMLElement && (n.classList.contains("sr-only") || n.getAttribute("aria-hidden")))).map((n) => n.textContent)).toEqual(["Good"]);
+    // the grade explains itself in a tooltip (plain sentence, the technical rule as a footnote)
+    expect(dot.hasAttribute("title")).toBe(false);
+    act(() => dot.focus());
+    const tip = document.querySelector('[role="tooltip"]')!;
+    expect(tip.textContent).toContain("Trust grade: Good.");
+    expect(tip.textContent).toContain("How much to trust this");
+    act(() => dot.blur());
     rerender(<ActiveRunChip projectRuns={[base]} run={{ ...base, r2: 0.45 }} activeRunId={null} />);
     expect(container.querySelector("a.run-chip-trust")!.getAttribute("data-grade")).toBe("fair");
     rerender(<ActiveRunChip projectRuns={[base]} run={{ ...base, r2: 0.1 }} activeRunId={null} />);
@@ -180,7 +216,7 @@ describe("AppShell", () => {
     const dialog = document.querySelector('[role="dialog"][aria-label="Command palette"]');
     expect(dialog).not.toBeNull();
     expect(document.activeElement).toBe(dialog!.querySelector("input"));
-    expect(byText(document.body, '[role="option"]', "Activity (jobs)")).not.toBeNull();
+    expect(byText(document.body, '[role="option"]', "Activity: running and queued work")).not.toBeNull();
     key(dialog, "Escape");
     expect(document.querySelector('[aria-label="Command palette"]')).toBeNull();
     expect(document.activeElement).toBe(opener); // focus is restored

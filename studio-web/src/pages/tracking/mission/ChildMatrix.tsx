@@ -11,6 +11,7 @@ import type { Job } from "../../../api/types";
 import { Bars, BoxStrip, Heatmap } from "../../../charts";
 import { Card } from "../../../components/ui/Card";
 import { StatusChip } from "../../../components/ui/StatusChip";
+import { TipCell } from "../../../layouts/tips";
 import { Link } from "../../../router";
 import { useDark } from "../../../stores/ui";
 import type { TrackerState } from "../../../stores/tracker";
@@ -196,9 +197,9 @@ function Simcheck({ job, state, view }: { job: Job; state: TrackerState; view: S
                   const fill = status === "done" && t !== null ? rampColor("div", t, dark) : undefined;
                   const label = `${g}, seed ${s}: ${status === "done" ? `share ${fmtNum(c?.share ?? null, 2)}` : status.replace("_", " ")}${c?.redraw ? ", gate redraw" : ""}`;
                   return (
-                    <td key={s} data-status={status} style={fill ? { background: fill } : undefined} title={label} aria-label={label}>
+                    <TipCell key={s} data-status={status} style={fill ? { background: fill } : undefined} tip={label}>
                       {c?.redraw ? "•" : status === "error" ? "!" : status === "running" ? "…" : ""}
-                    </td>
+                    </TipCell>
                   );
                 })}
               </tr>

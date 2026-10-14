@@ -1,16 +1,19 @@
 // Studies hub (`/p/:pid/studies`, SPEC §3.2, §8): the per-run status matrix of post-run actions
 // and studies (from the project Status Board), the project's studies list filtered by kind, and
 // the project-wide effect benchmark launch (it needs no run).
+// Plain words (phase 4): tooltips (TipSpan, InfoTip) in place of native titles; the study kinds
+// keep their catalogue names here, with the plain name and what each does in an ⓘ.
 import { useEffect, useState } from "react";
 import { KIND_LABELS, useProjectStudies, useStatusBoard, useThreadsHeavy, type BoardCell, type Study, type StudyKind } from "../../api/studies";
 import type { RunSummary } from "../../api/types";
 import { Card } from "../../components/ui/Card";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { useProjectContext } from "../../layouts/ProjectLayout";
 import { Link, codecs, runHref, useRoute, useUrlState } from "../../router";
-import { fmtDate, fmtPct, fmtRelative } from "../../theme/format";
-import { runLabel } from "./components/common";
+import { fmtDate, fmtDateTime, fmtPct, fmtRelative } from "../../theme/format";
+import { KIND_TERMS, runLabel, TipSpan } from "./components/common";
 import { LaunchPanel } from "./components/LaunchPanel";
 import "./studies.css";
 
@@ -84,9 +87,11 @@ function Matrix({ pid }: { pid: string }) {
                 if (!cell) return <td key={c.id} className="cap">—</td>;
                 return (
                   <td key={c.id} data-col={c.id} data-state={cell.state}>
-                    <Link to={cellHref(run.id, c.id, cell)} title={cell.reason ?? undefined} aria-label={`${c.label} for ${run.label || run.id}: ${cell.state.replace(/_/g, " ")}${cell.reason ? ` (${cell.reason})` : ""}`}>
-                      <StatusChip status={cell.state === "running" && (cell.reason === "queued" || cell.reason === "blocked") ? cell.reason : cell.state} text={cellText(cell)} />
-                    </Link>
+                    <TipSpan tip={cell.reason ?? null}>
+                      <Link to={cellHref(run.id, c.id, cell)} aria-label={`${c.label} for ${run.label || run.id}: ${cell.state.replace(/_/g, " ")}${cell.reason ? ` (${cell.reason})` : ""}`}>
+                        <StatusChip status={cell.state === "running" && (cell.reason === "queued" || cell.reason === "blocked") ? cell.reason : cell.state} text={cellText(cell)} />
+                      </Link>
+                    </TipSpan>
                   </td>
                 );
               })}
@@ -144,17 +149,22 @@ function StudyList({ studies, runs }: { studies: Study[]; runs: Map<string, RunS
                       <Link to={`/studies/${enc(s.id)}`}>{label}</Link>
                       {s.origin === "imported" ? <span className="cap"> · imported</span> : null}
                     </td>
-                    <td>{KIND_LABELS[s.kind as StudyKind] ?? s.kind}</td>
+                    <td>
+                      {KIND_LABELS[s.kind as StudyKind] ?? s.kind}
+                      {KIND_TERMS[s.kind as StudyKind] ? <InfoTip term={KIND_TERMS[s.kind as StudyKind]!} technical={KIND_LABELS[s.kind as StudyKind]} /> : null}
+                    </td>
                     <td>{s.target_run_id ? <Link to={`${runHref(s.target_run_id, "trust")}#validation`}>{target ? runLabel(target) : s.target_run_id}</Link> : <span className="cap">project</span>}</td>
                     <td>
                       <span className="row" style={{ gap: 4 }}>
                         <StatusChip status={s.status} />
-                        {s.stale_vs.length ? <StatusChip status="stale" text={`stale vs ${s.stale_vs.length} run${s.stale_vs.length === 1 ? "" : "s"}`} /> : null}
+                        {s.stale_vs.length ? <StatusChip status="stale" text={`out of date for ${s.stale_vs.length} run${s.stale_vs.length === 1 ? "" : "s"}`} /> : null}
                       </span>
                     </td>
                     <td>{s.attached_runs.length ? `${s.attached_runs.length} run${s.attached_runs.length === 1 ? "" : "s"}` : <span className="cap">—</span>}</td>
                     <td className="r num">{s.children.length}</td>
-                    <td title={s.created_utc}>{fmtRelative(s.created_utc)}</td>
+                    <td>
+                      <TipSpan tip={fmtDateTime(s.created_utc)}>{fmtRelative(s.created_utc)}</TipSpan>
+                    </td>
                   </tr>
                 );
               })}
@@ -162,7 +172,7 @@ function StudyList({ studies, runs }: { studies: Study[]; runs: Map<string, RunS
           </table>
         </div>
       ) : (
-        <p className="cap">{studies.length ? "No study of this kind." : "No studies yet: start one from a run's Validation tab."}</p>
+        <p className="cap">{studies.length ? "No study of this kind." : "No studies yet: start one from a run's How much to trust this page."}</p>
       )}
     </div>
   );
@@ -182,8 +192,8 @@ export default function StudiesHub() {
       <header className="page-head">
         <h1 id="hub-title">Studies</h1>
         <p className="sx-intro">
-          Post-run actions and validation studies for every run of {project?.detail?.project.name ?? "this project"}. Open a cell to see its study, its live job, or the run's
-          Validation card to start it.
+          Independent checks and add-ons for every run of {project?.detail?.project.name ?? "this project"}. Open a cell to see its study, its live job, or the card on the run&apos;s
+          How much to trust this page that starts it.
         </p>
       </header>
       <Card title="Status by run" eyebrow="Matrix">
@@ -194,7 +204,8 @@ export default function StudiesHub() {
       </Card>
       <Card title="Effect benchmark" eyebrow="Project-wide" aria-label="Effect benchmark">
         <p className="cap" style={{ margin: 0 }}>
-          Plants a known canopy effect in a synthetic city and measures the share of it each model recovers. It needs no run.{" "}
+          Plants a known tree-cover effect in a made-up city and measures how much of it each model recovers. It needs no run.
+          <InfoTip term="benchmark" technical="Effect benchmark" />{" "}
           {lastBench ? (
             <>
               Last run: <Link to={`/studies/${enc(lastBench.id)}`}>{fmtDate(lastBench.created_utc)}</Link> ({lastBench.status}).

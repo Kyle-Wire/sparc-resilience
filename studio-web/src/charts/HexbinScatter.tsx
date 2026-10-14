@@ -196,7 +196,7 @@ function Plot(p: HexbinScatterProps & { b: Bins2D }) {
           fill="transparent"
           tabIndex={0}
           role="img"
-          aria-label={`${fmtInt(b.counts.flat().reduce((a, c) => a + c, 0))} cells binned; ${p.onBrush ? "drag to select a rectangle" : "hover for bin counts"}`}
+          aria-label={`${fmtInt(b.counts.flat().reduce((a, c) => a + c, 0))} places binned; ${p.onBrush ? "drag to select a rectangle" : "hover for bin counts"}`}
           style={{ cursor: p.onBrush ? "crosshair" : "default" }}
           onPointerDown={(e) => {
             if (!p.onBrush) return;
@@ -215,7 +215,7 @@ function Plot(p: HexbinScatterProps & { b: Bins2D }) {
             }
             const { i, j } = binAt(pt);
             const c = b.counts[i]?.[j] ?? 0;
-            ctx.tip(`${p.xLabel} ${fmtNum(b.x_edges[i], d)}–${fmtNum(b.x_edges[i + 1], d)}, ${p.yLabel} ${fmtNum(b.y_edges[j], d)}–${fmtNum(b.y_edges[j + 1], d)}: ${fmtInt(c)} cells`, e.clientX, e.clientY);
+            ctx.tip(`${p.xLabel} ${fmtNum(b.x_edges[i], d)}–${fmtNum(b.x_edges[i + 1], d)}, ${p.yLabel} ${fmtNum(b.y_edges[j], d)}–${fmtNum(b.y_edges[j + 1], d)}: ${fmtInt(c)} places`, e.clientX, e.clientY);
           }}
           onPointerLeave={() => ctx.untip()}
           onPointerUp={() => {
@@ -250,15 +250,15 @@ export function HexbinScatter(props: HexbinScatterProps) {
     props.legend ??
     (
       <>
-        <span>colour = cells per bin (log scale)</span>
+        <span>colour = number of places in each box (log scale)</span>
         {b.sel_counts ? (
           <span>
             <i className="box" style={{ background: "var(--s2)" }} />
-            selected cells
+            selected places
           </span>
         ) : null}
-        {props.diagonal ? <span>dashed = 1:1</span> : null}
-        {props.meanLine?.length ? <span>line = binned mean</span> : null}
+        {props.diagonal ? <span>dashed = equal values (1:1)</span> : null}
+        {props.meanLine?.length ? <span>line = average trend (mean per band)</span> : null}
       </>
     );
   return (

@@ -89,7 +89,10 @@ describe("plan view model", () => {
   it("phrases every reason of api.md §1", () => {
     expect(planReasonText("required_by:S6")).toBe("required by S6");
     expect(planReasonText("required_by:S2_S3")).toBe("required by S2–S3");
-    expect(planReasonText("disabled_by_config:cv.baselines")).toBe("disabled in the config (cv.baselines)");
+    // the checks on the trained models share S2–S3; the report has no stage number
+    expect(planReasonText("required_by:cv_curve")).toBe("required by S2–S3");
+    expect(planReasonText("required_by:finish")).toBe("required by the report");
+    expect(planReasonText("disabled_by_config:cv.baselines")).toBe("turned off in the project settings");
     expect(planReasonText("checkpoint")).toBe("from the checkpoint");
     expect(planReasonText("not_requested")).toBe("not requested");
     expect(planReasonText("requires_S5")).toBe("needs S5 (scenarios)");
@@ -102,13 +105,14 @@ describe("plan view model", () => {
     expect(views.map((v) => v.id)).toEqual(["S0", "S1", "S2_S3", "baselines", "cv_curve", "S4", "S5", "climate", "S6", "S7", "finish"]);
     const s4 = views.find((v) => v.id === "S4")!;
     expect(s4.reason).toBe("required by S6");
-    expect(s4.units).toBe("22 engine passes · 1 checkpoint save");
+    expect(s4.units).toBe("22 model passes · 1 model save");
     expect(s4.estimate).toBe("≈4–6 min");
     expect(views.find((v) => v.id === "S1")!.estimate).toBeNull();
     // sub-second nodes read "< 1 s", not "≈0.3 s"; short ones keep the point estimate
     expect(views.find((v) => v.id === "S0")!.estimate).toBe("< 1 s");
     expect(views.find((v) => v.id === "finish")!.estimate).toBe("≈2 s");
-    expect(unitSummary({ "base_fit:mgwr": 3, "base_fit:gam": 3, "causal_step:dml": 1 })).toBe("6 base fits · 1 causal step");
+    expect(unitSummary({ "base_fit:mgwr": 3, "base_fit:gam": 3, "causal_step:dml": 1 })).toBe("6 model fits · 1 cause-check step");
+    expect(unitSummary({ pareto: 2, causal_step: 6 })).toBe("2 budget passes · 6 cause-check steps");
   });
 
   it("a failed error-severity preflight blocks the launch; warnings do not", () => {

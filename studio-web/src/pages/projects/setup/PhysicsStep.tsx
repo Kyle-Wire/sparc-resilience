@@ -7,6 +7,8 @@ import { useInputs } from "../../../api/inputs";
 import { useProjectFiles } from "../../../api/projects";
 import { Button } from "../../../components/ui/Button";
 import { Card } from "../../../components/ui/Card";
+import { InfoTip } from "../../../components/ui/InfoTip";
+import { term } from "../../../content/glossary";
 import { Drawer } from "../../../components/ui/Drawer";
 import { NumberField } from "../../../components/ui/NumberField";
 import { Pill } from "../../../components/ui/Pill";
@@ -18,18 +20,18 @@ import { getPath, getRecord } from "../model/dotted";
 import { stepIssues } from "../model/steps";
 
 export const ROLES: readonly { role: string; label: string; hint: string }[] = [
-  { role: "canopy", label: "Tree canopy (%)", hint: "Shading and evapotranspiration" },
-  { role: "impervious", label: "Impervious surface (%)", hint: "Heat storage and runoff" },
-  { role: "albedo", label: "Albedo", hint: "Broadband reflectance" },
-  { role: "ndvi", label: "NDVI", hint: "Vegetation greenness" },
-  { role: "elevation", label: "Elevation", hint: "Lapse rate (m)" },
-  { role: "water_distance", label: "Distance to water", hint: "Cooling by water bodies (m)" },
+  { role: "canopy", label: "Tree canopy (%)", hint: "Shade, and cooling as leaves give off water" },
+  { role: "impervious", label: "Paved and built surface (%)", hint: "Stores heat; rain runs off (impervious surface)" },
+  { role: "albedo", label: "Surface reflectivity (albedo)", hint: "How much sunlight surfaces reflect, 0 to 1" },
+  { role: "ndvi", label: "Greenness (NDVI)", hint: "How green the vegetation is, from satellite images" },
+  { role: "elevation", label: "Elevation", hint: "Higher ground is cooler (m)" },
+  { role: "water_distance", label: "Distance to water", hint: "Cooling near rivers, lakes and the sea (m)" },
 ];
 
 /** The roles the placebo, simcheck, planner and emulator need. */
 export const KEY_ROLES = ["canopy", "impervious"] as const;
 
-export const MISSING_ROLES_TEXT = "placebo, simcheck, planner and emulator need these";
+export const MISSING_ROLES_TEXT = "fake-change tests, simulation checks, the planner pack and quick estimates need these";
 
 /** Key roles (canopy, impervious) without a predictor in the draft. */
 export function missingKeyRoles(roles: Record<string, unknown>): string[] {
@@ -45,12 +47,12 @@ function Wind() {
   const put = (a: number | null, b: number | null) => c.set("physics.wind", a === null && b === null ? undefined : [a ?? 0, b ?? 0]);
   return (
     <div className="field" data-cfg-path="physics.wind">
-      <span className="field-label">Wind vector [u, v] (m/s, towards east / north)</span>
+      <span className="field-label">Wind [u, v] (m/s, blowing towards east / north)</span>
       <div className="row">
         <NumberField label="Wind u (m/s)" value={u} onChange={(n) => put(n, w)} nullable unit="m/s" />
         <NumberField label="Wind v (m/s)" value={w} onChange={(n) => put(u, n)} nullable unit="m/s" />
       </div>
-      <span className="hint">Empty: taken from the forcing file when it has one, else no advection.</span>
+      <span className="hint">Empty: taken from the weather file when it has one; otherwise the wind does not carry heat between places (no advection).</span>
       <IssueLines issues={c.issues("physics.wind", true)} />
     </div>
   );
@@ -66,11 +68,11 @@ function ForcingLink() {
   const values = f && f.physics ? Object.entries(f.physics).filter(([, v]) => typeof v === "number" || typeof v === "string") : [];
   return (
     <div className="stack" style={{ gap: 8 }}>
-      <CfgSelect path="physics.forcing" label="Campaign forcing file" options={opts} none="none (use the values above)" missingNote="not among the project files" hint="A forcing JSON sets window, SW↓, LW net and wind from ERA5 and a station for the campaign day." />
+      <CfgSelect path="physics.forcing" label="Weather file for the measurement day (forcing)" options={opts} none="none (use the values above)" missingNote="not among the project files" hint="A weather file (forcing JSON) sets the time of day, sunshine, heat from the sky and wind for the measurement day, from ERA5 and a weather station." />
       {f && current && f.path === current ? (
         <div className="forcing-summary">
           <p className="cap">
-            {f.date ? `Campaign day ${f.date}. ` : ""}
+            {f.date ? `Measurement day ${f.date}. ` : ""}
             {f.linked ? "Linked into the config." : "Not linked yet."}
           </p>
           {values.length ? (
@@ -155,11 +157,14 @@ export function PhysicsStep() {
   return (
     <div className="stack setup-step" data-step="physics">
       <StepIssues issues={stepIssues("physics", c.draft.issues)} />
-      <Card title="Physical roles" eyebrow={`${mapped} of ${ROLES.length} mapped`}>
+      <Card
+        title="Which layer is which"
+        eyebrow={`Physical roles · ${mapped} of ${ROLES.length} chosen`}
+        tip={<InfoTip label="Which layer is which" text="Tell the built-in heat-physics model which of your map layers is tree canopy, paving and so on. It uses them to work out how surfaces heat up and cool down." technical="physics.roles" />}
+      >
         {missing.length ? (
           <div className="callout roles-warning" role="alert" data-missing={missing.join(",")}>
-            <strong>Missing {missing.join(" and ")} role{missing.length > 1 ? "s" : ""}:</strong> {MISSING_ROLES_TEXT}. Without {missing.length > 1 ? "them" : "it"} the placebo study, the
-            simulation check, the planner pack and the scenario emulator cannot run.
+            <strong>Missing {missing.join(" and ")} role{missing.length > 1 ? "s" : ""}:</strong> {MISSING_ROLES_TEXT}, and cannot run without {missing.length > 1 ? "them" : "it"}.
           </div>
         ) : null}
         <div className="grid3">
@@ -171,9 +176,9 @@ export function PhysicsStep() {
           <IssueLines issues={c.issues("physics.roles")} />
         </div>
       </Card>
-      <Card title="Forcing" eyebrow="Radiation and wind">
+      <Card title={term("forcing").label} eyebrow="Forcing · sunshine and wind" tip={<InfoTip term="forcing" />}>
         <div className="grid3">
-          <CfgToggle def path="physics.enabled" label="Fit the physics base model" />
+          <CfgToggle def path="physics.enabled" label="Use the built-in heat-physics model" />
           <CfgSeg
             path="physics.window"
             label="Measurement window"
@@ -183,8 +188,8 @@ export function PhysicsStep() {
             ]}
             fromValue={(v) => (v === "night" ? "night" : "day")}
           />
-          <CfgNumber path="physics.sw_down" label="Downward shortwave (SW↓)" unit="W/m²" />
-          <CfgNumber path="physics.lw_net" label="Net longwave" unit="W/m²" />
+          <CfgNumber path="physics.sw_down" label="Sunshine (downward shortwave, SW↓)" unit="W/m²" />
+          <CfgNumber path="physics.lw_net" label="Heat from the sky, net (net longwave)" unit="W/m²" />
           <Wind />
         </div>
         <ForcingLink />

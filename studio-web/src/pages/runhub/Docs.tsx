@@ -2,6 +2,7 @@
 // simcheck and benchmark markdown rendered with `marked` (raw HTML escaped by the foundation
 // Markdown). report.md is labelled "as of run end" (it is frozen). "Regenerate methods & model
 // card" starts the writeup job (POST /api/runs/{rid}/actions/writeup).
+// Plain words (phase 4): the "as of run end" chip explains itself in a tooltip (no native title).
 import { useState } from "react";
 import { errorMessage } from "../../api/client";
 import type { DocEntry, DocId } from "../../api/runs";
@@ -14,13 +15,13 @@ import { Link, runHref, useRoute } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtDateTime } from "../../theme/format";
-import { LiveBanner, useRid, useRunIsLive, type DetailPageProps } from "./common";
+import { LiveBanner, TipChip, useRid, useRunIsLive, type DetailPageProps } from "./common";
 
 const PRODUCER: Record<DocId, string> = {
   report: "the run itself (written at run end)",
   methods: "the writeup action",
   model_card: "the writeup action",
-  uncertainty: "the uncertainty report (attach studies on the Uncertainty tab)",
+  uncertainty: "the uncertainty report (attach studies in Model details › Uncertainty sources)",
   placebo: "the placebo study",
   multiverse: "the multiverse study",
   simcheck: "the simulation check study",
@@ -73,9 +74,9 @@ function DocBody({ rid, doc }: { rid: string; doc: DocEntry }) {
         </div>
         <div className="row">
           {frozen ? (
-            <Badge tone="warn" title="Written when the run finished; later post-run actions do not re-render it">
-              as of run end
-            </Badge>
+            <TipChip tip="Written when the run finished. Later post-run actions (studies, the planner pack) do not update it.">
+              <Badge tone="warn">as of run end</Badge>
+            </TipChip>
           ) : null}
           <span className="cap">updated {fmtDateTime(content.data.mtime || doc.mtime)}</span>
         </div>

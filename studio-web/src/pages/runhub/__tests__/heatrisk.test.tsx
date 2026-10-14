@@ -3,6 +3,7 @@
 // with each climate number shown once; the what-if dewpoint is page state shared with Today; Who
 // is exposed is the planner pack's exposure part, and its "where to act" part is a named export
 // What cools renders.
+import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearResources } from "../../../api/resource";
 import { navigate } from "../../../router";
@@ -87,7 +88,7 @@ describe("Heat risk", () => {
       const nav = container.querySelector('nav.section-nav[aria-label="Heat risk"]')!;
       expect([...nav.querySelectorAll("a")].map((a) => a.getAttribute("href"))).toEqual([`/r/${rid}/heat/today?dewpoint=21`, `/r/${rid}/heat/people`, `/r/${rid}/heat/future?dewpoint=21`]);
       await waitFor(() => container.querySelector('[aria-label="Exposure in each climate future"]'), 8000, "heat risk in each future");
-      await waitFor(() => container.querySelector('svg.chart[aria-label="Warming by scenario and period"]'), 8000, "warming chart");
+      await waitFor(() => container.querySelector('svg.chart[aria-label="Warming by emissions future and period"]'), 8000, "warming chart");
       const adapt = await waitFor(() => container.querySelector<HTMLElement>("#adapt [data-climate-adaptation]"), 8000, "Can adaptation keep up?");
       await flush(4);
 
@@ -95,18 +96,25 @@ describe("Heat risk", () => {
       const table = container.querySelector('[aria-label="Exposure in each climate future"]')!;
       expect([...table.querySelectorAll("thead th")].map((th) => th.textContent)).not.toContain("Warming (°F)");
       expect(table.textContent).not.toContain("Today");
-      expect(container.querySelector('[data-view="heat"]')!.textContent).toContain("dewpoint of 21.0 °C (your setting)");
+      // each future by emissions and period; the pathway code is only in the emissions words' tooltip
+      expect(table.textContent).toContain("Moderate emissions, mid-century (2041–2060)");
+      expect(table.textContent).not.toMatch(/SSP|ssp/);
+      const words = byText(table, 'button.term[data-term="ssp"]', "Moderate emissions")!;
+      act(() => words.focus());
+      expect(document.querySelector('[role="tooltip"] .tip-tech')!.textContent).toContain("SSP2-4.5, 2021–2040");
+      act(() => words.blur());
+      expect(container.querySelector('[data-view="heat"]')!.textContent).toContain("dew point of 70 °F (your setting)");
       expect(charts(container)).toContain("Residents by heat-risk category in each future");
       expect(charts(container)).not.toContain("Residents by heat-risk category");
       // the embedded Climate view: no offset gauges and no button down to the section below; the exposure spans the width
       const view = container.querySelector<HTMLElement>('[data-view="climate"]')!;
-      expect(charts(view)).not.toContain("Share of median warming offset");
-      expect(view.textContent).not.toContain("Warming offset");
+      expect(charts(view)).not.toContain("Warming cancelled");
+      expect(view.textContent).not.toContain("Warming cancelled");
       expect(view.querySelector("header a")).toBeNull();
-      const exposure = view.querySelector('figure.chart-frame[data-chart^="Share of cells at or above"]')!;
+      const exposure = view.querySelector('figure.chart-frame[data-chart^="Share of places with an air temperature at or above"]')!;
       expect(exposure.parentElement!.classList.contains("grid2")).toBe(false);
       // the Lab tool adds no second warming chart and asks the server nothing until a scenario is picked
-      expect(container.querySelectorAll('svg.chart[aria-label="Warming by scenario and period"]').length).toBe(1);
+      expect(container.querySelectorAll('svg.chart[aria-label="Warming by emissions future and period"]').length).toBe(1);
       expect(adapt.textContent).toContain("Pick one or more adaptations");
       expect(explored).toEqual([]);
       expect(adapt.querySelector('select[aria-label="Adaptation for the map"]')).toBeNull();
@@ -114,12 +122,12 @@ describe("Heat risk", () => {
       click(byText(adapt, "button.chip", "Downtown cool corridor")!);
       await waitFor(() => explored.length > 0, 5000, "explore with the adaptation");
       expect(explored.at(-1)).toMatchObject({ adaptations: [{ kind: "result", id: "res_1" }] });
-      await waitFor(() => adapt.querySelector('svg.chart[aria-label="Share of cells at or above 90.0 °F"]'), 5000, "the scenario × projection matrix");
-      expect(byText(adapt, "figure", "Cancels 41% of SSP2-4.5 2041–2060 median warming")).not.toBeNull();
+      await waitFor(() => adapt.querySelector('svg.chart[aria-label="Share of places with an air temperature at or above 90 °F"]'), 5000, "the scenario × projection matrix");
+      expect(byText(adapt, "figure", "Cancels out 41% of the warming expected by mid-century (2041–2060), with moderate emissions.")).not.toBeNull();
       // the adapted-future map offers the picked adaptations only (the unadapted map is above)
       const pick = await waitFor(() => adapt.querySelector<HTMLSelectElement>('select[aria-label="Adaptation for the map"]'), 5000, "adapted-future map");
       expect([...pick.options].map((o) => o.textContent)).toEqual(["Downtown cool corridor"]);
-      expect(container.querySelectorAll('svg.chart[aria-label="Warming by scenario and period"]').length).toBe(1);
+      expect(container.querySelectorAll('svg.chart[aria-label="Warming by emissions future and period"]').length).toBe(1);
       expect(unframedCharts(container)).toEqual([]);
       expect(container.textContent).not.toContain("could not be displayed");
     } finally {
@@ -138,7 +146,11 @@ describe("Heat risk", () => {
       const page = container.querySelector('[data-view="planner"]')!;
       expect(page.querySelector("h2")!.textContent).toBe("Who is exposed");
       expect(charts(page)).toEqual(expect.arrayContaining(["Residents exposed to heat", "Hot days per year"]));
-      expect(page.textContent).toContain("Person-mean temperature");
+      expect(page.textContent).toContain("Average temperature where people live");
+      // futures in plain words (the pathway code only in tooltips), and no native title tooltips
+      expect(page.textContent).toContain("Moderate emissions, mid-century (2041–2060)");
+      expect(page.textContent).not.toMatch(/SSP|ssp/);
+      expect(page.querySelector("[title]")).toBeNull();
       const titles = [...page.querySelectorAll("h3")].map((h) => h.textContent);
       for (const gone of ["Plantable space", "Zones", "Logger sites and before/after pairs", "GIS gallery"]) expect(titles).not.toContain(gone);
       expect(page.querySelector('[aria-label="GIS files"]')).toBeNull();

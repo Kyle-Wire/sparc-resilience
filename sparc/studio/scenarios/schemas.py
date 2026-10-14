@@ -363,6 +363,8 @@ class CausalLinear(BaseModel):
 class ConfiguredScenario(BaseModel):
     slug: str
     name: str
+    #: plain display name: a ladder scenario's lever and amount ("Trees & canopy +5 pts"), else ``name``
+    label: str | None = None
     city: Likely
     p10: float | None = None
     p90: float | None = None

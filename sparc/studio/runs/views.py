@@ -14,8 +14,11 @@ from typing import Any, Callable
 
 import numpy as np
 
+from sparc.core.glossary import label as gl
+from sparc.core.glossary import section as gl_section
 from sparc.studio.errors import ApiError
 from sparc.studio.runs.common import clean, fnum, likely
+from sparc.studio.runs.layers import plain_unit, scenario_labels
 
 log = logging.getLogger("sparc.studio.runs")
 
@@ -100,16 +103,17 @@ def _overview(ctx, env) -> dict:
     st = (ctx.metrics or {}).get("stacker") or {}
     qa = m.get("qa") or {}
     k = [
-        _kpi("r2", "Held-out R²", fnum(st.get("r2")), decimals=2,
-             note="computed from predictions.parquet while the run continues" if ctx.metrics_are_live else None),
-        _kpi("rmse", "Held-out RMSE", fnum(st.get("rmse")), unit=tu, decimals=2),
+        _kpi("r2", gl("r2"), fnum(st.get("r2")), decimals=2,
+             note="Provisional: worked out from the predictions so far, while the run continues."
+             if ctx.metrics_are_live else None),
+        _kpi("rmse", gl("rmse"), fnum(st.get("rmse")), unit=tu, decimals=2),
     ]
     cov, tgt = fnum(st.get("interval_coverage")), fnum(st.get("interval_target")) or 0.9
-    k.append(_kpi("coverage", "90% interval coverage", cov, fmt="percent", decimals=1, target=tgt,
+    k.append(_kpi("coverage", gl("coverage"), cov, fmt="percent", decimals=1, target=tgt,
                   target_label="target", tone=None if cov is None else ("good" if cov >= tgt - 0.02 else "warn")))
     hw = fnum(st.get("interval_mean_halfwidth"))
-    k.append(_kpi("halfwidth", "Interval half-width", hw, unit=tu, decimals=2,
-                  target=fnum(qa.get("target_rounding_noise_sd")), target_label="rounding-noise floor"))
+    k.append(_kpi("halfwidth", "Typical range width", hw, unit=tu, decimals=2,
+                  target=fnum(qa.get("target_rounding_noise_sd")), target_label=gl("noise_floor", lower=True)))
     rows = _scenario_rows(ctx)
     head = env.get("headline_scenario")
     if head:
@@ -119,19 +123,21 @@ def _overview(ctx, env) -> dict:
     joint = [r for r in rows if r["kind"] == "joint"]
     if joint:
         r = joint[0]
-        band = {"lo": r["causal"]["lo"], "hi": r["causal"]["hi"], "label": "causal check"} if r.get("causal") else None
+        band = {"lo": r["causal"]["lo"], "hi": r["causal"]["hi"], "label": gl("causal_band", lower=True)} \
+            if r.get("causal") else None
         k.append(_kpi("package", r["name"], r["delta"]["estimate"], unit=tu, fmt="delta", likely_=r["delta"],
                       band=band))
     clim = m.get("climate") or {}
     mid = next((p for p in clim.get("projections") or [] if p.get("experiment") == "ssp245"
                 and p.get("period") == "2041-2060"), None)
     if mid:
-        k.append(_kpi("warming", "Mid-century warming (SSP2-4.5, 2041–2060)",
+        em = (gl_section("emissions").get("ssp245") or {}).get("label") or "SSP2-4.5"
+        k.append(_kpi("warming", f"Mid-century warming ({em}, 2041–2060)",
                       fnum((mid.get("warming") or {}).get("median")), unit=tu, fmt="signed", decimals=1))
     opt = m.get("optimize") or {}
     if fnum(opt.get("realized_total_cooling")) is not None:
-        k.append(_kpi("budget", "Budget plan cooling (realised)", fnum(opt.get("realized_total_cooling")),
-                      unit=f"{tu}·cells", decimals=0, note=f"{opt.get('n_cells_treated')} cells treated"))
+        k.append(_kpi("budget", "Checked cooling from the budget plan", fnum(opt.get("realized_total_cooling")),
+                      unit=f"{tu}·places", decimals=0, note=f"{opt.get('n_cells_treated')} places treated"))
     timings = [{"stage": r["id"], "label": env["labels"].get(r["id"], r["id"]), "seconds": r["seconds"],
                 "state": r["state"], "reason": r["reason"]} for r in env["stage_rows"]]
     return {"kpis": k, "timings": timings, "flags": _flags(ctx) + env.get("run_flags", []),
@@ -191,28 +197,49 @@ def _study_headline(ctx, kind: str, summary: dict) -> str | None:
         levers = (m.get("emulator") or {}).get("levers") or {}
         rates = [fnum((v or {}).get("patch_pass_rate")) for v in levers.values() if isinstance(v, dict)]
         rates = [r for r in rates if r is not None]
-        return f"patch pass rate {min(rates):.0%}–{max(rates):.0%}" if rates else None
+        return (f"quick estimate matches the full model in {min(rates):.0%}–{max(rates):.0%} of test patches"
+                if rates else None)
     if kind == "uncertainty":
         n = len((m.get("uncertainty") or {}).get("scenarios") or [])
-        return f"envelopes for {n} scenarios" if n else None
+        return f"ranges from all sources of uncertainty for {n} scenarios" if n else None
     if kind == "placebo":
         pz = m.get("placebo") or summary
         if pz and pz.get("n_placebos"):
-            return (f"model {pz.get('n_pass_model') or 0}/{pz['n_placebos']} and causal "
-                    f"{pz.get('n_pass_causal') or 0}/{pz['n_placebos']} placebos passed")
+            return (f"fake-change tests passed: model {pz.get('n_pass_model') or 0}/{pz['n_placebos']}, "
+                    f"cause-and-effect check {pz.get('n_pass_causal') or 0}/{pz['n_placebos']}")
         return None
     if kind == "multiverse":
         mv = m.get("multiverse") or summary
         s = fnum((mv or {}).get("sign_stability_min"))
-        return f"sign stable in at least {s:.0%} of variants" if s is not None else None
+        return f"same direction in at least {s:.0%} of model versions" if s is not None else None
     if kind == "simcheck":
         bc = ((m.get("simcheck") or summary or {}).get("bias_correction") or {})
         r = bc.get("share_range")
-        return f"effect share {r[0]:.2f}–{r[-1]:.2f} of the truth" if r else None
+        return f"recovers {r[0]:.2f}–{r[-1]:.2f} times a known, planted effect" if r else None
     if kind == "reproduce":
         ok = summary.get("pass")
-        return None if ok is None else ("reproduced within tolerance" if ok else "did not reproduce")
+        return None if ok is None else ("a re-run gave the same results" if ok else "a re-run gave different results")
     return None
+
+
+#: the model card's fixed limitations (sparc/core/writeup.py), by their opening words, in plain words for a planner
+PLAIN_LIMITATIONS = (
+    ("Daytime (afternoon) model of one campaign day", "Describes one hot afternoon; it says nothing about night-time heat."),
+    ("Effects are associations adjusted for",
+     "The cooling estimates come from patterns in the data. Things the data does not record, such as building shade, "
+     "watering or traffic heat, could push them up or down."),
+    ("Scenario cells outside the observed combination",
+     "Where a scenario pushes places beyond anything measured in the city, its result is less certain (the share is "
+     "shown with each result)."),
+    ("Physics forcing is generic",
+     "The built-in heat-physics model used typical weather, not the measured day's: fetch the day's weather in Set up."),
+)
+
+
+def plain_limitation(text: str) -> str:
+    """A model-card limitation in plain words: the write-up's fixed sentences are replaced, others are kept."""
+    t = text.strip()
+    return next((plain for start, plain in PLAIN_LIMITATIONS if t.startswith(start)), t)
 
 
 def _limitations(ctx) -> list[str]:
@@ -225,7 +252,7 @@ def _limitations(ctx) -> list[str]:
             for line in m.group(1).splitlines():
                 mm = re.match(r"^\s*[-*]\s+(.*)$", line)
                 if mm:
-                    out.append(mm.group(1).strip())
+                    out.append(plain_limitation(mm.group(1)))
     for c in (ctx.cfg_raw.get("report") or {}).get("limitations") or []:
         out.append(str(c))
     return out
@@ -309,7 +336,8 @@ def _data(ctx, env) -> dict:
 # ---------------------------------------------------------------------------
 
 _MODEL_LABELS = {"ols": "Linear regression (OLS)", "mgwr": "Multiscale GWR", "gwrf": "Geographic random forest",
-                 "gam": "GAM", "physics": "Physics model", "base_mean": "Equal-weight mean", "stacker": "Stack"}
+                 "gam": "GAM", "physics": "Physics model", "base_mean": "Simple average of the models",
+                 "stacker": gl("stacker")}
 _PHYS = [("L_m", "Relaxation length", "m"), ("a", "Physics amplitude", None), ("s", "Shade efficiency", None),
          ("a1", "Albedo coefficient", None), ("kappa_canopy", "Canopy shade rate", None), ("b", "Impervious term", None),
          ("gamma", "Elevation lapse", None), ("w", "Water influence scale", "m"), ("train_r2", "In-fold R²", None)]
@@ -355,7 +383,7 @@ def _accuracy(ctx, env) -> dict:
             by_zone = []
         if "fold" in pred.columns:
             f = pred["fold"].to_numpy()
-            by_fold = [_box(r[f == k2], f"Fold {int(k2) + 1}") for k2 in sorted(set(f.tolist()))]
+            by_fold = [_box(r[f == k2], f"{gl('held_out_fold')} {int(k2) + 1}") for k2 in sorted(set(f.tolist()))]
     st = metrics.get("stacker") or {}
     honesty = None
     if st:
@@ -367,7 +395,8 @@ def _accuracy(ctx, env) -> dict:
                      "adaptive": fnum(v.get("adaptive")), "halfwidth_global": fnum(v.get("halfwidth_global")),
                      "halfwidth_adaptive": fnum(v.get("halfwidth_adaptive"))} for k2, v in d.items()]
 
-        by_fold_rows = rows("by_fold", lambda k2: f"Fold {int(k2) + 1}" if str(k2).isdigit() else str(k2))
+        by_fold_rows = rows("by_fold", lambda k2: f"{gl('held_out_fold')} {int(k2) + 1}" if str(k2).isdigit()
+                            else str(k2))
         by_dist = rows("by_distance", str)
         by_zone_rows = rows("by_zone", str)
         if not diag and pred is not None and {"pi_lo", "pi_hi", "target"} <= set(pred.columns):
@@ -419,8 +448,8 @@ def _accuracy(ctx, env) -> dict:
     advection = None
     if isinstance(adv, dict):
         kept = adv.get("kept")
-        verdict = ("advection kept: it lowers the held-out error" if kept else
-                   "no advection: it does not beat v = 0 out of fold")
+        verdict = ("Wind term kept: it lowers the error in test areas." if kept else
+                   "No wind term: it does not lower the error in test areas (v = 0 does as well).")
         advection = {"verdict": verdict, "selected": kept,
                      "fold_delta_rmse": [fnum(x) for x in adv.get("per_fold_delta_rmse") or []]}
     ph = (ctx.cfg_raw.get("physics") or {})
@@ -465,7 +494,7 @@ def _live_honesty(pred) -> tuple[list[dict], list[dict]]:
     by_fold = []
     if "fold" in pred.columns:
         f = pred["fold"].to_numpy()
-        by_fold = [row(f == k, f"Fold {int(k) + 1}") for k in sorted(set(f.tolist()))]
+        by_fold = [row(f == k, f"{gl('held_out_fold')} {int(k) + 1}") for k in sorted(set(f.tolist()))]
     by_dist = []
     if "dist_train_m" in pred.columns:
         d = pred["dist_train_m"].to_numpy(float)
@@ -489,7 +518,7 @@ def _distance(ctx, env) -> dict:
         rand = [r for r in rows if str(r.get("label", "")).startswith("random")]
         blocks = [r for r in rows if r not in rand]
         blocks.sort(key=lambda r: float(r.get("block_m") or 0))
-        series = [{"id": "stack", "label": "Stack", "kind": "stack",
+        series = [{"id": "stack", "label": gl("stacker"), "kind": "stack",
                    "values": [fnum((r.get("stacker") or {}).get("r2")) for r in blocks],
                    "lo": [fnum(r.get("fold_r2_min")) for r in blocks], "hi": [fnum(r.get("fold_r2_max")) for r in blocks]}]
         names = []
@@ -611,7 +640,8 @@ def _response(ctx, env) -> dict:
 def _tier(frac) -> str | None:
     if frac is None:
         return None
-    return "in support" if frac <= 0.05 else "partly outside observed conditions" if frac <= 0.2 else "extrapolated"
+    return ("within measured conditions" if frac <= 0.05 else "partly beyond measured conditions" if frac <= 0.2
+            else gl("extrapolated", lower=True))
 
 
 def _scenario_rows(ctx) -> list[dict]:
@@ -634,6 +664,7 @@ def _scenario_rows(ctx) -> list[dict]:
     from sparc.studio.runs.heat import verdict_map
 
     verdicts = verdict_map(ctx)
+    labels = scenario_labels(ctx)       # plain display names of ladder scenarios ("Trees & canopy +5 pts")
     out = []
     for s in sc:
         if not isinstance(s, dict) or not s.get("name"):
@@ -643,7 +674,8 @@ def _scenario_rows(ctx) -> list[dict]:
         single = spec is not None and len(spec.interventions) == 1 and spec.variable is not None
         cl = s.get("causal_linear")
         out.append({
-            "slug": slugs.get(name) or name, "name": name, "kind": "single" if single else "joint",
+            "slug": slugs.get(name) or name, "name": name, "label": labels.get(name) or name,
+            "kind": "single" if single else "joint",
             "lever": spec.variable if single else None, "dose": fnum(spec.dose) if single else None,
             "delta": likely(s.get("mean_delta"), s.get("mean_delta_se"), tu, what="the city") or
             likely(0.0, None, tu),
@@ -808,12 +840,12 @@ def _causal(ctx, env) -> dict:
 
         forest = []
         if dml.get("theta"):
-            forest.append(f("dml", "DML (own cell)", (dml.get("theta") or [None])[0],
+            forest.append(f("dml", "On the spot (DML check)", (dml.get("theta") or [None])[0],
                             (dml.get("se_cluster") or [None])[0], me.get("own_slope")))
         if sp:
-            forest += [f("theta_own", "Own cell", sp.get("theta_own"), sp.get("se_own"), me.get("own_slope")),
-                       f("theta_nbr", "Neighbours", sp.get("theta_nbr"), sp.get("se_nbr"), _nbr_slope(me)),
-                       f("theta_sum", "Own + neighbours", sp.get("theta_sum"), sp.get("se_sum"),
+            forest += [f("theta_own", "On the spot", sp.get("theta_own"), sp.get("se_own"), me.get("own_slope")),
+                       f("theta_nbr", "Nearby places", sp.get("theta_nbr"), sp.get("se_nbr"), _nbr_slope(me)),
+                       f("theta_sum", "On the spot + nearby", sp.get("theta_sum"), sp.get("se_sum"),
                          me.get("adoption_slope"))]
         audit = [{"check": k2, "label": k2.replace("_", " "), "verdict": str(v.get("verdict")),
                   "flag": bool(v.get("flag")), "model": fnum(v.get("model")), "causal": fnum(v.get("causal"))}
@@ -855,7 +887,7 @@ def _causal(ctx, env) -> dict:
                                  str(v.get("verdict")) if isinstance(v, dict) else None])
     flags = [{"treatment": str(f.get("treatment")), "check": str(f.get("check")), "verdict": str(f.get("verdict"))}
              for f in c.get("flags") or [] if isinstance(f, dict)]
-    dag = _table([("treatment", "Treatment", None), ("check", "Check", None), ("result", "Result", None)],
+    dag = _table([("treatment", "Lever", None), ("check", "Check", None), ("result", "Result", None)],
                  dag_rows) if dag_rows else None
     return {"treatments": out, "flags": flags, "dag_audit": dag}
 
@@ -875,28 +907,28 @@ def _budget(ctx, env) -> dict:
     lu = (ctx.units.get("levers") or {}).get(var, "")
     status = str(o.get("status") or "ok")
     if status != "ok" and o.get("planned_total_cooling") is None:
-        return {"kpis": [], "pareto": None, "caption": "No cell has a positive cooling footprint for this lever, so "
-                "the optimiser had nothing to allocate.", "top_cells": [], "status": status}
+        return {"kpis": [], "pareto": None, "caption": "No place cools when this lever changes, so the budget plan "
+                "has nowhere to spend the budget.", "top_cells": [], "status": status}
     planned, realised = fnum(o.get("planned_total_cooling")), fnum(o.get("realized_total_cooling"))
     kpis = [
-        _kpi("cells", "Cells treated", o.get("n_cells_treated"), fmt="int", decimals=0),
-        _kpi("mean_dose", "Mean dose (treated)", fnum(o.get("mean_dose_treated")), unit=lu, decimals=1),
-        _kpi("planned", "Planned cooling", planned, unit=f"{tu}·cells", decimals=0),
-        _kpi("realised", "Realised cooling (closed loop)", realised, unit=f"{tu}·cells", decimals=0,
-             note="spillover non-additivity" if planned and realised and abs(realised - planned) > 0.05 * abs(planned)
-             else None),
-        _kpi("cost", "Cost", fnum(o.get("total_cost")), decimals=0),
-        _kpi("gini", "Gini of the allocation", fnum(o.get("gini")), decimals=2),
-        _kpi("constraint", "Constraint", o.get("constraint"), fmt="text"),
-        _kpi("objective", "Objective", o.get("objective"), fmt="text"),
+        _kpi("cells", "Places treated", o.get("n_cells_treated"), fmt="int", decimals=0),
+        _kpi("mean_dose", "Average change where treated", fnum(o.get("mean_dose_treated")), unit=plain_unit(lu),
+             decimals=1),
+        _kpi("planned", "Planned cooling", planned, unit=f"{tu}·places", decimals=0),
+        _kpi("realised", "Checked cooling (full model)", realised, unit=f"{tu}·places", decimals=0,
+             note=_realised_note(planned, realised)),
+        _kpi("cost", "Cost", fnum(o.get("total_cost")), unit=gl("cost_units", lower=True), decimals=0),
+        _kpi("gini", gl("gini"), fnum(o.get("gini")), decimals=2, note="0 = shared evenly, 1 = one place gets it all"),
+        _kpi("constraint", "Limit", plain_constraint(o.get("constraint")), fmt="text"),
+        _kpi("objective", "Goal", plain_objective(o.get("objective")), fmt="text"),
     ]
     pts = ((o.get("pareto") or {}).get("points") or [])
     points = [{"budget": float(p["budget"]), "total_benefit": fnum(p.get("total_benefit")),
                "n_segments": p.get("n_segments"), "gini": fnum(p.get("gini"))} for p in pts if p.get("budget") is not None]
     budget = fnum(o.get("budget"))
     pareto = {"points": points, "realised": [{"budget": budget, "total_benefit": realised}]
-              if budget is not None and realised is not None else None, "budget": budget, "unit": f"{tu}·cells",
-              "budget_unit": "cost units"}
+              if budget is not None and realised is not None else None, "budget": budget, "unit": f"{tu}·places",
+              "budget_unit": gl("cost_units", lower=True)}
     caption = _pareto_caption(points, budget, tu)
     top = []
     al = ctx.parquet("allocation.parquet")
@@ -917,19 +949,52 @@ def _budget(ctx, env) -> dict:
     return {"kpis": kpis, "pareto": pareto, "caption": caption, "top_cells": top, "status": status}
 
 
+_PLANTABLE = re.compile(r"plantable space \((?:WorldCover )?open land \+ (\d+%) of built-up area\)")
+
+
+def plain_constraint(text):
+    """A budget plan's limit in plain words (runs written before Phase 4 hold the pipeline's wording):
+    "plantable space (WorldCover open land + 20% of built-up area)" → "open ground that can take trees, plus
+    20% of built-up ground"."""
+    if not isinstance(text, str) or not text:
+        return text
+    s = _PLANTABLE.sub(lambda m: f"open ground that can take trees, plus {m.group(1)} of built-up ground", text)
+    s = re.sub(r"within the selected region \(([\d,]+) cells\)", r"only in the selected area (\1 places)", s)
+    return {"unconstrained (no plantable-space layer)": "no planting-space limit",
+            "unconstrained (bounds and headroom only)": "no limit beyond what each place can take"}.get(s, s)
+
+
+def plain_objective(text):
+    """A budget plan's goal in plain words ("resident-weighted cooling (HRSL)" → "cooling where people live")."""
+    if not isinstance(text, str):
+        return text
+    return {"resident-weighted cooling (HRSL)": "cooling where people live (weighted by residents)"}.get(text, text)
+
+
+def _realised_note(planned, realised) -> str | None:
+    """Why the full-model check differs from the plan, the right way round (None when they agree within 5%)."""
+    if not planned or realised is None or abs(realised - planned) <= 0.05 * abs(planned):
+        return None
+    if realised > planned:
+        return "Higher than planned: the full model also counts cooling that spreads to nearby places."
+    return "Lower than planned: neighbouring changes overlap, so their cooling does not simply add up."
+
+
 def _pareto_caption(points: list[dict], budget, tu) -> str:
     """'Doubling the budget …' from the Pareto points (computed, never hard-coded)."""
     by = {p["budget"]: p["total_benefit"] for p in points if p["total_benefit"] is not None}
     if budget is not None and budget in by and 2 * budget in by and by[budget]:
         gain = by[2 * budget] / by[budget]
-        return (f"Doubling the budget from {budget:,.0f} to {2 * budget:,.0f} multiplies the planned cooling by "
-                f"{gain:.2f}× (open loop) — {'diminishing' if gain < 2 else 'no diminishing'} returns. "
-                "Points count segments, not cells.")
+        more = "each extra unit of budget cools less" if gain < 2 else "returns do not diminish"
+        return (f"Doubling the budget from {budget:,.0f} to {2 * budget:,.0f} gives {gain:.2f}× the planned cooling, "
+                f"so {more}. Planned cooling adds up each place's own response, before the full-model check. "
+                "Each point is one budget; several steps can land in the same place.")
     if len(by) >= 2:
         b = sorted(by)
-        return (f"Planned cooling rises from {by[b[0]]:,.0f} to {by[b[-1]]:,.0f} {tu}·cells as the budget goes from "
-                f"{b[0]:,.0f} to {b[-1]:,.0f} (open loop; points count segments, not cells).")
-    return "Open-loop planned cooling per budget level."
+        return (f"Planned cooling rises from {by[b[0]]:,.0f} to {by[b[-1]]:,.0f} {tu}·places as the budget goes from "
+                f"{b[0]:,.0f} to {b[-1]:,.0f}. Planned cooling adds up each place's own response, before the "
+                "full-model check. Each point is one budget; several steps can land in the same place.")
+    return "Planned cooling at each budget level, before the full-model check."
 
 
 # ---------------------------------------------------------------------------
@@ -947,8 +1012,9 @@ def _planner(ctx, env) -> dict:
     tk = [_tkey(t) for t in thresholds]
     exp_groups, pm_rows = [], []
     for r in p.get("exposure") or []:
-        label = f"{r.get('case')}{' (adapted)' if r.get('adapted') else ''}"
-        exp_groups.append({"id": label, "label": label,
+        gid = f"{r.get('case')}{' (adapted)' if r.get('adapted') else ''}"
+        label = f"{r.get('case')}{' (with the cooling package)' if r.get('adapted') else ''}"
+        exp_groups.append({"id": gid, "label": label,
                            "share": [fnum(r.get(f"share_people_ge_{t}")) for t in tk]})
         pm_rows.append([str(r.get("case")), bool(r.get("adapted")), fnum(r.get("person_mean_temp"))])
     hd = p.get("hot_days") or {}
@@ -967,10 +1033,12 @@ def _planner(ctx, env) -> dict:
                                               else None for mm in measures}} for i in range(nq)]
     conc = [{"label": mm, "value": fnum((eq[mm] or {}).get("concentration_index"))} for mm in measures]
     pl = p.get("plantable") or {}
-    plantable = [_kpi("headroom", "Mean plantable headroom", fnum(pl.get("mean_headroom_pp")), unit="pp", decimals=1),
-                 _kpi("total", "Total plantable headroom", fnum(pl.get("total_pp_cells")), unit="pp·cells", decimals=0),
-                 _kpi("no_room", "Cells with no room", fnum(pl.get("share_cells_no_room")), fmt="percent", decimals=1),
-                 _kpi("paved", "Paved share assumed plantable", fnum(pl.get("paved_share")), fmt="percent",
+    space = gl("headroom", lower=True)
+    plantable = [_kpi("headroom", f"Average {space}", fnum(pl.get("mean_headroom_pp")), unit="pp", decimals=1),
+                 _kpi("total", f"Total {space}", fnum(pl.get("total_pp_cells")), unit="pp·cells", decimals=0),
+                 _kpi("no_room", "Places with no room to plant", fnum(pl.get("share_cells_no_room")), fmt="percent",
+                      decimals=1),
+                 _kpi("paved", "Share of paving counted as plantable", fnum(pl.get("paved_share")), fmt="percent",
                       decimals=0)] if pl else []
     zrows = p.get("zones") or []
     zcols = list(zrows[0].keys()) if zrows else []
@@ -1012,8 +1080,8 @@ def _planner(ctx, env) -> dict:
         f = ctx.run_dir / "planner" / "hexagons.gpkg"
         gis.append({"relpath": "planner/hexagons.gpkg", "kind": "gpkg", "bytes": f.stat().st_size, "layer": None})
     return {"exposure": {"thresholds": thresholds, "groups": exp_groups},
-            "person_mean": _table([("case", "Case", None), ("adapted", "Adapted", None),
-                                   ("person_mean_temp", "Person-mean temperature", tu)], pm_rows),
+            "person_mean": _table([("case", "Case", None), ("adapted", "With the cooling package", None),
+                                   ("person_mean_temp", "Average temperature where people live", tu)], pm_rows),
             "hot_days": {"unit": "days/yr", "panels": list(panels.values())} if panels else None,
             "equity": {"measures": measures, "quintiles": quint, "concentration": conc} if measures else None,
             "plantable": plantable, "zones": zones, "hex_files": hex_files, "sites": sites, "pairs": pairs,
@@ -1038,8 +1106,9 @@ def _uncertainty(ctx, env) -> dict:
     taken: set[str] = set()
     for s in u.get("scenarios") or []:
         layers = []
-        for key, label in (("estimation_95", "Estimation (95%)"), ("specification", "Specification"),
-                           ("attribution", "Attribution"), ("causal_band", "Causal band"), ("envelope", "Envelope")):
+        for key, label in (("estimation_95", gl("estimation")), ("specification", gl("specification")),
+                           ("attribution", gl("attribution")), ("causal_band", gl("causal_band")),
+                           ("envelope", gl("envelope"))):
             v = s.get(key)
             if isinstance(v, (list, tuple)) and len(v) == 2:
                 layers.append({"id": key, "label": label, "lo": fnum(v[0]), "hi": fnum(v[1])})
@@ -1049,8 +1118,10 @@ def _uncertainty(ctx, env) -> dict:
                      "verdict": verdicts.get(str(s.get("scenario")))})
     tu = ctx.units.get("target")
     clim = u.get("climate") or []
-    ctab = _table([("experiment", "Scenario", None), ("period", "Period", None), ("n_models", "Models", None),
-                   ("median", "Median", tu), ("p10", "p10", tu), ("p90", "p90", tu), ("min", "Min", tu), ("max", "Max", tu)],
+    ctab = _table([("experiment", gl("ssp"), None), ("period", gl("climate_period"), None),
+                   ("n_models", "Climate models", None), ("median", "Median warming", tu),
+                   ("p10", "10th percentile", tu), ("p90", "90th percentile", tu), ("min", "Lowest", tu),
+                   ("max", "Highest", tu)],
                   [[c.get("label") or c.get("experiment"), c.get("period"), c.get("n_models"), fnum(c.get("median")),
                     fnum(c.get("p10")), fnum(c.get("p90")), fnum(c.get("min")), fnum(c.get("max"))] for c in clim]) \
         if clim else None
@@ -1097,7 +1168,7 @@ def _uncertainty_sources(ctx, u: dict, index: list[dict]) -> list[dict]:
     if (ctx.manifest or {}).get("placebo"):
         row = next((r for r in index if r["kind"] == "placebo" and (r.get("attached") or
                                                                     r.get("target_run_id") == ctx.run_id)), None)
-        add("placebo", "placebo.json (attached)", row, True)
+        add("placebo", f"{gl('placebo')} (attached)", row, True)
     for r in index:
         if r["kind"] in kinds and r["id"] not in used:
             label = ((r.get("summary") or {}).get("label") if isinstance(r.get("summary"), dict) else None) or \

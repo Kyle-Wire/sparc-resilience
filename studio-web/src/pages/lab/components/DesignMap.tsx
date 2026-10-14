@@ -16,8 +16,9 @@ import { getResultLayer, type Lever, type PreviewResult, type ResultField } from
 import type { LayerGroup, LayerMeta } from "../../../api/types";
 import { NumberField } from "../../../components/ui/NumberField";
 import { Seg } from "../../../components/ui/Seg";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { MapView, type MapSelectionEvent } from "../../../map/MapView";
-import { runLayerLoader, type LayerValues } from "../../../map/data";
+import { runLayerLoader, withoutPerModelLayers, type LayerValues } from "../../../map/data";
 import type { GridData } from "../../../map/grid";
 import { BRUSH_RADII_M, type BrushSettings } from "../../../map/tools/brush";
 import type { PickMode } from "../../../map/tools/pick";
@@ -52,9 +53,15 @@ export const brushKey = (lever: string) => `lab:brush:${lever}`;
 /** Layer groups a planner sees on the Design map (expert mode shows the whole run catalogue). */
 export const PLANNER_GROUPS: readonly string[] = ["design", "temperature", "planner", "result"];
 
-/** The planner's groups, plus the group of the layer on show (a `?layer=` link may name any layer). */
+/**
+ * The planner's groups, plus the group of the layer on show (a `?layer=` link may name any layer).
+ * Per-model layers (`oof_*`, `resid_*`) are left out unless on show: they belong to expert mode.
+ */
 export function plannerGroups(groups: readonly LayerGroup[], current: string | null): LayerGroup[] {
-  return groups.filter((g) => PLANNER_GROUPS.includes(g.id) || (current !== null && g.layers.some((l) => l.key === current)));
+  return withoutPerModelLayers(
+    groups.filter((g) => PLANNER_GROUPS.includes(g.id) || (current !== null && g.layers.some((l) => l.key === current))),
+    current,
+  );
 }
 
 /** Plain words of the map's Pick setting (the pick tool picks a zone or a hexagon of this size). */
@@ -230,9 +237,10 @@ export function DesignMap(p: DesignMapProps) {
     <>
       {hatchKey ? (
         // one line: the hatch swatch and what it means (the right pane carries the trust message)
-        <p className="qe-key" role="note" aria-label="Map key" data-hatch-key="true" title={hatchKey.note}>
+        <p className="qe-key" role="note" aria-label="Map key" data-hatch-key="true">
           <span className="qe-hatch" aria-hidden="true" />
           {hatchKey.label}
+          <InfoTip term="hatched" label={hatchKey.label.toLowerCase()} text={hatchKey.note} />
         </p>
       ) : null}
       {p.showPreviewCard === false ? null : (

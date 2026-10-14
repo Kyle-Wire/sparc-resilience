@@ -12,6 +12,8 @@ import { ConfirmDialog } from "../../../components/ui/Dialog";
 import { copyText, downloadText } from "../../../components/ui/download";
 import { ProgressBar } from "../../../components/ui/ProgressBar";
 import { StatusChip } from "../../../components/ui/StatusChip";
+import { term } from "../../../content/glossary";
+import { DemoTag, runModeTerm, TipSpan } from "../../../layouts/tips";
 import { Link, navigate } from "../../../router";
 import { useJobs } from "../../../stores/jobs";
 import { DIAG_EVENTS, toContract, type TrackerState } from "../../../stores/tracker";
@@ -92,6 +94,7 @@ export function Header({
   const pid = workerPid(state);
   const r = state.run;
   const mode = run ? modeLabel(run.mode, run.coarse_m) : r && typeof r.fast === "boolean" ? (r.coarse ? `COARSE ${Math.round(r.coarse)}` : r.fast ? "FAST" : "FULL") : null;
+  const modeTerm = runModeTerm(run ? run.mode : r && typeof r.fast === "boolean" ? (r.coarse ? "coarse" : r.fast ? "fast" : "full") : null);
   const isRun = job.kind === "run.core" || job.kind === "run.external";
 
   const act = async (what: string, fn: () => Promise<Job>, after?: (j: Job) => void) => {
@@ -115,8 +118,12 @@ export function Header({
     <header className="card mc-head" aria-label="Job">
       <div className="mc-title">
         <h1>{job.label || job.kind}</h1>
-        {mode ? <Badge tone="mode">{mode}</Badge> : null}
-        {run?.demo ? <Badge tone="demo">DEMO</Badge> : null}
+        {mode ? (
+          <TipSpan tip={modeTerm ? `${term(modeTerm).label} run: ${term(modeTerm).tip}` : null} technical={modeTerm ? term(modeTerm).technical : null}>
+            <Badge tone="mode">{mode}</Badge>
+          </TipSpan>
+        ) : null}
+        {run?.demo ? <DemoTag /> : null}
         <StatusChip status={job.status} />
         {job.blocked ? <span className="cap">blocked: {job.blocked.reason}</span> : null}
       </div>
@@ -132,29 +139,29 @@ export function Header({
           </span>
         ) : null}
         <span>
-          Kind <b>{job.kind}</b>
+          Kind of work <b className="mono">{job.kind}</b>
         </span>
         <span>
           Elapsed <b>{fmtDuration(elapsed)}</b>
         </span>
         {!final ? (
           <span>
-            ETA <b>{fmtEta(eta.eta_s, eta.eta_lo, eta.eta_hi)}</b>
+            Time left <b>{fmtEta(eta.eta_s, eta.eta_lo, eta.eta_hi)}</b>
           </span>
         ) : null}
         {job.threads ? (
           <span>
-            Threads <b>{job.threads}</b>
+            {term("threads").label} <b>{job.threads}</b>
           </span>
         ) : null}
         {pid !== null ? (
           <span>
-            pid <b>{pid}</b>
+            Process id <b>{pid}</b>
           </span>
         ) : null}
         {job.exit_code !== null ? (
           <span>
-            exit <b>{job.exit_code}</b>
+            Exit code <b>{job.exit_code}</b>
           </span>
         ) : null}
       </div>

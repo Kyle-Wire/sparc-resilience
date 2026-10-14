@@ -190,26 +190,27 @@ describe("Check across runs output", () => {
     expect(latestAcross([acrossJob("j4", "sc_a", "failed")], "sc_a").done).toBeNull();
   });
 
-  it("plots the run means with sign stability and spread, and lists refused runs", async () => {
+  it("plots the run means with how often the direction holds and the spread, and lists refused runs", async () => {
     fetchMock = mockFetch({ "GET /api/jobs": { body: { items: [acrossJob("j1", "sc_a", "succeeded", RESULT)], next_cursor: null } } });
     const { container } = render(<AcrossRunsPanel pid={PID} sid="sc_a" unit="degF" />);
     await waitFor(() => container.querySelector('svg.chart[aria-label="The same scenario on other runs"]'), 5000, "dot plot");
     expect(fetchMock.calls[0].url).toBe(`/api/jobs?kind=scenario.across_runs&project=${PID}&limit=100`);
-    expect(container.textContent).toContain("2 of 3 runs evaluated");
-    expect(container.textContent).toContain("Sign stability 100%");
+    expect(container.textContent).toContain("2 of 3 runs worked it out");
+    expect(container.textContent).toContain("Same direction on 100% of them");
+    expect(container.querySelector('button.infotip[data-term="specification"]')).not.toBeNull();
     expect(byText(container, ".edit-issues li", "r_old: no checkpoint")).not.toBeNull();
     // without the shown result's content the spread is not called its band
-    expect(container.textContent).not.toContain("the specification band of this result");
+    expect(container.textContent).not.toContain("(this result's range across runs)");
   });
 
-  it("calls the spread the result's specification band only for a check of the result's content", async () => {
-    expect(bandNote("h_a", "h_a")).toBe("the specification band of this result");
-    expect(bandNote("h_a", "h_b")).toMatch(/earlier version of the scenario, not this result's specification band/);
-    expect(bandNote(undefined, "h_a")).toMatch(/not this result's specification band/);
+  it("calls the spread the result's range across runs only for a check of the result's content", async () => {
+    expect(bandNote("h_a", "h_a")).toBe("this result's range across runs");
+    expect(bandNote("h_a", "h_b")).toMatch(/earlier version of the scenario, not this result's range across runs/);
+    expect(bandNote(undefined, "h_a")).toMatch(/not this result's range across runs/);
     fetchMock = mockFetch({ "GET /api/jobs": { body: { items: [acrossJob("j1", "sc_a", "succeeded", RESULT)], next_cursor: null } } });
     const { container } = render(<AcrossRunsPanel pid={PID} sid="sc_a" unit="degF" contentHash="h_a" />);
     await waitFor(() => container.querySelector('svg.chart[aria-label="The same scenario on other runs"]'), 5000, "dot plot");
-    expect(container.textContent).toContain("(the specification band of this result)");
+    expect(container.textContent).toContain("(this result's range across runs)");
   });
 });
 
@@ -272,7 +273,7 @@ describe("Result view heat risk", () => {
     const { container } = render(<ResultView rid={RID} resId="res_h" pid={PID} unit="degF" nFolds={3} />);
     // the card's fact: residents moved out of Extreme caution today (shown only there)
     const fact = await waitFor(() => container.querySelector('.answer-fact[data-fact="heat"]'), 5000, "heat fact");
-    expect(fact.textContent).toContain("Residents out of Extreme caution");
+    expect(fact.textContent).toContain("Residents no longer at Extreme caution or worse");
     expect(fact.textContent).toContain("32,941");
     // today: before → after, no "moved out" column (that is the card's number)
     openSection(container, "heat");
@@ -289,15 +290,24 @@ describe("Result view heat risk", () => {
     expect(humidityNote({ dewpoint_C: 18, source: "campaign" }, "degF")).toBe("Humidity: as measured in the field survey (dew point 64 °F).");
     expect(humidityNote({ dewpoint_C: 18, source: "station" }, "degF")).toBe("Humidity: as measured at the weather station (dew point 64 °F).");
     expect(t).not.toContain("32,941");
-    expect(t).not.toContain("same relative humidity");
+    expect(t).not.toContain("as muggy as today");
+    // the column holds a change, named as one; the levels in feels-like words, as Heat risk says them
+    expect(t).toContain("Change in feels-like temperature");
+    expect(t).not.toMatch(/heat index/i);
+    expect(t).toContain("Extreme caution means a feels-like temperature of 90 °F or more (heat cramps and exhaustion possible); Danger, 103 °F or more.");
     // the futures
     openSection(container, "future");
     const future = await waitFor(() => container.querySelector('[aria-label="Heat risk in future climates"]'), 5000, "future heat risk");
-    // the future in plain words; the pathway code only in the cell's tooltip
-    expect(future.textContent).toContain("Mid-century, moderate emissions (2041–2060)");
+    // the future in plain words, as the run pages word it; the pathway code only in the cell's tooltip (a Term, no native title)
+    expect(future.textContent).toContain("Moderate emissions, mid-century (2041–2060)");
     expect(future.textContent).not.toMatch(/SSP|ssp/);
-    expect(future.querySelector('td [title="SSP2-4.5 2041-2060"]')!.textContent).toBe("Mid-century, moderate emissions (2041–2060)");
-    expect(future.textContent).toContain("same relative humidity as today (upper)");
+    expect(future.querySelector("[title]")).toBeNull();
+    expect(future.querySelector('td button.term[data-term="ssp"]')!.textContent).toBe("Moderate emissions, mid-century (2041–2060)");
+    expect(future.textContent).toContain("as muggy as today (high end)");
+    expect(future.textContent).not.toMatch(/lower figure|upper figure/);
+    // one humidity case listed: no low/high range sentence
+    expect(future.textContent).toContain("Each future adds the warming the climate models expect (their middle estimate), with today's measured humidity.");
+    expect(future.textContent).not.toContain("we show a range");
     expect(future.textContent).toContain("23,000");
     expect((container.textContent ?? "").split("32,941").length - 1).toBe(1);
   });

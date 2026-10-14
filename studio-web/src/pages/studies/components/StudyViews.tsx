@@ -2,6 +2,8 @@
 // verdict table and Δ per sd vs real, simcheck grid + share strip + coverage + false positives +
 // bias-correction card, multiverse heatmaps and R² by variant, the reproduce checklist and the
 // benchmark effect shares. Shared by the Validation tab cards and the study page.
+// Plain words (phase 4): these are technical results, so their names stay (placebo, effect share,
+// Kendall τ, bias correction…); every jargon heading and chart has an ⓘ or a glossary <Term>.
 import { useEffect, useRef, type ReactNode } from "react";
 import {
   useStudyView,
@@ -17,8 +19,10 @@ import {
 } from "../../../api/studies";
 import { Bars, BoxStrip, DotRange, Heatmap } from "../../../charts";
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { Kpi, KpiRow } from "../../../components/ui/Kpi";
 import { StatusChip } from "../../../components/ui/StatusChip";
+import { Term } from "../../../components/ui/Term";
 import { Link } from "../../../router";
 import { fmtDuration, fmtNum, fmtPct, fmtSigned, unitLabel } from "../../../theme/format";
 import { quantiles, sharesByGenerator, simGrid } from "../model/simcheck";
@@ -72,8 +76,20 @@ export function PlaceboResult({ view, units }: { view: PlaceboView; units: strin
                   </th>
                   <th scope="col" className="r">
                     Causal θ per sd
+                    <InfoTip
+                      label="Causal θ per sd"
+                      text="The separate cause-and-effect analysis's estimate of the layer's effect, for one typical step up (one standard deviation)."
+                      technical="Double machine learning θ_sum per sd"
+                    />
                   </th>
-                  <th scope="col">Verdict</th>
+                  <th scope="col">
+                    Verdict
+                    <InfoTip
+                      label="the placebo verdicts"
+                      text="model ✓: the model finds no effect from the fake layer (within 2 SE, or under 10% of the real layer's). causal ✓: the separate cause-and-effect check's 95% range includes zero."
+                      technical="Placebo model and causal checks"
+                    />
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -114,6 +130,11 @@ export function PlaceboResult({ view, units }: { view: PlaceboView; units: strin
           </div>
           <DotRange
             title="Δ per sd: placebo vs real"
+            note={
+              <>
+                Each layer&apos;s effect for one typical step up (one sd). A <Term id="placebo">fake layer</Term> should sit near zero.
+              </>
+            }
             units={`city-mean ΔT at +1 sd of the layer${u ? `, ${u}` : ""} (negative = cooler)`}
             rows={rows.map((r, i) => {
               const { d, se } = oneSd(r);
@@ -205,6 +226,12 @@ export function SimcheckResult({ view, workers = 1, units }: { view: SimcheckVie
       {strips.some((s) => s.shares.length) ? (
         <BoxStrip
           title="Effect share per generator"
+          note={
+            <>
+              How much of the planted effect the model recovers, for each kind of made-up data (generator).
+              <InfoTip term="effect_share" label="Effect share" />
+            </>
+          }
           units="recovered ÷ planted city-mean effect (1 = exact)"
           groups={strips.map((s) => ({ label: s.generator, n: s.shares.length, q: quantiles(s.shares), points: s.shares }))}
           valueLabel="Effect share"
@@ -217,6 +244,16 @@ export function SimcheckResult({ view, workers = 1, units }: { view: SimcheckVie
       {covNames.length ? (
         <Bars
           title="Interval coverage of the planted truth"
+          note={
+            <>
+              How often the 95% likely range contains the planted effect.
+              <InfoTip
+                label="Interval coverage of the planted truth"
+                text="A 95% likely range should contain the planted effect in about 95 of 100 made-up datasets. Much less means the ranges are too narrow."
+                technical="95% CI coverage of the planted truth"
+              />
+            </>
+          }
           units="% of replicates (target 95%)"
           categories={covNames}
           series={[
@@ -237,7 +274,10 @@ export function SimcheckResult({ view, workers = 1, units }: { view: SimcheckVie
         {nulls.length ? (
           <section className="card tight" aria-label="False positives">
             <header>
-              <h3>False positives (null generator)</h3>
+              <div>
+                <h3 style={{ display: "inline" }}>False positives (null generator)</h3>
+                <InfoTip term="false_positive" label="False positives" />
+              </div>
             </header>
             {nulls.map(([name, g]) => (
               <KpiRow key={name} label={`False positives: ${name}`}>
@@ -277,11 +317,23 @@ export function BiasCorrectionCard({ bc }: { bc: BiasCorrection }) {
   return (
     <section className="card tight" aria-label="Bias correction">
       <header>
-        <h3>Bias correction</h3>
+        <div>
+          <h3 style={{ display: "inline" }}>Bias correction</h3>
+          <InfoTip term="bias_correction" label="Bias correction" />
+        </div>
         <StatusChip status={bc.stable ? "done" : "stale"} text={bc.stable ? "stable across generators" : "varies by generator"} />
       </header>
       <KpiRow label="Bias correction">
-        <Kpi label="Median share" value={fmtNum(bc.share_median_across_generators ?? null, 2)} note={`${bc.n_generators ?? "?"} generators`} />
+        <Kpi
+          label={
+            <>
+              Median share
+              <InfoTip term="effect_share" label="Effect share" />
+            </>
+          }
+          value={fmtNum(bc.share_median_across_generators ?? null, 2)}
+          note={`${bc.n_generators ?? "?"} generators`}
+        />
         <Kpi label="Share range" value={`${fmtNum(bc.share_range[0], 2)}–${fmtNum(bc.share_range[1], 2)}`} />
         <Kpi label="Relative spread" value={fmtPct(bc.relative_spread ?? null)} tone={bc.stable ? "good" : "warn"} />
         {bc.correction_factor ? <Kpi label="Correction factor" value={`× ${fmtNum(bc.correction_factor, 2)}`} /> : null}
@@ -372,6 +424,8 @@ function coverageCaption(gens: Record<string, SimcheckGeneratorSummary>, names: 
 
 // ---------------------------------------------------------------- multiverse
 
+const TOP_DECILE_TIP = "The share of the top 10% of places to act first that two versions of the analysis have in common. 1 means exactly the same places; 0 means none in common.";
+
 export function MultiverseResult({ view, units }: { view: MultiverseView; units: string }) {
   const variants = view.variants ?? [];
   const effects = view.effects ?? {};
@@ -388,9 +442,35 @@ export function MultiverseResult({ view, units }: { view: MultiverseView; units:
     <div className="stack">
       {st ? (
         <KpiRow label="Multiverse stability">
-          <Kpi label="Sign stability (worst scenario)" value={fmtPct(st.sign_stability_min ?? null)} tone={st.sign_stability_min === 1 ? "good" : st.sign_stability_min !== null && st.sign_stability_min !== undefined ? "warn" : undefined} />
-          <Kpi label="Median Kendall τ" value={fmtNum(st.median_kendall_tau ?? null, 2)} note="priority map vs baseline" />
-          <Kpi label="Median top-decile overlap" value={fmtNum(st.median_top_decile_jaccard ?? null, 2)} />
+          <Kpi
+            label={
+              <>
+                Sign stability (worst scenario)
+                <InfoTip term="multiverse" label="Sign stability" text="The share of the other modelling choices under which a scenario still cools (or still warms). 100% means no choice flips the direction." />
+              </>
+            }
+            value={fmtPct(st.sign_stability_min ?? null)}
+            tone={st.sign_stability_min === 1 ? "good" : st.sign_stability_min !== null && st.sign_stability_min !== undefined ? "warn" : undefined}
+          />
+          <Kpi
+            label={
+              <>
+                Median Kendall τ
+                <InfoTip term="kendall_tau" label="Kendall τ" />
+              </>
+            }
+            value={fmtNum(st.median_kendall_tau ?? null, 2)}
+            note="priority map vs baseline"
+          />
+          <Kpi
+            label={
+              <>
+                Median top-decile overlap
+                <InfoTip label="Top-decile overlap" text={TOP_DECILE_TIP} technical="Jaccard index of the top 10% priority cells" />
+              </>
+            }
+            value={fmtNum(st.median_top_decile_jaccard ?? null, 2)}
+          />
         </KpiRow>
       ) : null}
       {variants.length ? (
@@ -432,6 +512,12 @@ export function MultiverseResult({ view, units }: { view: MultiverseView; units:
       {scenarios.length && names.length ? (
         <Heatmap
           title="Scenario effect by variant"
+          note={
+            <>
+              Each scenario&apos;s citywide effect under each modelling choice.
+              <InfoTip term="multiverse" label="Multiverse" />
+            </>
+          }
           units={`city-mean ΔT${u ? `, ${u}` : ""} (negative = cooler)`}
           rows={names.map(labelOf)}
           cols={scenarios}
@@ -450,6 +536,12 @@ export function MultiverseResult({ view, units }: { view: MultiverseView; units:
         <div className="grid2">
           <Heatmap
             title="Priority agreement with the baseline (Kendall τ)"
+            note={
+              <>
+                Do the same places come first?
+                <InfoTip term="kendall_tau" label="Kendall τ" />
+              </>
+            }
             units="rank correlation of each lever's priority map with the baseline's"
             rows={pVariants.map(labelOf)}
             cols={levers}
@@ -464,6 +556,12 @@ export function MultiverseResult({ view, units }: { view: MultiverseView; units:
           />
           <Heatmap
             title="Top-decile overlap with the baseline"
+            note={
+              <>
+                Do the top 10% of places stay the same?
+                <InfoTip label="Top-decile overlap" text={TOP_DECILE_TIP} technical="Jaccard index of the top 10% priority cells" />
+              </>
+            }
             units="Jaccard index of the top 10% priority cells"
             rows={pVariants.map(labelOf)}
             cols={levers}
@@ -481,6 +579,11 @@ export function MultiverseResult({ view, units }: { view: MultiverseView; units:
       {done.length ? (
         <Bars
           title="Held-out R² by variant"
+          note={
+            <>
+              The <Term id="r2">accuracy score</Term> under each modelling choice.
+            </>
+          }
           categories={done.map((v) => v.label || v.name)}
           series={[{ id: "r2", label: "Held-out R²", values: done.map((v) => v.r2) }]}
           highlight={done.filter((v) => v.name === "baseline").map((v) => v.label || v.name)}
@@ -525,6 +628,7 @@ export function ReproduceResult({ view, childRunId }: { view: ReproduceView; chi
         ) : (
           <StatusChip status="planned" text="checks pending" />
         )}
+        <InfoTip term="reproduce" label="Reproduction" />
         {childRunId ? <Link to={runHref(childRunId)}>Reproduction run</Link> : null}
       </div>
       {checks.length ? (
@@ -589,6 +693,12 @@ export function BenchmarkResult({ view }: { view: BenchmarkView }) {
     <div className="stack">
       <Bars
         title="Effect share recovered on the synthetic city"
+        note={
+          <>
+            How much of a known tree-cover effect, planted in a made-up city, each model finds.
+            <InfoTip term="effect_share" label="Effect share" />
+          </>
+        }
         units="model mean Δ ÷ planted mean Δ (1 = unbiased)"
         categories={cats}
         series={settings.map((s) => ({ id: s, label: SETTING_LABELS[s] ?? s, values: cats.map((m) => value(s, m)) }))}

@@ -1,5 +1,14 @@
 # Release notes — SPARC Studio
 
+## Redesign: plain words, seven run tabs, a step-by-step Scenario Lab
+
+- **Seven run tabs** instead of nineteen in five groups: Summary · Map · What cools · Heat risk (Today · Who is exposed · Future climate) · Scenario Lab · How much to trust this · Model details (every technical view, complete). Each fact has one home; old links redirect. The project sidebar is Overview · Set up · Runs · Scenario Lab · Reports, with Studies, the Config editor and Activity under a collapsed Advanced group.
+- **Scenario Lab**: Design is three steps (What to change · Where · How much) with a live **Quick estimate** (the emulator preview) and one **Run full model** button (run exact); a result is an answer card (headline, big number on its likely range, confidence chip, up to four facts) with one section per topic below. **Build quick estimate** replaces Build emulator.
+- **Plain language with tooltips**: a shared glossary (`sparc/core/glossary.json`) names every repeated concept in plain words — "Accuracy score" (R²), "Typical error" (RMSE), "Likely range" (95% interval), "Place" (grid cell), "Diminishing returns" (saturation), verdicts **Solid / Direction clear / Not proven** (Robust / Direction only / Not established) — with the precise meaning in an ⓘ or dotted-underline tooltip that opens on hover, keyboard focus and tap. Native browser `title` tooltips are gone from the pages.
+- **Brand look**: paper and ink, Inter and JetBrains Mono, a crimson accent, the purple→gold ramp; dark theme kept.
+
+The sections below describe the earlier release in its own words (tab names such as "Heat tab" now live under the tabs above). [`USER_GUIDE.md`](USER_GUIDE.md) uses the new labels throughout.
+
 ## Since 1.0: heat stress, verdicts, Windows and macOS
 
 - **Heat tab** (run hub, Decisions): the US National Weather Service heat index of every cell with the campaign dewpoint, residents in each NWS category (Caution, Extreme caution, Danger, Extreme danger) today, with the adaptation package and in each CMIP6 future, as a range between constant dewpoint and constant relative humidity; a five-part plain brief (how hot, who, as the climate warms, what helps, how sure); a what-if dewpoint control. See [Heat stress and verdicts](USER_GUIDE.md#heat-stress-and-verdicts).

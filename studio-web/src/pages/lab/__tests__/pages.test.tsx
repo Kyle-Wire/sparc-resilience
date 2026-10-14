@@ -387,13 +387,16 @@ describe("Engine chip", () => {
       "POST /api/runs/import": (_u, init) => ({ status: 201, body: { id: RID, ...JSON.parse(String(init.body)) } }),
     });
     const { container } = render(<EngineChip rid={RID} />);
-    const open = await waitFor(() => byText(container, "button", "Open engine"), 5000, "open button");
-    expect(container.textContent).toContain("engine cold");
+    const open = await waitFor(() => byText(container, "button", "Load full model"), 5000, "open button");
+    expect(container.textContent).toContain("full model not loaded");
+    // the chip and the button explain themselves in tooltips, not native titles
+    expect(container.querySelector("[title]")).toBeNull();
     click(open);
     const dialog = await waitFor(() => document.querySelector('[role="dialog"]'), 5000, "trust dialog");
     expect(dialog.textContent).toContain("Checkpoint files execute code when they are loaded");
     expect(dialog.textContent).toContain(`/w/projects/demo/runs/${RID}`);
-    click(byText(dialog, "button", "Trust and open the engine"));
+    expect(byText(dialog, "button", "Trust and load the full model")!.hasAttribute("title")).toBe(false);
+    click(byText(dialog, "button", "Trust and load the full model"));
     await waitFor(() => opens === 2, 5000, "second open");
     const imp = fetchMock.calls.find((c) => c.url === "/api/runs/import")!;
     expect(imp.body).toEqual({ dir: `/w/projects/demo/runs/${RID}`, project_id: PID, trust_pickles: true });
@@ -401,8 +404,8 @@ describe("Engine chip", () => {
     await waitFor(() => !document.querySelector('[role="dialog"]'), 5000, "dialog closed");
   });
 
-  it("offers Resume, not Open engine, for a run that stopped before it finished", async () => {
-    // a run cancelled after S3 has a checkpoint but no manifest: every "Open engine" failed with FileNotFoundError
+  it("offers Resume, not Load full model, for a run that stopped before it finished", async () => {
+    // a run cancelled after S3 has a checkpoint but no manifest: every "Open engine" (now "Load full model") failed with FileNotFoundError
     fetchMock = mockFetch({
       ...runRoutes(),
       [`GET /api/runs/${RID}/engine`]: {
@@ -416,7 +419,7 @@ describe("Engine chip", () => {
     const { container } = render(<EngineChip rid={RID} />);
     await waitFor(() => byText(container, "button", "Resume the run to finish it"), 5000, "resume button");
     expect(container.textContent).toContain("stopped before it finished");
-    expect(byText(container, "button", "Open engine")).toBeNull();
+    expect(byText(container, "button", "Load full model")).toBeNull();
   });
 
   it("explains a memory refusal with the server's numbers and action", async () => {
@@ -428,7 +431,7 @@ describe("Engine chip", () => {
       },
     });
     const { container } = render(<EngineChip rid={RID} />);
-    click(await waitFor(() => byText(container, "button", "Open engine"), 5000, "open button"));
+    click(await waitFor(() => byText(container, "button", "Load full model"), 5000, "open button"));
     const dialog = await waitFor(() => document.querySelector('[role="dialog"]'), 5000, "memory dialog");
     expect(dialog.textContent).toContain("3.2 GB");
     expect(dialog.textContent).toContain("1.5 GB");
@@ -537,7 +540,7 @@ describe("Plan budget slider", () => {
 });
 
 describe("Plan form fields", () => {
-  it("shows the cost, paved share and minimum dose labels, not only their aria-labels", async () => {
+  it("shows the cost, plantable share and smallest amount labels, not only their aria-labels", async () => {
     fetchMock = mockFetch({
       ...runRoutes(),
       [`POST /api/runs/${RID}/plans/preview`]: {
@@ -548,13 +551,17 @@ describe("Plan form fields", () => {
     const { container } = render(<PlanForm rid={RID} grid={g} levers={LEVERS} onSaved={() => {}} />);
     await flush(3);
     const field = (name: string) => [...container.querySelectorAll("label.field")].find((l) => l.querySelector(":scope > .field-label")?.textContent === name);
-    for (const name of ["Cost per unit", "Paved share", "Minimum dose per treated cell"]) {
+    for (const name of ["Cost per unit", "Plantable share of paved ground", "Smallest amount per treated place"]) {
       const input = field(name)?.querySelector<HTMLInputElement>(".numfield input");
       expect(input, name).toBeTruthy();
       expect(input!.getAttribute("aria-label")).toBe(name);
     }
     // the paved-share box is wide enough for its placeholder
-    expect(field("Paved share")!.querySelector<HTMLInputElement>("input")!.style.width).toBe("11em");
+    expect(field("Plantable share of paved ground")!.querySelector<HTMLInputElement>(".numfield input")!.style.width).toBe("11em");
+    // the planner's words: unevenness of the amounts (not "Gini"), with the technical name in its ⓘ
+    expect(container.querySelector(".kpis")!.textContent).toContain("Unevenness of the amounts");
+    expect(container.querySelector(".kpis")!.textContent).not.toMatch(/Gini/);
+    expect(container.querySelector('.kpis button.infotip[data-term="gini"]')).not.toBeNull();
   });
 });
 
@@ -586,8 +593,8 @@ describe("Library", () => {
     expect(row.classList.contains("hl")).toBe(true);
     expect(container.querySelector('[data-configured="canopy-plus-10"]')!.closest("tr")!.classList.contains("hl")).toBe(false);
     expect(scrolled).toHaveBeenCalled();
-    // the configured scenario without fold detail offers the exact re-run; lineage lists the scenario
-    expect(byText(row, "button", "Re-run exactly")).not.toBeNull();
+    // the configured scenario without a result by test area offers to run the full model again; lineage lists the scenario
+    expect(byText(row, "button", "Run full model again")).not.toBeNull();
     expect(byText(container, "a", "Downtown cool corridor")).not.toBeNull();
   });
 });

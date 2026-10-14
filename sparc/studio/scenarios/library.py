@@ -593,6 +593,9 @@ def configured_list(ctx) -> list[dict]:
     unit = ctx.units.get("target", "°F")
     summaries = {str(s.get("name")): s for s in (ctx.manifest.get("scenarios") or []) if isinstance(s, dict)}
     det = ctx.scenario_detail()
+    from sparc.studio.runs.layers import scenario_labels
+
+    labels = scenario_labels(ctx)       # plain display names of ladder scenarios ("Trees & canopy +5 pts")
     out = []
     for sc in ctx.configured_scenarios():
         s = summaries.get(sc["name"]) or {}
@@ -604,7 +607,7 @@ def configured_list(ctx) -> list[dict]:
         if est is None:
             df = ctx.parquet("scenario_deltas.parquet")
             est = float(df[sc["name"]].mean()) if df is not None and sc["name"] in df else 0.0
-        out.append({"slug": sc["slug"], "name": sc["name"],
+        out.append({"slug": sc["slug"], "name": sc["name"], "label": labels.get(sc["name"]) or sc["name"],
                     "city": likely(est, fnum(s.get("mean_delta_se")), unit, what="the city") or likely(0.0, None, unit),
                     "p10": fnum(s.get("p10_delta")), "p90": fnum(s.get("p90_delta")),
                     "frac_extrapolated": fnum(s.get("frac_extrapolated")),

@@ -18,11 +18,14 @@ import { IntervalStack, RingProfile, type IntervalLayer, type IntervalRow } from
 import { Button } from "../../../../components/ui/Button";
 import { ActionButton, EmptyState } from "../../../../components/ui/EmptyState";
 import { Icon } from "../../../../components/ui/Icon";
+import { InfoTip } from "../../../../components/ui/InfoTip";
 import { Table } from "../../../../components/ui/Table";
+import { term, type TermId } from "../../../../content/glossary";
 import { Link, runHref } from "../../../../router";
 import { fmtDateTime, fmtInt, fmtNum, fmtPct, fmtSigned, fmtValue, unitLabel } from "../../../../theme/format";
 import { futureCaseLabel, futureLabel, leverUnitWord, leverWords } from "../../model/words";
 import { AcrossRunsPanel } from "../AcrossRuns";
+import { Tip } from "../Tip";
 import {
   ClimateOffsets,
   EquityBars,
@@ -200,6 +203,7 @@ function WhereItCools({ r, resId, unit, levers, onShowLayer, nCells }: { r: Resu
           {share !== null && Number.isFinite(share) ? (
             <>
               About <strong>{fmtPct(share)}</strong> of the {effect} lands outside your changes, in the places around them.
+              <InfoTip term="reach" />
             </>
           ) : (
             `There is no ${effect} to split between your changes and the places around them.`
@@ -213,7 +217,7 @@ function WhereItCools({ r, resId, unit, levers, onShowLayer, nCells }: { r: Resu
             Temperature change
           </Button>
           <Button size="small" variant="ghost" onClick={() => showLayer(onShowLayer, `res:${resId}:delta_sd`)}>
-            Spread between model runs
+            {term("jackknife_se").label}
           </Button>
           <Button size="small" variant="ghost" onClick={() => showLayer(onShowLayer, `res:${resId}:extrapolation`)}>
             Beyond measured conditions
@@ -358,6 +362,14 @@ function WhatChanged({ r, levers }: { r: Result; levers: Lever[] | undefined }) 
     const w = leverUnitWord(leverOf(levers, v));
     return `${fmtSigned(x, 2)}${w ? ` ${w}` : ""}`;
   };
+  // Totals add each place's amount up: "pts × places" when every change shares one unit word, else per row.
+  const words = [...new Set(rows.map(([v]) => leverUnitWord(leverOf(levers, v))))];
+  const one = words.length === 1 ? words[0] : null;
+  const totalUnit = one !== null ? `${one ? `${one} × ` : ""}places` : "amount × places";
+  const total = (v: string, x: number) => {
+    const w = leverUnitWord(leverOf(levers, v));
+    return one !== null ? fmtNum(x, 0) : `${fmtNum(x, 0)}${w ? ` ${w}` : ""}`;
+  };
   return (
     <>
       <p className="rv-lead">
@@ -366,7 +378,12 @@ function WhatChanged({ r, levers }: { r: Result; levers: Lever[] | undefined }) 
           : "Everything you asked for fits the space available."}
       </p>
       <Table
-        title="What you asked for and what fits"
+        title={
+          <span className="lab-tip-head">
+            What you asked for and what fits
+            <InfoTip term="realised" />
+          </span>
+        }
         csvName="realised"
         rowKey={([v]) => v}
         columns={[
@@ -374,8 +391,8 @@ function WhatChanged({ r, levers }: { r: Result; levers: Lever[] | undefined }) 
           { key: "rq", label: "You asked for (average)", align: "right", value: ([, x]) => x.requested_mean, render: ([v, x]) => amount(v, x.requested_mean) },
           { key: "rl", label: "What fits (average)", align: "right", value: ([, x]) => x.realized_mean, render: ([v, x]) => amount(v, x.realized_mean) },
           { key: "clip", label: "Places held back", align: "right", value: ([, x]) => x.clipped_share, render: ([, x]) => fmtPct(x.clipped_share) },
-          { key: "rqt", label: "Asked for (total)", align: "right", value: ([, x]) => x.requested_total, render: ([, x]) => fmtNum(x.requested_total, 1) },
-          { key: "rlt", label: "Fits (total)", align: "right", value: ([, x]) => x.realized_total, render: ([, x]) => fmtNum(x.realized_total, 1) },
+          { key: "rqt", label: `Asked for (${totalUnit})`, align: "right", value: ([, x]) => x.requested_total, render: ([v, x]) => total(v, x.requested_total) },
+          { key: "rlt", label: `Fits (${totalUnit})`, align: "right", value: ([, x]) => x.realized_total, render: ([v, x]) => total(v, x.realized_total) },
         ]}
         rows={rows}
       />
@@ -391,14 +408,14 @@ const DOUBT_ROW: Record<string, string> = {
   estimation: "Model fit",
   specification: "Model versions & runs",
   attribution: "Simulation check",
-  causal: "Independent check",
+  causal: "Cause-and-effect check",
   envelope: "All sources together",
 };
 
 const DOUBT_LEGEND = "one bar per source of doubt: the range it allows · tick = estimate";
 
 /**
- * One row per source of doubt (model fit · … · independent check · all sources together), each with
+ * One row per source of doubt (model fit · … · cause-and-effect check · all sources together), each with
  * its own range, so no range hides inside a wider one. The tick on every row is the model's citywide
  * estimate.
  */
@@ -436,13 +453,15 @@ function HowSure({ r, rid, pid, unit }: { r: Result; rid: string; pid: string | 
         ))}
       </ul>
       <div className="rv-causal">
-        <Link to={runHref(rid, "trust")} className="pill" data-tone={cc ? (cc.model_within ? "good" : "warn") : undefined} title="How much to trust this run">
-          {cc ? (cc.model_within ? "Cause-and-effect check agrees" : "Cause-and-effect check disagrees") : "No cause-and-effect check"}
-        </Link>
+        <Tip tip={`${term("causal_band").tip} Opens How much to trust this run.`}>
+          <Link to={runHref(rid, "trust")} className="pill" data-tone={cc ? (cc.model_within ? "good" : "warn") : undefined}>
+            {cc ? (cc.model_within ? "Cause-and-effect check agrees" : "Cause-and-effect check disagrees") : "No cause-and-effect check"}
+          </Link>
+        </Tip>
         <span className="cap">
           {cc
-            ? `An independent check puts the citywide change between ${fmtNum(cc.lo, 2)} and ${fmtValue(cc.hi, unit, 2)}; the model's estimate is ${cc.model_within ? "inside" : "outside"} that range${cc.model_within ? "" : ", so treat the size of the effect with caution"}.`
-            : "There is no independent check for these changes in this run."}
+            ? `The cause-and-effect check puts the citywide change between ${fmtNum(cc.lo, 2)} and ${fmtValue(cc.hi, unit, 2)}; the model's estimate is ${cc.model_within ? "inside" : "outside"} that range${cc.model_within ? "" : ", so treat the size of the effect with caution"}.`
+            : "There is no cause-and-effect check for these changes in this run."}
         </span>
       </div>
       {layers.length ? (
@@ -453,7 +472,12 @@ function HowSure({ r, rid, pid, unit }: { r: Result; rid: string; pid: string | 
           valueLabel="Citywide change"
           unit={u}
           legend={<span>{DOUBT_LEGEND}</span>}
-          caption={r.uncertainty?.envelope_excludes_zero ? "Even with every source of doubt added up, the range stays on one side of zero." : "With every source of doubt added up, the range includes zero."}
+          caption={
+            <>
+              {r.uncertainty?.envelope_excludes_zero ? "Even with every source of doubt added up, the range stays on one side of zero." : "With every source of doubt added up, the range includes zero."}
+              <InfoTip term="envelope" />
+            </>
+          }
         />
       ) : null}
       {r.scenario ? <AcrossRunsPanel pid={pid} sid={r.scenario.id} unit={unit} contentHash={typeof r.spec.content_hash === "string" ? r.spec.content_hash : null} /> : null}
@@ -485,24 +509,29 @@ function TechnicalDetails({ r, resId, unit, nFolds, nCells }: { r: Result; resId
   const wholeCity = editsCoverCity(r, nCells);
   const regions = wholeCity && edited ? r.regions.filter((g) => g !== edited) : r.regions;
   const futures = futureCodes(r);
-  const rows: [string, ReactNode][] = [
-    ["Standard error", main.se === null ? "not available" : fmtValue(main.se, unit, 4)],
-    ...(wholeCity ? [] : ([["Citywide standard error", r.city.se === null ? "not available" : fmtValue(r.city.se, unit, 4)]] as [string, ReactNode][])),
-    ...(edited ? ([["Changed places (cells)", fmtInt(edited.n_cells)]] as [string, ReactNode][]) : []),
-    ...(nFolds ? ([["Folds (jackknife)", fmtNum(nFolds, 0)]] as [string, ReactNode][]) : []),
-    ["Method", "Exact engine on the run's fold models. SE = std over folds of the fold means × √(K−1) (jackknife); likely range = estimate ± 1.96·SE."],
+  // technical names stay here (for analysts); each that is jargon explains itself in an ⓘ
+  type Row = [string, ReactNode, TermId?];
+  const rows: Row[] = [
+    ["Standard error", main.se === null ? "not available" : fmtValue(main.se, unit, 4), "jackknife_se"],
+    ...(wholeCity ? [] : ([["Citywide standard error", r.city.se === null ? "not available" : fmtValue(r.city.se, unit, 4), "jackknife_se"]] as Row[])),
+    ...(edited ? ([["Changed places (cells)", fmtInt(edited.n_cells), "cell"]] as Row[]) : []),
+    ...(nFolds ? ([["Folds (jackknife)", fmtNum(nFolds, 0), "held_out_fold"]] as Row[]) : []),
+    ["Method", "Exact engine on the run's fold models. SE = std over folds of the fold means × √(K−1) (jackknife); likely range = estimate ± 1.96·SE.", "exact_engine"],
     ["Cell spread (p10 to p90)", `${fmtSigned(r.p10, 3)} to ${fmtSigned(r.p90, 3)} ${u}`],
-    ["Mean per-cell fold SD", fmtNum(r.mean_delta_sd, 4)],
-    ["Knock-on effects (mediators)", mediators.length ? mediators.map(([v, m]) => `${v} follows ${fmtSigned(m.mean_change, 3)}`).join(" · ") : "none"],
-    ...(futures.length ? ([["Future climates (pathway codes)", futures.join(" · ")]] as [string, ReactNode][]) : []),
+    ["Mean per-cell fold SD", fmtNum(r.mean_delta_sd, 4), "jackknife_se"],
+    ["Knock-on effects (mediators)", mediators.length ? mediators.map(([v, m]) => `${v} follows ${fmtSigned(m.mean_change, 3)}`).join(" · ") : "none", "mediators"],
+    ...(futures.length ? ([["Future climates (pathway codes)", futures.join(" · "), "ssp"]] as Row[]) : []),
     ["Result", `${resId} · ${fmtDateTime(r.summary.created_utc)}`],
   ];
   return (
     <>
       <dl className="rv-tech">
-        {rows.map(([k, v]) => (
+        {rows.map(([k, v, tip]) => (
           <div key={k} style={{ display: "contents" }}>
-            <dt>{k}</dt>
+            <dt>
+              {k}
+              {tip ? <InfoTip term={tip} label={k} /> : null}
+            </dt>
             <dd>{v}</dd>
           </div>
         ))}

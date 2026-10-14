@@ -26,10 +26,10 @@ __all__ = ["heat_view", "verdict_map", "campaign_humidity", "heat_layers_availab
 HEAT_KEYS = ("brief", "humidity", "categories", "kpis", "today", "futures", "hist", "verdicts")
 #: dewpoints a user can try when the campaign's humidity is unknown (or to ask "what if more humid")
 DEWPOINT_PRESETS = [
-    {"label": "Dry (10 °C)", "dewpoint_C": 10.0},
-    {"label": "Typical summer (16 °C)", "dewpoint_C": 16.0},
-    {"label": "Humid (21 °C)", "dewpoint_C": 21.0},
-    {"label": "Oppressive (24 °C)", "dewpoint_C": 24.0},
+    {"label": "Dry (dew point 50 °F)", "dewpoint_C": 10.0},
+    {"label": "Typical summer (dew point 61 °F)", "dewpoint_C": 16.0},
+    {"label": "Humid (dew point 70 °F)", "dewpoint_C": 21.0},
+    {"label": "Oppressive (dew point 75 °F)", "dewpoint_C": 24.0},
 ]
 _EC = 2          # category index of "Extreme caution" (people at it or worse are the headline count)
 
@@ -245,8 +245,9 @@ def heat_view(ctx, params: dict | None = None) -> dict:
     humidity = {"dewpoint_C": td, "source": src, "campaign_dewpoint_C": camp_td, "campaign_source": camp_src,
                 "user_set": user_td is not None, "needs_input": td is None, "rh_range": None,
                 "presets": DEWPOINT_PRESETS, "assumptions": {
-                    "constant_dewpoint": "moisture unchanged as it warms, so relative humidity falls (lower bound)",
-                    "constant_rh": "relative humidity unchanged, so moisture rises with warming (upper bound)"},
+                    "constant_dewpoint": "the air holds the same amount of water as today, so it feels a little less "
+                                         "muggy as it warms (low end)",
+                    "constant_rh": "the air takes up more water as it warms and stays as muggy as today (high end)"},
                 "method": heatmod.SOURCE}
     out: dict = dict.fromkeys(HEAT_KEYS)
     out.update({"humidity": humidity, "categories": categories, "verdicts": _verdict_rows(ctx)})
@@ -422,7 +423,7 @@ def _brief(ctx, humidity, today, today_pkg, futures, by_people, total, pkg, verd
     td = humidity["dewpoint_C"]
     where = humidity["source"] or "assumed"
     out.append({"id": "how_hot", "title": "How hot it felt",
-                "text": f"With a dewpoint of {td:.1f} °C ({where}), the heat index on the campaign afternoon "
+                "text": f"With a dew point of {td * 9 / 5 + 32:.0f} °F ({where}), the heat index on the campaign afternoon "
                         f"reached {today['max_hi']:.0f} °F in the hottest cell; the "
                         f"{'typical resident' if by_people else 'average cell'} felt {today['mean_hi']:.0f} °F.",
                 "tone": "neutral"})

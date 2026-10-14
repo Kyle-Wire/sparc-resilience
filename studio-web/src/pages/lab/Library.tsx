@@ -2,14 +2,16 @@
 // with a kicker under the page's own title:
 // - "Set up with this run" (first; phase 2, the canonical home of the run's configured
 //   scenarios, formerly the Scenarios run tab): the scenarios view's sections from
-//   ../runhub/Scenarios (city-mean change per scenario, ladders, the table) with the Lab's row
-//   actions (clone to edit, re-run exactly for paired SE, pin to compare, map).
+//   ../runhub/Scenarios (citywide change per scenario, ladders, the table) with the Lab's row
+//   actions (clone to edit, run the full model again for the uncertainty of a difference, pin to
+//   compare, map).
 //   `?configured=<slug>` focuses one of them (the old run tab's links redirect here).
 // - "Project scenarios": every scenario of the project as a lineage tree (revisions under their
-//   parents) with search, tag and status filters; batch exact runs; per-scenario actions (open,
-//   pin to compare, run exact, fork, ladder, check across runs with its time and RAM estimate,
-//   promote with the YAML diff, archive, delete); ladder charts (ΔT vs dose with the
-//   likely-range ribbon).
+//   parents) with search, tag and status filters; batch full-model runs; per-scenario actions (open,
+//   pin to compare, run the full model, fork, ladder, check across runs with its time and RAM
+//   estimate, promote with the YAML diff, archive, delete); ladder charts (the change vs the amount
+//   with the likely-range ribbon). Plain words (phase 4): the glossary's terms, with an ⓘ where a
+//   term needs explaining; no native titles.
 import { useEffect, useMemo, useState } from "react";
 import { ApiError, errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
@@ -31,22 +33,39 @@ import { LineBand, SmallMultiples } from "../../charts";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table } from "../../components/ui/Table";
+import { term } from "../../content/glossary";
 import { useRunDetail } from "../../layouts/resources";
 import { useRunGrid } from "../../map/data";
 import { Link, codecs, navigate, useRoute, useUrlState } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast, useUi } from "../../stores/ui";
 import { fmtRelative, fmtSigned, unitLabel } from "../../theme/format";
-import { CloneButton, ConfiguredScenarios } from "../runhub/Scenarios";
+import { CloneButton, ConfiguredScenarios, scenarioLabel } from "../runhub/Scenarios";
 import { AcrossRunsDialog, DeleteScenarioDialog, LadderDialog, PromoteDialog } from "./components/Dialogs";
 import { MemoryDialog, TrustDialog } from "./components/EngineChip";
 import { LabFrame, labHref } from "./components/LabFrame";
+import { Tip } from "./components/Tip";
 import { lineage, ladderDoses, ladderGroups, type LineageNode } from "./model/library";
 import { useTray } from "./model/tray";
 
 const STATUSES: ScenarioStatus[] = ["draft", "previewed", "exact", "stale", "archived"];
+
+/** A scenario's status in plain words (filter chips and the status column). */
+export const STATUS_WORDS: Record<ScenarioStatus, string> = {
+  draft: "draft",
+  previewed: `${term("emulator_preview").label.toLowerCase()} only`,
+  exact: term("exact_engine").label.toLowerCase(),
+  stale: term("stale").label.toLowerCase(),
+  archived: "archived",
+};
+
+/** "Run full model", the glossary's name for an exact run. */
+const RUN_FULL = term("run_exact").label;
+/** "full model", in sentences. */
+const FULL = term("exact_engine").label.toLowerCase();
 
 /** "−0.41 °F (−0.52 to −0.30)" */
 export function likelyShort(l: Likely | null | undefined, unit: string, d = 3): string {
@@ -61,6 +80,11 @@ type Dialog = { kind: "ladder"; scenario: Scenario } | { kind: "across"; sid: st
 export function firstLadderEdit(s: Scenario): number {
   const i = s.doc.edits.findIndex((e) => e.mode !== "per_cell");
   return i < 0 ? 0 : i;
+}
+
+/** A change (negative = cooler) as cooling (higher = cooler). */
+function cooling(v: number | null | undefined): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? (v === 0 ? 0 : -v) : null;
 }
 
 function Ladders({ list, unit }: { list: ScenarioSummary[]; unit: string }) {
@@ -95,8 +119,8 @@ function Ladders({ list, unit }: { list: ScenarioSummary[]; unit: string }) {
   if (!ladders.length) return <p className="cap">Loading ladders…</p>;
   return (
     <SmallMultiples
-      title="Ladders"
-      units={`${u} city mean (negative = cooler)`}
+      title={`${term("ladder").label}s`}
+      units={`${u} of cooling, citywide (higher = cooler)`}
       items={ladders}
       panelTitle={(l) => `${l.lever} · ladder ${l.id}`}
       renderPanel={(l) => (
@@ -108,15 +132,16 @@ function Ladders({ list, unit }: { list: ScenarioSummary[]; unit: string }) {
               id: l.id,
               label: `${l.lever} ladder`,
               x: l.pts.map((p) => p.dose),
-              y: l.pts.map((p) => p.l?.estimate ?? null),
-              lo: l.pts.map((p) => p.l?.lo ?? null),
-              hi: l.pts.map((p) => p.l?.hi ?? null),
+              // drawn as cooling (higher = cooler), the same way round as What cools and the Summary
+              y: l.pts.map((p) => cooling(p.l?.estimate)),
+              lo: l.pts.map((p) => cooling(p.l?.hi)),
+              hi: l.pts.map((p) => cooling(p.l?.lo)),
               hollow: l.pts.map((p) => (p.ex ?? 0) > 0.2),
               points: true,
             },
           ]}
-          xLabel="Dose"
-          yLabel="City-mean ΔT"
+          xLabel={term("dose").label}
+          yLabel="Citywide cooling"
           yUnit={u}
           yInclude={[0]}
           refLines={[{ axis: "y", value: 0 }]}
@@ -126,14 +151,20 @@ function Ladders({ list, unit }: { list: ScenarioSummary[]; unit: string }) {
       table={{
         columns: [
           { key: "ladder", label: "Ladder" },
-          { key: "dose", label: "Dose" },
-          { key: "est", label: "City-mean ΔT", unit: u },
+          { key: "dose", label: term("dose").label },
+          { key: "est", label: "Citywide cooling", unit: u },
           { key: "lo", label: "Low", unit: u },
           { key: "hi", label: "High", unit: u },
         ],
-        rows: ladders.flatMap((l) => l.pts.map((p) => [l.id, p.dose, p.l?.estimate ?? null, p.l?.lo ?? null, p.l?.hi ?? null])),
+        rows: ladders.flatMap((l) => l.pts.map((p) => [l.id, p.dose, cooling(p.l?.estimate), cooling(p.l?.hi), cooling(p.l?.lo)])),
       }}
-      caption="Each ladder repeats one edit at increasing doses (exact results; rungs without a result are gaps). Hollow points are mostly extrapolated."
+      caption={
+        <>
+          Each ladder runs one change at growing amounts (full-model results; an amount without a result is a gap). Hollow points lie mostly{" "}
+          {term("extrapolated").label.toLowerCase()}.
+          <InfoTip term="ladder" />
+        </>
+      }
     />
   );
 }
@@ -147,9 +178,9 @@ function ConfiguredActions({ rid, pid, row }: { rid: string; pid: string | null;
     try {
       const job = await rerunConfigured(rid, row.slug);
       useJobs.getState().upsert(job);
-      toast("info", `Re-running "${row.name}" exactly`, { href: `/jobs/${job.id}`, linkLabel: "Track" });
+      toast("info", `Running "${scenarioLabel(row)}" through the ${FULL} again`, { href: `/jobs/${job.id}`, linkLabel: "Track" });
     } catch (e) {
-      toast("error", "Could not start the exact re-run", { body: errorMessage(e) });
+      toast("error", `Could not start the ${FULL} run`, { body: errorMessage(e) });
     } finally {
       setBusy(false);
     }
@@ -158,11 +189,13 @@ function ConfiguredActions({ rid, pid, row }: { rid: string; pid: string | null;
     <span className="row" style={{ gap: 4, flexWrap: "nowrap" }}>
       <CloneButton rid={rid} slug={row.slug} pid={pid} />
       {!row.has_folds ? (
-        <Button size="small" busy={busy} onClick={() => void rerun()} title="Fold detail is missing (older run): re-run exactly for paired SE">
-          Re-run exactly
-        </Button>
+        <Tip tip={`This older run kept no result for each test area. Run the ${FULL} again to compare this scenario with others, with the ${term("paired_se").label.toLowerCase()}.`}>
+          <Button size="small" busy={busy} onClick={() => void rerun()}>
+            {RUN_FULL} again
+          </Button>
+        </Tip>
       ) : null}
-      <Button size="small" variant="ghost" icon="pin" onClick={() => (pin(rid, { kind: "configured", slug: row.slug }, row.name) ? toast("success", "Pinned to the compare tray") : toast("warning", "The compare tray holds 4 items"))}>
+      <Button size="small" variant="ghost" icon="pin" onClick={() => (pin(rid, { kind: "configured", slug: row.slug }, scenarioLabel(row)) ? toast("success", "Pinned to the compare tray") : toast("warning", "The compare tray holds 4 items"))}>
         Pin
       </Button>
       <Link className="btn small ghost" to={`/r/${encodeURIComponent(rid)}/map?layer=${encodeURIComponent(`sc:${row.slug}`)}`}>
@@ -215,8 +248,8 @@ export default function Library() {
         const r = await runScenarioExact(s.id, rid);
         if (r.job) {
           useJobs.getState().upsert(r.job);
-          toast("info", `Running "${s.name}" exactly`, { href: `/jobs/${r.job.id}`, linkLabel: "Track" });
-        } else toast("success", `"${s.name}" already has this exact result (cached)`);
+          toast("info", `Running "${s.name}" through the ${FULL}`, { href: `/jobs/${r.job.id}`, linkLabel: "Track" });
+        } else toast("success", `"${s.name}" already has this ${FULL} result`);
       } catch (e) {
         // The checkpoint needs trust, or memory is short: explain with the dialog, not a toast.
         if (e instanceof ApiError && (e.code === "untrusted_pickle" || e.code === "engine_memory")) setRefusal({ error: e, retry: () => void runExact(s) });
@@ -227,7 +260,7 @@ export default function Library() {
     act("batch", async () => {
       const job = await runBatch(rid, selected);
       useJobs.getState().upsert(job);
-      toast("info", `Running ${selected.length} scenarios exactly`, { href: `/jobs/${job.id}`, linkLabel: "Track" });
+      toast("info", `Running ${selected.length} scenarios through the ${FULL}`, { href: `/jobs/${job.id}`, linkLabel: "Track" });
       setSelected([]);
     });
   const openLadder = (s: ScenarioSummary) => act(s.id, async () => setDialog({ kind: "ladder", scenario: await getScenario(s.id) }));
@@ -239,8 +272,8 @@ export default function Library() {
       <div className="stack composer" data-composer="library">
         <section className="composer-section" data-group="configured">
           <ConfiguredScenarios
-            title="Set up with this run"
-            intro="The scenarios written in the project config, evaluated at the end of the run (S5). Negative changes are cooler. Read-only: clone one to edit it."
+            title={term("configured_scenario").label}
+            intro={`${term("configured_scenario").tip} Negative changes are cooler.`}
             focus={focus}
             actions={(r) => <ConfiguredActions rid={rid} pid={pid} row={r} />}
           />
@@ -253,8 +286,8 @@ export default function Library() {
             <input type="search" aria-label="Search scenarios" placeholder="Search names, tags, notes" value={q} onChange={(e) => setQ(e.target.value)} style={{ minWidth: 240 }} />
             <div className="chips" role="group" aria-label="Status">
               {STATUSES.filter((s) => s !== "archived").map((s) => (
-                <button key={s} type="button" className="chip" aria-pressed={status.includes(s)} onClick={() => setStatus(status.includes(s) ? status.filter((x) => x !== s) : [...status, s])}>
-                  {s}
+                <button key={s} type="button" className="chip" aria-pressed={status.includes(s)} data-status={s} onClick={() => setStatus(status.includes(s) ? status.filter((x) => x !== s) : [...status, s])}>
+                  {STATUS_WORDS[s]}
                 </button>
               ))}
             </div>
@@ -274,7 +307,7 @@ export default function Library() {
             </label>
             <span className="spacer" />
             <Button variant="primary" size="small" disabled={!selected.length} busy={busy === "batch"} onClick={() => void batch()}>
-              Run selected exactly ({selected.length})
+              {RUN_FULL} for the selected ({selected.length})
             </Button>
           </div>
           {list.error && !list.data ? <EmptyState error={list.error} /> : null}
@@ -311,18 +344,22 @@ export default function Library() {
                 ),
               },
               { key: "rev", label: "Rev.", align: "right", sortable: false, value: (n) => n.s.revision },
-              { key: "status", label: "Status", sortable: false, value: (n) => n.s.status, render: (n) => <StatusChip status={n.s.status === "exact" ? "done" : n.s.status === "draft" ? "planned" : n.s.status} text={n.s.status} /> },
+              { key: "status", label: "Status", sortable: false, value: (n) => STATUS_WORDS[n.s.status] ?? n.s.status, render: (n) => <StatusChip status={n.s.status === "exact" ? "done" : n.s.status === "draft" ? "planned" : n.s.status} text={STATUS_WORDS[n.s.status] ?? n.s.status} /> },
               { key: "tags", label: "Tags", sortable: false, value: (n) => n.s.tags.join(" "), render: (n) => n.s.tags.map((t) => <span key={t} className="chip">{t}</span>) },
               {
                 key: "latest",
-                label: "Latest exact",
+                label: `Latest ${FULL} result`,
                 sortable: false,
                 value: (n) => n.s.latest?.city.estimate ?? null,
                 render: (n) =>
                   n.s.latest ? (
                     <span>
                       {likelyShort(n.s.latest.edited ?? n.s.latest.city, unit)}
-                      {n.s.latest.stale ? <Badge tone="warn">stale</Badge> : null}
+                      {n.s.latest.stale ? (
+                        <Tip tip={term("stale").tip} focusable>
+                          <Badge tone="warn">{STATUS_WORDS.stale}</Badge>
+                        </Tip>
+                      ) : null}
                       {n.s.latest.run_id !== rid ? <span className="cap"> · other run</span> : null}
                     </span>
                   ) : (
@@ -340,7 +377,7 @@ export default function Library() {
                   return (
                     <span className="row" style={{ gap: 4 }}>
                       <Button size="small" busy={busy === s.id} onClick={() => void runExact(s)} disabled={s.status === "archived"}>
-                        Run exact
+                        {RUN_FULL}
                       </Button>
                       {s.latest && s.latest.run_id === rid ? (
                         <Button size="small" variant="ghost" icon="pin" onClick={() => (pin(rid, { kind: "result", id: s.latest!.id }, s.name) ? toast("success", "Pinned to the compare tray") : toast("warning", "The compare tray holds 4 items"))}>
@@ -362,10 +399,10 @@ export default function Library() {
                         }}
                       >
                         <option value="">More…</option>
-                        <option value="fork">Fork a variant</option>
-                        <option value="ladder">Make a ladder…</option>
+                        <option value="fork">Copy as a variant</option>
+                        <option value="ladder">Try growing amounts…</option>
                         <option value="across">Check across runs…</option>
-                        <option value="promote">Promote to config…</option>
+                        <option value="promote">Add to the project settings…</option>
                         <option value="archive">{s.status === "archived" ? "Restore" : "Archive"}</option>
                         <option value="delete">Delete</option>
                       </select>

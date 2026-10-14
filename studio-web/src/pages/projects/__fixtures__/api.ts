@@ -54,7 +54,7 @@ export function projectDetail(extra: Partial<Project> = {}, configVersion = 3): 
       { key: "config_valid", label: "Config valid", state: "ok", detail: "no errors", action: null },
       { key: "runs", label: "Runs", state: "missing", detail: "none", action: null },
       { key: "emulator", label: "Emulator", state: "n/a", detail: "", action: null },
-      { key: "studies", label: "Studies", state: "n/a", detail: "", action: null },
+      { key: "studies", label: "Independent checks", state: "n/a", detail: "", action: null },
     ],
     runs: [],
     active_jobs: [],

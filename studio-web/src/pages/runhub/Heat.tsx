@@ -1,19 +1,27 @@
 // The Heat view, in two parts (phase 2):
 // - Heat risk › Today (default export, the canonical home of the heat-risk baseline): how hot the
 //   campaign afternoon felt (NWS heat index from each cell's temperature and the campaign
-//   dewpoint), who was exposed (residents per NWS category, with the adaptation package), where,
+//   dewpoint), who was exposed (residents per NWS category, with the cooling package), where,
 //   and the heat-index distribution. The dewpoint can be changed to ask "what if the afternoon
 //   were more humid?" (the view's ?dewpoint_C=, kept in the page URL so Future climate uses it).
 // - HeatFutures (Heat risk › Future climate): residents per category in each CMIP6 future (a band
 //   between constant dewpoint and constant relative humidity, widened by the models' 10th–90th
 //   percentile warming), with and without the package. The warming itself is the Climate view's.
 // How sure each scenario's cooling is (the view's verdicts) lives on How much to trust this.
+// Plain words (phase 4): the heat index is the "feels-like temperature" and the NWS categories
+// are heat-risk levels, each explained in an ⓘ with its feels-like range; the dewpoint control is
+// the "Humidity assumption"; futures are named by emissions and period ("Moderate emissions,
+// mid-century (2041–2060)"), the pathway code only in a tooltip's technical line.
 import { useState } from "react";
 import type { HeatCase, HeatCategoryId, HeatSections } from "../../api/runs";
 import { Bars, Histogram } from "../../charts";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Seg } from "../../components/ui/Seg";
+import { Term } from "../../components/ui/Term";
+import { heatCategory, term } from "../../content/glossary";
 import { Link, runHref } from "../../router";
 import { fmtInt, fmtNum } from "../../theme/format";
+import { emissionsName, FutureName, heatLevelsTip, HeatLevelsTip, periodName } from "./climateWords";
 import { Block, KpiTiles, Section, ViewPage, useRid } from "./common";
 import { heatHref, useDewpoint } from "./HeatRisk";
 import { RunLayerMap } from "./RunLayerMap";
@@ -30,52 +38,66 @@ const TONE: Record<HeatSections["brief"][number]["tone"], string | undefined> = 
 /** Brief items and KPIs about the futures or the verdicts: their home is Future climate or Trust, not Today. */
 const NOT_TODAY_BRIEF = new Set(["future", "sure"]);
 const NOT_TODAY_KPIS = new Set(["ec_future"]);
+/** ⓘ after the KPI labels: the heat-risk levels for the counts, the feels-like temperature for the °F tiles. */
+const KPI_TIPS = { ec_today: heatLevelsTip(), ec_pkg: heatLevelsTip(), mean_hi: { term: "heat_index" }, max_hi: { term: "heat_index" } } as const;
 
 type Humidity = "constant_dewpoint" | "constant_rh";
 
-const period = (p: string) => p.replace("-", "–");
+/** A heat-risk level in the glossary's words (the server's label when the glossary has none). */
+const levelLabel = (c: { id: HeatCategoryId; label: string }) => heatCategory(c.id)?.label ?? c.label;
+/** Where Extreme caution starts (°F), from the view's categories. */
+const ecFrom = (categories: HeatSections["categories"] | null | undefined) => categories?.find((c) => c.id === "extreme_caution")?.lo_F ?? null;
 const people = (n: number | null | undefined, measure: "people" | "cells") =>
-  n === null || n === undefined ? "—" : `${n >= 10000 ? `${fmtNum(n / 1000, 0)}k` : n >= 1000 ? `${fmtNum(n / 1000, 1)}k` : fmtInt(n)}${measure === "cells" ? " cells" : ""}`;
+  n === null || n === undefined ? "—" : `${n >= 10000 ? `${fmtNum(n / 1000, 0)}k` : n >= 1000 ? `${fmtNum(n / 1000, 1)}k` : fmtInt(n)}${measure === "cells" ? " places" : ""}`;
 const range = (r: [number, number] | null | undefined, measure: "people" | "cells") =>
   !r ? "—" : Math.abs(r[1] - r[0]) < Math.max(1, 0.005 * r[1]) ? people(r[0], measure) : `${people(r[0], measure)} – ${people(r[1], measure)}`;
 
-/** The dewpoint control: the campaign's, a preset, or a typed value (°C). */
+/** A dew point in °F for the page (the API and the URL keep °C, as the heat index's input). */
+export const dewF = (c: number) => (c * 9) / 5 + 32;
+/** A typed dew point in °F back to the °C the view takes, rounded to 0.01 °C. */
+export const dewC = (f: number) => Math.round((((f - 32) * 5) / 9) * 100) / 100;
+
+/**
+ * The humidity assumption (a dew point): the measured afternoon's, a preset, or a typed value.
+ * Shown and typed in °F, like every other temperature on the page; sent to the view in °C.
+ */
 function HumidityControl({ h, value, onChange }: { h: HeatSections["humidity"]; value: number | null; onChange: (v: number | null) => void }) {
-  const [custom, setCustom] = useState<string>(value !== null ? String(value) : "");
+  const [custom, setCustom] = useState<string>(value !== null ? fmtNum(dewF(value), 0) : "");
   const opts: { value: string; label: string }[] = [];
-  if (h.campaign_dewpoint_C !== null) opts.push({ value: "campaign", label: `Campaign (${fmtNum(h.campaign_dewpoint_C, 1)} °C)` });
+  if (h.campaign_dewpoint_C !== null) opts.push({ value: "campaign", label: `As measured (dew point ${fmtNum(dewF(h.campaign_dewpoint_C), 0)} °F)` });
   for (const p of h.presets) opts.push({ value: String(p.dewpoint_C), label: p.label });
   const cur = value === null ? (h.campaign_dewpoint_C !== null ? "campaign" : "") : String(value);
   const apply = () => {
-    const v = Number(custom);
-    if (custom.trim() !== "" && Number.isFinite(v) && v >= -30 && v <= 35) onChange(v);
+    const f = Number(custom);
+    // −22 to 95 °F: the −30 to 35 °C the view accepts
+    if (custom.trim() !== "" && Number.isFinite(f) && f >= -22 && f <= 95) onChange(dewC(f));
   };
   return (
     <div className="stack" style={{ gap: 8 }}>
       {h.needs_input ? (
         <p className="callout" role="note">
-          This run has no campaign humidity (no forcing file with a station or ERA5 dewpoint). Pick a dewpoint to turn its temperatures into a heat index; the result is a
-          what-if, not a measurement.
+          This run has no humidity reading for the measurement day. Pick a humidity level below to work out the <Term id="heat_index">feels-like temperature</Term>; the
+          result is a what-if, not a measurement.
         </p>
       ) : null}
       <div className="row" style={{ flexWrap: "wrap", gap: 8 }}>
-        <Seg<string> label="Dewpoint" size="small" value={cur} onChange={(v) => onChange(v === "campaign" ? null : Number(v))} options={opts} />
+        <Seg<string> label="Humidity assumption" size="small" value={cur} onChange={(v) => onChange(v === "campaign" ? null : Number(v))} options={opts} />
         <label className="row cap" style={{ gap: 6 }}>
           Custom
           <input
             type="number"
-            step={0.5}
-            min={-30}
-            max={35}
+            step={1}
+            min={-22}
+            max={95}
             value={custom}
             onChange={(e) => setCustom(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter") apply();
             }}
-            aria-label="Custom dewpoint in degrees Celsius"
+            aria-label="Custom dew point in degrees Fahrenheit"
             style={{ width: 80 }}
           />
-          °C
+          °F
         </label>
         <button type="button" className="btn" onClick={apply}>
           Apply
@@ -84,12 +106,12 @@ function HumidityControl({ h, value, onChange }: { h: HeatSections["humidity"]; 
       <p className="cap">
         {h.dewpoint_C !== null ? (
           <>
-            Dewpoint {fmtNum(h.dewpoint_C, 1)} °C ({h.source ?? "assumed"})
-            {h.rh_range ? `: relative humidity ${fmtNum(h.rh_range[0], 0)}–${fmtNum(h.rh_range[1], 0)}% across the city` : ""}. One dewpoint applies to every cell (moisture is close
-            to uniform across a city on one afternoon).
+            Dew point {fmtNum(dewF(h.dewpoint_C), 0)} °F ({h.source ?? "assumed"})
+            {h.rh_range ? `, so relative humidity is ${fmtNum(h.rh_range[0], 0)}–${fmtNum(h.rh_range[1], 0)}% across the city` : ""}. One humidity value is used for every place:
+            moisture varies little across a city on one afternoon.
           </>
         ) : (
-          "No dewpoint chosen yet."
+          "No humidity chosen yet."
         )}
       </p>
     </div>
@@ -121,51 +143,64 @@ function Exposure({ s, scope }: { s: Pick<HeatSections, "today" | "futures" | "c
   const rows: { label: string; c: HeatCase }[] = [];
   if (scope === "today") {
     rows.push({ label: "Today", c: t.unadapted });
-    if (t.adapted) rows.push({ label: "Today · with package", c: t.adapted });
+    if (t.adapted) rows.push({ label: "Today · with the cooling package", c: t.adapted });
   } else {
+    // the period is picked above the chart, so each row names its emissions future only
     for (const f of s.futures.filter((x) => x.period === per)) {
-      rows.push({ label: f.label, c: f.unadapted[hum] });
-      if (f.adapted) rows.push({ label: `${f.label} · with package`, c: f.adapted[hum] });
+      const name = emissionsName(f.experiment, f.label);
+      rows.push({ label: name, c: f.unadapted[hum] });
+      if (f.adapted) rows.push({ label: `${name} · with the cooling package`, c: f.adapted[hum] });
     }
   }
-  const labelOf = (id: HeatCategoryId) => s.categories.find((c) => c.id === id)?.label ?? id;
-  const measure = t.measure === "people" ? "Residents" : "Cells";
+  const labelOf = (id: HeatCategoryId) => {
+    const c = s.categories.find((x) => x.id === id);
+    return c ? levelLabel(c) : heatCategory(id)?.label ?? id;
+  };
+  const measure = t.measure === "people" ? "Residents" : "Places";
   const ec = t.unadapted.ec_or_worse;
+  const ecF = ecFrom(s.categories);
   return (
     <Bars
       title={scope === "today" ? `${measure} by heat-risk category` : `${measure} by heat-risk category in each future`}
-      units={t.measure === "people" ? "residents" : "cells"}
+      units={t.measure === "people" ? "residents" : "places"}
       categories={rows.map((r) => r.label)}
       orientation="h"
       mode="stacked"
       series={CATS.map((id) => ({ id, label: labelOf(id), values: rows.map((r) => r.c.counts[id] ?? 0), color: CAT_COLOR[id] }))}
       valueLabel={measure}
-      unit={t.measure === "people" ? "people" : "cells"}
+      unit={t.measure === "people" ? "people" : "places"}
       decimals={0}
       highlight={scope === "today" ? ["Today"] : undefined}
+      note={
+        <>
+          What the levels mean
+          <HeatLevelsTip label="heat-risk levels" />
+        </>
+      }
       actions={
         scope === "futures" ? (
           <>
-            {periods.length > 1 ? <Seg<string> label="Period" size="small" value={per} onChange={setPer} options={periods.map((p) => ({ value: p, label: period(p) }))} /> : null}
+            {periods.length > 1 ? <Seg<string> label="Time period" size="small" value={per} onChange={setPer} options={periods.map((p) => ({ value: p, label: periodName(p) }))} /> : null}
             <Seg<Humidity>
               label="Future humidity"
               size="small"
               value={hum}
               onChange={setHum}
               options={[
-                { value: "constant_dewpoint", label: "Constant dewpoint (lower)" },
-                { value: "constant_rh", label: "Constant RH (upper)" },
+                { value: "constant_dewpoint", label: "Same moisture (lower end)" },
+                { value: "constant_rh", label: "Same relative humidity (upper end)" },
               ]}
             />
+            <InfoTip term="future_humidity" />
           </>
         ) : undefined
       }
       caption={
         scope === "today"
-          ? `Today ${people(ec, t.measure)} ${t.measure === "people" ? "residents are" : "are"} at Extreme caution or worse${
-              t.adapted ? `; with ${t.package ?? "the package"}, ${people(t.adapted.ec_or_worse, t.measure)}` : ""
+          ? `Today ${people(ec, t.measure)} ${t.measure === "people" ? "residents are" : "are"} at Extreme caution or worse${ecF !== null ? ` (feels like ${fmtNum(ecF, 0)} °F or more)` : ""}${
+              t.adapted ? `; with the cooling package, ${people(t.adapted.ec_or_worse, t.measure)}` : ""
             }.`
-          : `Futures (${period(per)}) add each pathway's median warming to the campaign afternoon; switch the humidity assumption to see the other end of the band.`
+          : `Each future adds the climate models' middle estimate of warming by ${periodName(per).toLowerCase()} to the measured afternoon. Switch Future humidity to see the other end of the range.`
       }
     />
   );
@@ -176,15 +211,22 @@ function Distribution({ hist, categories }: { hist: NonNullable<HeatSections["hi
   const counts = which === "pkg" && hist.adapted_counts ? hist.adapted_counts : hist.counts;
   const lo = hist.edges[0];
   const hi = hist.edges[hist.edges.length - 1];
-  const refs = categories.filter((c) => c.lo_F !== null && c.lo_F >= lo && c.lo_F <= hi).map((c) => ({ value: c.lo_F as number, label: c.label }));
+  const refs = categories.filter((c) => c.lo_F !== null && c.lo_F >= lo && c.lo_F <= hi).map((c) => ({ value: c.lo_F as number, label: levelLabel(c) }));
+  const starts = categories.filter((c) => c.lo_F !== null).map((c) => `${levelLabel(c)} ${fmtNum(c.lo_F, 0)} °F`);
   return (
     <Histogram
-      title="Heat index across the city"
-      units={hist.measure === "people" ? "residents per bin" : "cells per bin"}
+      title="Feels-like temperature across the city"
+      note={
+        <>
+          The heat index, in °F
+          <InfoTip term="heat_index" />
+        </>
+      }
+      units={hist.measure === "people" ? "residents per band" : "places per band"}
       bins={{ edges: hist.edges, counts }}
-      xLabel="Heat index"
+      xLabel="Feels-like temperature"
       unit="°F"
-      countLabel={hist.measure === "people" ? "Residents" : "Cells"}
+      countLabel={hist.measure === "people" ? "Residents" : "Places"}
       decimals={0}
       refLines={refs}
       actions={
@@ -196,12 +238,12 @@ function Distribution({ hist, categories }: { hist: NonNullable<HeatSections["hi
             onChange={setWhich}
             options={[
               { value: "today", label: "Today" },
-              { value: "pkg", label: "With package" },
+              { value: "pkg", label: "With the cooling package" },
             ]}
           />
         ) : undefined
       }
-      caption="Lines mark where the NWS categories start (Caution 80 °F, Extreme caution 90 °F, Danger 103 °F, Extreme danger 125 °F)."
+      caption={`Lines mark where each heat-risk level starts${starts.length ? ` (${starts.join(", ")})` : ""}.`}
     />
   );
 }
@@ -214,7 +256,7 @@ function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
       <table className="tbl" aria-label="Exposure in each climate future">
         <thead>
           <tr>
-            <th scope="col">Future</th>
+            <th scope="col">Future climate</th>
             <th scope="col" className="r">
               Extreme caution or worse
             </th>
@@ -224,10 +266,10 @@ function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
             {s.today.adapted ? (
               <>
                 <th scope="col" className="r">
-                  With package: Extreme caution+
+                  With the cooling package: Extreme caution or worse
                 </th>
                 <th scope="col" className="r">
-                  With package: Danger+
+                  With the cooling package: Danger or worse
                 </th>
               </>
             ) : null}
@@ -237,7 +279,7 @@ function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
           {s.futures.map((f) => (
             <tr key={f.id}>
               <td>
-                {f.label} {period(f.period)}
+                <FutureName experiment={f.experiment} period={f.period} fallback={f.label} />
               </td>
               <td className="r">{range(f.unadapted.ec_range_full, m)}</td>
               <td className="r">{range(f.unadapted.danger_range_full, m)}</td>
@@ -252,8 +294,9 @@ function Futures({ s }: { s: Pick<HeatSections, "today" | "futures"> }) {
         </tbody>
       </table>
       <p className="cap">
-        Ranges span the climate models&apos; 10th–90th percentile warming and the two humidity assumptions (constant dewpoint, the lower end; constant relative humidity, the upper
-        end). The heat index is steep near the category edges, so a few tenths of a degree can move many residents across one.
+        Each range covers most <Term id="climate_models">climate models</Term> (from the 10th to the 90th percentile of their warming) and both{" "}
+        <Term id="future_humidity">future humidity</Term> cases: the air holds the same amount of water as today (the low end) or takes up more water as it warms and stays as muggy as today (the high end). The feels-like
+        temperature climbs steeply near each level&apos;s edge, so a few tenths of a degree can move many residents across it.
       </p>
     </div>
   );
@@ -263,18 +306,21 @@ function Method({ s }: { s: Pick<HeatSections, "categories" | "humidity"> }) {
   return (
     <div className="stack" style={{ gap: 8 }}>
       <p className="cap prose">
-        {s.humidity.method}. Air temperature alone understates danger: humidity slows sweating, so the same air temperature feels hotter on a muggier day. Futures are a band
-        between two standard assumptions: {s.humidity.assumptions.constant_dewpoint}; and {s.humidity.assumptions.constant_rh}.
+        Heat risk uses the <Term id="heat_index" technical={s.humidity.method}>feels-like temperature</Term>, which combines air temperature and humidity the way the US
+        National Weather Service does. Air temperature alone understates danger: humidity slows sweating, so the same air temperature feels hotter on a muggier day. For
+        future years we show a range: at the low end the air holds the same amount of water as today, so it feels a little less muggy as it warms; at the high end it
+        takes up more water as it warms and stays as muggy as today, so the heat feels worse.
+        <InfoTip term="future_humidity" />
       </p>
-      <ul className="stack" style={{ listStyle: "none", padding: 0, margin: 0, gap: 4 }} aria-label="NWS heat-index categories">
+      <ul className="stack" style={{ listStyle: "none", padding: 0, margin: 0, gap: 4 }} aria-label="Heat-risk levels">
         {s.categories
           .filter((c) => c.id !== "below")
           .map((c) => (
             <li key={c.id} className="row" style={{ gap: 8, alignItems: "baseline" }}>
               <span aria-hidden="true" style={{ display: "inline-block", width: 12, height: 12, borderRadius: 3, background: CAT_COLOR[c.id] }} />
-              <strong>{c.label}</strong>
+              <strong>{levelLabel(c)}</strong>
               <span className="cap">
-                {c.hi_F === null ? `≥ ${fmtNum(c.lo_F, 0)} °F` : `${fmtNum(c.lo_F, 0)}–${fmtNum(c.hi_F, 0)} °F`}: {c.note}
+                feels like {c.hi_F === null ? `${fmtNum(c.lo_F, 0)} °F or more` : `${fmtNum(c.lo_F, 0)}–${fmtNum(c.hi_F, 0)} °F`}: {c.note}
               </span>
             </li>
           ))}
@@ -291,20 +337,25 @@ export default function Heat() {
     <ViewPage
       view="heat"
       title="Heat risk today"
-      intro="How hot the campaign afternoon felt, who was exposed and what the adaptation package buys. Heat risk uses the US National Weather Service heat index and its categories."
+      intro={
+        <>
+          How hot the <Term id="campaign">measured afternoon</Term> felt, who was exposed and what the cooling package changes. Heat risk uses the US National Weather
+          Service&apos;s <Term id="heat_index">feels-like temperature</Term> and its <Term id="heat_risk_level" text={heatLevelsTip().text}>heat-risk levels</Term>.
+        </>
+      }
       params={{ dewpoint_C: dewpoint }}
     >
       {(s) => (
         <>
-          <Section title="Humidity" data={s.humidity}>
+          <Section title={term("humidity_assumption").label} data={s.humidity}>
             {(h) => (
-              <Block title="Humidity">
+              <Block title={term("humidity_assumption").label} tip={<InfoTip term="humidity_assumption" />}>
                 <HumidityControl h={h} value={dewpoint} onChange={setDewpoint} />
               </Block>
             )}
           </Section>
           {s.brief ? <Brief items={s.brief.filter((b) => !NOT_TODAY_BRIEF.has(b.id))} /> : null}
-          {s.kpis ? <KpiTiles kpis={s.kpis.filter((k) => !NOT_TODAY_KPIS.has(k.id))} label="Heat key numbers" /> : null}
+          {s.kpis ? <KpiTiles kpis={s.kpis.filter((k) => !NOT_TODAY_KPIS.has(k.id))} label="Heat key numbers" tips={KPI_TIPS} /> : null}
           {s.today && s.categories ? <Exposure s={{ today: s.today, futures: s.futures ?? [], categories: s.categories }} scope="today" /> : null}
           <div className="grid2">
             {s.hist && s.categories ? <Distribution hist={s.hist} categories={s.categories} /> : null}
@@ -315,7 +366,7 @@ export default function Heat() {
             ) : null}
           </div>
           {s.categories && s.humidity ? (
-            <Block title="Method">
+            <Block title="How heat risk is measured" tip={<HeatLevelsTip label="heat-risk levels" />}>
               <Method s={{ categories: s.categories, humidity: s.humidity }} />
             </Block>
           ) : null}
@@ -341,7 +392,7 @@ export function HeatFutures() {
     <ViewPage
       view="heat"
       title="Heat risk as the climate warms"
-      intro="Residents in each National Weather Service heat-risk category on a comparable afternoon in each climate future, with and without the adaptation package."
+      intro="Residents at each heat-risk level on a similar afternoon in each future climate, with and without the cooling package."
       params={{ dewpoint_C: dewpoint }}
     >
       {(s) => {
@@ -350,24 +401,25 @@ export function HeatFutures() {
             <p className="callout" role="note">
               {s.humidity?.needs_input ? (
                 <>
-                  This run has no campaign humidity. Pick a dewpoint under <Link to={today}>Today</Link> to count residents at heat risk in each future.
+                  This run has no measured humidity. Pick a humidity assumption under <Link to={today}>Today</Link> to count residents at heat risk in each future.
                 </>
               ) : (
                 "Heat risk in future climates is not available for this run."
               )}
             </p>
           );
-        if (!s.futures.length) return <p className="cap">No climate futures for this run: it has no climate change factors yet (see Future climate above).</p>;
+        if (!s.futures.length) return <p className="cap">No future climates for this run: it has no climate-model projections yet (see Future climate above).</p>;
         const h = s.humidity;
         return (
           <>
             {h && h.dewpoint_C !== null ? (
               <p className="cap">
-                Heat index with a dewpoint of {fmtNum(h.dewpoint_C, 1)} °C ({h.source ?? "assumed"}); change it under <Link to={today}>Today</Link>, where today&apos;s counts are.
+                Feels-like temperature with a dew point of {fmtNum(dewF(h.dewpoint_C), 0)} °F ({h.source ?? "assumed"}); change the humidity assumption under <Link to={today}>Today</Link>,
+                where today&apos;s counts are.
               </p>
             ) : null}
             <Exposure s={{ today: s.today, futures: s.futures, categories: s.categories }} scope="futures" />
-            <Block title="Extreme caution and Danger in each future">
+            <Block title="Extreme caution and Danger in each future" tip={<HeatLevelsTip label="heat-risk levels" />}>
               <Futures s={{ today: s.today, futures: s.futures }} />
             </Block>
           </>

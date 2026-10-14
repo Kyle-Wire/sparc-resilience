@@ -19,7 +19,9 @@ import {
 } from "react";
 import { api, errorMessage, putRaw } from "../api/client";
 import type { Finding, FindingCreate } from "../api/types";
+import type { TermId } from "../content/glossary";
 import { Icon } from "../components/ui/Icon";
+import { InfoTip } from "../components/ui/InfoTip";
 import { Table, type Column } from "../components/ui/Table";
 import { toCsv, type CsvCell } from "../components/ui/csv";
 import { copyText, downloadBlob, downloadText, fileSlug } from "../components/ui/download";
@@ -49,6 +51,10 @@ export type ChartHandle = {
 /** Props every kit chart accepts for its frame. */
 export type FrameOptions = {
   title: string;
+  /** Glossary term the chart shows: an InfoTip (ⓘ) beside the title explains it. */
+  term?: TermId;
+  /** A one-off explanation of the chart in an InfoTip (ⓘ) beside the title; with `term`, it replaces the glossary tip. */
+  tip?: ReactNode;
   caption?: ReactNode;
   /** Units shown under the title (also in the table header). */
   units?: string;
@@ -295,7 +301,7 @@ export type ChartFrameProps = FrameOptions & {
 };
 
 /** The frame every kit chart renders inside. */
-export function ChartFrame({ title, caption, units, note, legend, bare, exportName, pin, handleRef, actions, className, table, tableView, children }: ChartFrameProps) {
+export function ChartFrame({ title, term, tip, caption, units, note, legend, bare, exportName, pin, handleRef, actions, className, table, tableView, children }: ChartFrameProps) {
   const dark = useUi((s) => s.dark);
   const context = useUi((s) => s.context);
   const route = useRoute();
@@ -414,9 +420,11 @@ export function ChartFrame({ title, caption, units, note, legend, bare, exportNa
             the toolbar drops below it (theme/base.css .chart-frame.vcard > .vcard-head). */}
         <header className="vcard-head">
           <div className="chart-title">
-            <h3 id={titleId} className="kicker">
+            {/* the ⓘ sits beside the heading, not in it, so the figure's name stays its title */}
+            <h3 id={titleId} className="kicker" style={term || tip ? { display: "inline" } : undefined}>
               {title}
             </h3>
+            {term ? <InfoTip term={term} text={tip ?? undefined} /> : tip ? <InfoTip label={title} text={tip} /> : null}
             {units ? <p className="cap chart-units">Units: {units}</p> : null}
             {note ? <div className="chart-note">{note}</div> : null}
           </div>

@@ -3,6 +3,7 @@
 // on; the Brush and Pick settings show only while drawing; the empty compare tray takes no room; the
 // examples say what they need only when the run lacks it; the engine line never sends a run without a
 // model or a quick estimate to a dead end; the quick estimate never repeats its big number citywide.
+import { act } from "react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { clearResources } from "../../../api/resource";
 import type { ScenarioTemplate } from "../../../api/lab";
@@ -17,7 +18,7 @@ import { routes as labRoutes } from "../routes";
 import { forgetDrafts, getDraft } from "../model/draft";
 import { useTray } from "../model/tray";
 import type { WorkbenchModel } from "../model/useWorkbench";
-import { ENGINE_NO_MODEL_NO_ESTIMATE, engineLine } from "../model/words";
+import { ENGINE_NO_CHECKPOINT, ENGINE_NO_MODEL_NO_ESTIMATE, engineLine } from "../model/words";
 import { GROUPS, LEVERS, PID, RID, gridMeta, layer, runRoutes } from "../__fixtures__/lab";
 
 let fetchMock: ReturnType<typeof mockFetch> | null = null;
@@ -182,9 +183,18 @@ describe("Examples (templates)", () => {
     // depave needs paving data this run lacks: it goes after the usable ones
     expect(ids()).toHaveLength(3);
     expect(ids()).not.toContain("depave");
-    // compact: a title and one line (the whole sentence in the tooltip)
+    // compact: a title and one line (the whole sentence in a tooltip on hover, not a native title)
     const first = container.querySelector(".template")!;
-    expect(first.querySelector(".template-desc")!.getAttribute("title")).toBe(first.querySelector(".template-desc")!.textContent);
+    const desc = first.querySelector(".template-desc")!;
+    expect(desc.hasAttribute("title")).toBe(false);
+    expect(desc.closest("[data-tip]")).not.toBeNull();
+    act(() => {
+      desc.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null }));
+    });
+    expect((await waitFor(() => document.querySelector('[role="tooltip"]'), 2000, "description tooltip")).textContent).toBe(desc.textContent);
+    act(() => {
+      desc.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: null }));
+    });
     const more = byText(container, "button", "More examples (2)")!;
     expect(more.getAttribute("aria-expanded")).toBe("false");
     click(more);
@@ -203,7 +213,9 @@ describe("Engine line and the quick estimate's citywide row", () => {
   });
 
   it("points a run with neither a model nor a quick estimate to building the estimate", () => {
-    expect(engineLine("no_checkpoint", null, { noEmulator: true })).toBe(ENGINE_NO_MODEL_NO_ESTIMATE);
+    // no saved models: the estimate cannot be built either (its build unpickles checkpoint.pkl)
+    expect(engineLine("no_checkpoint", null, { noEmulator: true })).toBe(ENGINE_NO_CHECKPOINT);
+    expect(ENGINE_NO_CHECKPOINT).toBe("Full model not available — this run did not save its trained models");
     expect(engineLine("incompatible", null, { noEmulator: true })).toBe(ENGINE_NO_MODEL_NO_ESTIMATE);
     expect(ENGINE_NO_MODEL_NO_ESTIMATE).not.toContain("quick estimate only");
     expect(engineLine("no_checkpoint", null)).toBe("Model not available for this run — quick estimate only");

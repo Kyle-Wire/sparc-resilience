@@ -23,16 +23,19 @@ import {
   type ThenAction,
 } from "../../api/projects";
 import { useResource } from "../../api/resource";
-import { Badge, DemoBadge } from "../../components/ui/Badge";
+import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { Chips } from "../../components/ui/Chips";
 import { ActionButton, EmptyState } from "../../components/ui/EmptyState";
 import { Icon } from "../../components/ui/Icon";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { NumberField } from "../../components/ui/NumberField";
 import { Seg } from "../../components/ui/Seg";
 import { StageRail } from "../../components/ui/StageRail";
+import { term } from "../../content/glossary";
 import { useProject } from "../../layouts/resources";
+import { DemoTag, TipSpan } from "../../layouts/tips";
 import { codecs, Link, navigate, setQuery, useRoute, useUrlState } from "../../router";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
@@ -43,16 +46,17 @@ import "./projects.css";
 
 const MODES: readonly RunMode[] = ["fast", "coarse", "full"];
 
+/** Each mode's name (kept) and its one-line plain description (the glossary's run_* tips). */
 const MODE_TEXT: Record<RunMode, { label: string; desc: string }> = {
-  fast: { label: "Fast", desc: "Quick check: fewer models and tuning steps; minutes, not hours." },
-  coarse: { label: "Coarse", desc: "Full pipeline on coarser cells: a faithful preview." },
-  full: { label: "Full", desc: "Every model at full resolution: the run decisions rest on." },
+  fast: { label: "Fast", desc: term("run_fast").tip },
+  coarse: { label: "Coarse", desc: term("run_coarse").tip },
+  full: { label: "Full", desc: term("run_full").tip },
 };
 
 const THEN_LABEL: Record<ThenAction, string> = {
-  "post.baselines": "Reference baselines",
+  "post.baselines": term("baselines").label,
   "post.planner": "Planner pack",
-  "post.emulator": "Scenario emulator",
+  "post.emulator": term("emulator_preview").label,
   "post.uncertainty": "Uncertainty report",
   "post.writeup": "Methods & model card",
 };
@@ -108,13 +112,13 @@ function ModeCard({
             </dd>
           </div>
           <div className="kv-row">
-            <dt>Peak RAM</dt>
+            <dt>{term("peak_ram").label}</dt>
             <dd className="num" data-est="ram">
               {p ? `≈${fmtNum(p.est_peak_rss_gb, 1)} GB` : plan.error ? "—" : "…"}
             </dd>
           </div>
           <div className="kv-row">
-            <dt>Checkpoint disk</dt>
+            <dt>Disk for {term("checkpoint").label.toLowerCase()}</dt>
             <dd className="num" data-est="disk">
               {p ? `≈${fmtBytes(p.est_disk_gb * 1e9)}` : plan.error ? "—" : "…"}
             </dd>
@@ -132,7 +136,7 @@ function ModeCard({
 
 function Preflight({ plan, onAction }: { plan: RunPlan; onAction: () => void }) {
   const rows = plan.preflight;
-  if (!rows.length) return <p className="cap">No preflight checks.</p>;
+  if (!rows.length) return <p className="cap">No checks before the start.</p>;
   return (
     <ul className="preflight" aria-label="Preflight checks">
       {rows.map((r, i) => {
@@ -232,7 +236,8 @@ export default function Launch() {
   };
 
   const proj = project.data?.project;
-  const modeDesc = (m: RunMode) => meta.data?.modes.find((x) => x.id === m)?.desc ?? MODE_TEXT[m].desc;
+  // One plain line per mode, from the glossary (run_fast, run_coarse, run_full).
+  const modeDesc = (m: RunMode) => MODE_TEXT[m].desc;
 
   return (
     <div className="stack launch-page">
@@ -240,14 +245,18 @@ export default function Launch() {
         <p className="eyebrow">Launch</p>
         <div className="row">
           <h1>{proj ? `Launch a run of ${proj.name}` : "Launch a run"}</h1>
-          {proj?.demo ? <DemoBadge /> : null}
-          {configVersion !== null ? <Badge title="Config version this plan uses">config v{configVersion}</Badge> : null}
+          {proj?.demo ? <DemoTag /> : null}
+          {configVersion !== null ? (
+            <TipSpan tip={`This plan uses ${term("config_version").label.toLowerCase()} ${configVersion}. ${term("config_version").tip}`} technical={term("config_version").technical}>
+              <Badge>settings v{configVersion}</Badge>
+            </TipSpan>
+          ) : null}
           <span className="spacer" />
           <Link className="btn small ghost" to={`/p/${encodeURIComponent(pid)}/setup/data`}>
             Setup
           </Link>
           <Link className="btn small ghost" to={`/p/${encodeURIComponent(pid)}/config`}>
-            Config
+            Settings file
           </Link>
         </div>
       </header>
@@ -256,11 +265,11 @@ export default function Launch() {
         <div className="callout" data-tone="info" role="status" data-prefill={prefill.applied.rid}>
           {prefill.applied.snapshot ? (
             <>
-              Prefilled from run <Link to={`/r/${encodeURIComponent(prefill.applied.rid)}`}>{prefill.applied.label}</Link>: its mode, stages, CV curve and threads. Enable what it skipped, then start a new run.
+              Prefilled from run <Link to={`/r/${encodeURIComponent(prefill.applied.rid)}`}>{prefill.applied.label}</Link>: its kind of run, stages, distance test and processor threads. Turn on what it skipped, then start a new run.
             </>
           ) : (
             <>
-              Run <Link to={`/r/${encodeURIComponent(prefill.applied.rid)}`}>{prefill.applied.label}</Link> has no launch snapshot to prefill from; the choices below are the defaults.
+              Run <Link to={`/r/${encodeURIComponent(prefill.applied.rid)}`}>{prefill.applied.label}</Link> kept no record of its launch choices to start from; the choices below are the defaults.
             </>
           )}
         </div>
@@ -295,7 +304,9 @@ export default function Launch() {
                   <label>
                     <input type="checkbox" checked={r.checked} disabled={r.locked} onChange={(e) => setSelection(toggleStage(selection, r.id, e.target.checked))} />
                     <span className="stage-text">
-                      <b>{r.label}</b>
+                      <b>
+                        {r.label} <span className="mono cap">{r.code}</span>
+                      </b>
                       <span className="cap">{r.desc}</span>
                     </span>
                     {r.reason ? <span className="cap stage-reason">({r.reason})</span> : null}
@@ -303,26 +314,32 @@ export default function Launch() {
                 ),
               }))}
             />
-            <p className="cap">Baselines and the skill-vs-distance curve run with S2–S3; the climate stage runs with S5 when enabled.</p>
+            <p className="cap">
+              The {term("stage_baselines").label.toLowerCase()} and the {term("stage_cv_curve").label.toLowerCase()} run with S2–S3; {term("stage_climate").label.toLowerCase()} runs with S5 when it is turned on.
+            </p>
           </Card>
           <Card title="Options" eyebrow="How it runs">
             <div className="field">
-              <span className="field-label">Skill-vs-distance curve</span>
+              <span className="field-label">
+                {term("stage_cv_curve").label} <InfoTip term="stage_cv_curve" />
+              </span>
               <Seg
                 size="small"
                 label="CV curve"
                 value={cv}
                 options={[
-                  { value: "config", label: "as configured" },
+                  { value: "config", label: "as in the settings" },
                   { value: "on", label: "on" },
                   { value: "off", label: "off" },
                 ]}
                 onChange={setCv}
               />
-              <span className="hint">Re-fits the models on smaller blocks: adds about as much time again per partition.</span>
+              <span className="hint">Trains the models again for each test-area size: each size adds about as much time again.</span>
             </div>
             <div className="field">
-              <span className="field-label">Threads</span>
+              <span className="field-label">
+                {term("threads").label} <InfoTip term="threads" />
+              </span>
               <NumberField
                 label="Threads"
                 value={threads ?? p?.threads ?? null}
@@ -341,7 +358,7 @@ export default function Launch() {
                 selected={then}
                 onToggle={(t, on) => setThen(on ? THEN_ACTIONS.filter((x) => x === t || then.includes(x)) : then.filter((x) => x !== t))}
               />
-              <span className="hint">Queued after the run succeeds, in this order.</span>
+              <span className="hint">Started after the run succeeds, in this order.</span>
             </div>
             <div className="grid2">
               <label className="field">
@@ -368,16 +385,16 @@ export default function Launch() {
             )}
             {p?.resumable?.resumable ? (
               <div className="callout" data-tone="info">
-                A checkpoint of an earlier run could be reused: {p.resumable.reuses.join(", ")}
+                The {term("checkpoint").label.toLowerCase()} of an earlier run can be reused: {p.resumable.reuses.join(", ")}
                 {p.resumable.saves_s ? ` (saves ≈${fmtDuration(p.resumable.saves_s)})` : ""}.
               </div>
             ) : null}
           </Card>
-          <Card title="Preflight" eyebrow="Checks before start">
+          <Card title="Checks before the start" eyebrow="Preflight">
             {p ? <Preflight plan={p} onAction={() => void plan.reload()} /> : null}
             {configErrors.length ? (
               <div className="callout" data-tone="crit" role="alert">
-                The config has {configErrors.length} {configErrors.length === 1 ? "error" : "errors"}: {configErrors.slice(0, 3).map((i) => `${i.path}: ${i.message}`).join("; ")}.{" "}
+                The settings have {configErrors.length} {configErrors.length === 1 ? "problem" : "problems"}: {configErrors.slice(0, 3).map((i) => `${i.path}: ${i.message}`).join("; ")}.{" "}
                 <Link to={`/p/${encodeURIComponent(pid)}/setup/data`}>Fix them in Setup</Link>.
               </div>
             ) : null}
@@ -387,13 +404,19 @@ export default function Launch() {
             <div className="stack" style={{ gap: 2 }}>
               <strong>{p ? `≈${fmtDurationRange(p.est_lo, p.est_hi)}` : "—"}</strong>
               <span className="cap">
-                {p ? `peak RAM ≈${fmtNum(p.est_peak_rss_gb, 1)} GB · checkpoint ≈${fmtBytes(p.est_disk_gb * 1e9)}` : ""}
+                {p ? (
+                  <>
+                    {term("peak_ram").label} ≈{fmtNum(p.est_peak_rss_gb, 1)} GB <InfoTip term="peak_ram" /> · {term("checkpoint").label.toLowerCase()} ≈{fmtBytes(p.est_disk_gb * 1e9)} on disk <InfoTip term="checkpoint" />
+                  </>
+                ) : (
+                  ""
+                )}
               </span>
             </div>
             <span className="spacer" />
             {!canStart && p && (blocking.length || configErrors.length) ? (
               <span className="cap" role="status">
-                {blocking.length ? `${blocking.length} preflight ${blocking.length === 1 ? "check blocks" : "checks block"} the launch` : "Fix the config errors to start"}
+                {blocking.length ? `${blocking.length} preflight ${blocking.length === 1 ? "check blocks" : "checks block"} the launch` : "Fix the problems in the settings to start"}
               </span>
             ) : null}
             <Button variant="primary" icon="play" busy={starting} disabled={!canStart} onClick={() => void start()} data-start="true">

@@ -331,16 +331,23 @@ def test_detail_lists_runs_from_the_runs_table(client, ctx, demo):
     assert d["project"]["last_run"]["has_checkpoint"] is False        # no checkpoint.pkl in /tmp/x/run1
     rows = {r["key"]: r for r in d["readiness"]}
     assert rows["runs"]["state"] == "warn"                            # fast only
-    assert rows["emulator"]["action"]["kind"] == "build_emulator"
+    # no checkpoint.pkl: the quick estimate cannot be built (the build unpickles it), so the row sends to Launch
+    assert rows["emulator"]["state"] == "n/a"
+    assert rows["emulator"]["detail"] == "needs a run that saved its trained models: launch a new run"
+    assert {k: rows["emulator"]["action"][k] for k in ("kind", "label", "path")} == {
+        "kind": "open", "label": "Launch a run", "path": f"/p/{demo['id']}/launch"}
 
 
-def test_study_children_are_not_the_projects_last_run(client, ctx, demo):
+def test_study_children_are_not_the_projects_last_run(client, ctx, demo, tmp_path):
     """A placebo refit (origin ``study_child``) or a reproduction finishing after the project's run is not the
     project's "Last run" (Home, Scenario Lab entry) and does not count in the readiness spine's runs and
     emulator rows: its skill is a placebo's, its layers shifted."""
     common = {"project_id": demo["id"], "status": "complete", "has_emulator": 0}
-    ctx.db.insert("runs", {**common, "id": "20261001-120000-fast-a1b2", "run_dir": "/tmp/x/run1",
-                           "studio_dir": "/tmp/x/run1/studio", "origin": "studio", "mode": "fast",
+    rd = tmp_path / "run1"
+    rd.mkdir()
+    (rd / "checkpoint.pkl").write_bytes(b"x")                       # saved its models: the estimate can be built
+    ctx.db.insert("runs", {**common, "id": "20261001-120000-fast-a1b2", "run_dir": str(rd),
+                           "studio_dir": str(rd / "studio"), "origin": "studio", "mode": "fast",
                            "created_utc": "2026-10-01T12:00:00Z", "r2": 0.879})
     ctx.db.insert("runs", {**common, "id": "20261001-130000-full-c3d4", "run_dir": "/tmp/x/st/children/shift",
                            "studio_dir": "/tmp/x/st/children/shift/studio", "origin": "study_child",
@@ -354,8 +361,8 @@ def test_study_children_are_not_the_projects_last_run(client, ctx, demo):
     listed = next(p for p in client.get("/api/projects").json() if p["id"] == demo["id"])
     assert listed["last_run"]["id"] == "20261001-120000-fast-a1b2"
     rows = {r["key"]: r for r in d["readiness"]}
-    assert rows["runs"]["detail"] == "1 run: fast (fast only)", rows["runs"]
-    assert "20261001-120000-fast-a1b2" in rows["emulator"]["detail"]
+    assert rows["runs"]["detail"] == "1 quick (fast) run; launch a full run for decisions", rows["runs"]
+    assert rows["emulator"]["detail"] == "not built yet for the latest run: the Lab's quick estimates need it"
     assert rows["emulator"]["action"]["path"] == "/api/runs/20261001-120000-fast-a1b2/actions/emulator"
     assert {r["id"] for r in d["runs"]} >= {"20261001-130000-full-c3d4"}   # still listed (origin filters them)
 
@@ -807,7 +814,8 @@ def test_studies_row_counts_post_run_outputs(client, ctx, demo, tmp_path):
                            "studio_dir": str(run_dir / "studio"), "origin": "imported", "status": "complete",
                            "mode": "full", "created_utc": "2026-10-01T12:00:00Z"})
     row = spine(client, demo["id"])["studies"]
-    assert row["state"] == "warn" and "not run: baselines, placebo, multiverse, simcheck, uncertainty" in row["detail"]
+    assert row["state"] == "warn" and ("not run: simple-model check, fake-change test, stability across choices, simulation check, "
+                                  "uncertainty report") in row["detail"]
     # the run's checks live on its How much to trust this tab (not the legacy /validation path)
     assert row["action"]["label"] == "See the checks" and row["action"]["path"] == "/r/20261001-120000-full-e5f6/trust"
     for name in ("baselines.json", "uncertainty.json"):
@@ -815,7 +823,7 @@ def test_studies_row_counts_post_run_outputs(client, ctx, demo, tmp_path):
     for i, (kind, status) in enumerate((("placebo", "succeeded"), ("multiverse", "imported"), ("simcheck", "running"))):
         ctx.db.insert("studies", {"id": f"st_{i}", "project_id": demo["id"], "kind": kind, "status": status})
     row = spine(client, demo["id"])["studies"]
-    assert row["state"] == "warn" and row["detail"].endswith("not run: simcheck")
+    assert row["state"] == "warn" and row["detail"].endswith("not run: simulation check")
     ctx.db.execute("UPDATE studies SET status = 'succeeded' WHERE kind = 'simcheck'")
     row = spine(client, demo["id"])["studies"]
     assert row["state"] == "ok" and row["action"] is None

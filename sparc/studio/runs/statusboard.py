@@ -11,30 +11,32 @@ Board columns: the eleven stages minus ``finish`` | ``planner, emulator, uncerta
 
 from __future__ import annotations
 
+from sparc.core.glossary import label as gl
 from sparc.studio import db as dbmod
 from sparc.studio.runs.common import fnum
 from sparc.studio.workspace import parse_utc
 
-__all__ = ["STAGES", "STAGE_LABELS", "COLUMNS", "stage_rows", "board_row", "timeline", "CHECKPOINT_STAGES",
+__all__ = ["STAGES", "STAGE_LABELS", "COLUMNS", "STUDY_ACTION_LABELS", "stage_rows", "board_row", "timeline", "CHECKPOINT_STAGES",
            "reused_stages", "plan_reasons", "relaunch_action", "can_resume"]
 
 STAGES = ("S0", "S1", "S2_S3", "baselines", "cv_curve", "S4", "S5", "climate", "S6", "S7", "finish")
-STAGE_LABELS = {"S0": "Data and QA", "S1": "Area of influence", "S2_S3": "Base models and stacker",
-                "baselines": "Reference baselines", "cv_curve": "Skill vs distance", "S4": "Response surfaces",
-                "S5": "Scenarios", "climate": "Climate and adaptation", "S6": "Causal validation",
-                "S7": "Budget optimisation", "finish": "Manifest and report"}
+#: plain stage names from the glossary (``stage_s0`` "Check the data" … ``stage_finish`` "Write the report")
+STAGE_LABELS = {s: gl(f"stage_{s.lower()}") for s in STAGES}
 #: stage → checkpoint done-set entry restoring it (sparc.core.pipeline.CHECKPOINT_KEY)
 CHECKPOINT_STAGES = {"S1": "S3", "S2_S3": "S3", "baselines": "baselines", "cv_curve": "cv_curve", "S4": "S4",
                      "S5": "S5", "climate": "climate", "S6": "S6"}
 COLUMNS = ([{"id": s, "label": STAGE_LABELS[s], "group": "stage"} for s in STAGES if s != "finish"]
            + [{"id": k, "label": lab, "group": "post"} for k, lab in (("planner", "Planner pack"),
-                                                                     ("emulator", "Emulator"),
-                                                                     ("uncertainty", "Uncertainty"),
+                                                                     ("emulator", gl("emulator_preview")),
+                                                                     ("uncertainty", "Uncertainty report"),
                                                                      ("writeup", "Methods & model card"))]
-           + [{"id": k, "label": lab, "group": "study"} for k, lab in (("placebo", "Placebo"),
-                                                                      ("multiverse", "Multiverse"),
-                                                                      ("simcheck", "Simulation check"),
-                                                                      ("reproduce", "Reproduction"))])
+           + [{"id": k, "label": lab, "group": "study"} for k, lab in (("placebo", gl("placebo")),
+                                                                      ("multiverse", gl("multiverse")),
+                                                                      ("simcheck", gl("attribution")),
+                                                                      ("reproduce", gl("reproduce")))])
+#: the button of a run study that has not run, in the study's plain name
+STUDY_ACTION_LABELS = {"placebo": "Run the fake-change test", "multiverse": "Run the stability check",
+                       "simcheck": "Run the simulation check", "reproduce": "Run the repeat run"}
 _STALE_OUTPUTS = {"S6": "causal.json", "S7": "optimize.json", "cv_curve": "cv_distance.json",
                   "baselines": "baselines.json", "climate": "climate.json"}
 _STALE_KEYS = {"S6": "causal", "S7": "optimize", "cv_curve": "cv_distance", "baselines": "baselines",
@@ -42,10 +44,10 @@ _STALE_KEYS = {"S6": "causal", "S7": "optimize", "cv_curve": "cv_distance", "bas
 
 
 #: "Re-run with …" wording per stage
-_RERUN_WITH = {"S0": "the data stage", "S1": "the influence stage", "S2_S3": "the models", "baselines": "the baselines",
-               "cv_curve": "the CV curve", "S4": "the response surfaces", "S5": "the scenarios",
-               "climate": "the climate stage", "S6": "the causal audit", "S7": "the budget optimisation",
-               "finish": "the run report"}
+_RERUN_WITH = {"S0": "the data stage", "S1": "the influence stage", "S2_S3": "the models",
+               "baselines": "the simple-model check", "cv_curve": "the distance test", "S4": "cooling by amount",
+               "S5": "the scenarios", "climate": "the climate stage", "S6": "the cause-and-effect check",
+               "S7": "the budget plan", "finish": "the run report"}
 
 
 def relaunch_action(ctx, stage: str) -> dict | None:
@@ -237,7 +239,7 @@ def board_row(ctx, db, rows: list[dict], *, resumable: bool) -> dict[str, dict]:
     for k, (rel, key) in files.items():
         j = jobs.get(f"post.{k}")
         action = {"kind": "build_emulator" if k == "emulator" else "run_job",
-                  "label": {"planner": "Run planner pack", "emulator": "Build emulator",
+                  "label": {"planner": "Run planner pack", "emulator": "Build quick estimate",
                             "uncertainty": "Compute uncertainty", "writeup": "Regenerate methods & model card"}[k],
                   "method": "POST", "path": f"/api/runs/{rid}/actions/{k}", "body": {}}
         if j is not None and j["status"] in ("queued", "blocked", "starting", "running", "cancelling"):
@@ -256,7 +258,7 @@ def board_row(ctx, db, rows: list[dict], *, resumable: bool) -> dict[str, dict]:
     m = ctx.manifest_raw or {}
     for k in ("placebo", "multiverse", "simcheck", "reproduce"):
         s = studies.get(k)
-        action = {"kind": "run_job", "label": f"Run the {k} study", "method": "POST",
+        action = {"kind": "run_job", "label": STUDY_ACTION_LABELS[k], "method": "POST",
                   "path": f"/api/runs/{rid}/studies/{k}", "body": {}}
         if s is not None:
             st = str(s.get("status") or "")

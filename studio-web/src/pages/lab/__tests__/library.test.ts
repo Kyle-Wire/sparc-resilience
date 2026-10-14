@@ -143,12 +143,14 @@ describe("sweeps", () => {
     expect(pipelineCurve({ nope: 1 }, 1)).toBeNull();
   });
 
-  it("states each fit's d_s and d90 on its own dose axis", () => {
+  it("states each fit's 90% point and d_s on its own amount axis, in plain words first", () => {
     const t = sweepFitText({ model: "saturating", A: 1.545, ds: 13.83, d90: 31.84, axis: "dose" }, { model: "saturating", A: 1.545, ds: 3.14, d90: 7.22, axis: "neighbourhood_dose" }, " pp");
-    expect(t).toContain("Fit on the requested dose: saturating, A = 1.545, d_s = 13.83 pp, 90% of the effect by a requested dose of 31.84 pp.");
-    expect(t).toContain("On the neighbourhood dose");
-    expect(t).toContain("d_s = 3.14, d90 = 7.22 pp.");
-    expect(t).not.toContain("effect by 7.22");
+    expect(t).toContain("Fitted shape: diminishing; about 90% of the possible cooling comes by an amount of 31.84 pp (fit on the amount asked for: A = 1.545, d_s = 13.83 pp).");
+    expect(t).toContain("On the amount nearby");
+    expect(t).toContain("about 90% of the possible cooling by 7.22 pp, d_s = 3.14 pp.");
+    expect(t).not.toContain("comes by an amount of 7.22");
+    // a shape the glossary does not know keeps its name
+    expect(sweepFitText({ model: "odd", A: null, ds: null, d90: null }, null)).toBe(" Fitted shape: odd.");
     expect(sweepFitText(null, null)).toBe("");
   });
 });

@@ -18,6 +18,7 @@ import {
   foldModelGrid,
   ganttRows,
   globMatch,
+  STAGE_PLAIN,
   matchesLog,
   pathCrumbs,
   priorityStability,
@@ -26,6 +27,7 @@ import {
   reasonText,
   scenarioFeed,
   simcheckGrid,
+  spanLabel,
   verdictStatus,
   warningTab,
 } from "../model";
@@ -49,7 +51,7 @@ describe("rail and reasons", () => {
   });
 
   it("explains every reason in words", () => {
-    expect(reasonText("disabled_by_config:cv.distance_curve.enabled")).toBe("disabled in the config (cv.distance_curve.enabled)");
+    expect(reasonText("disabled_by_config:cv.distance_curve.enabled")).toBe("turned off in the project settings");
     expect(reasonText("required_by:S6")).toBe("needed by S6");
     expect(reasonText("no_partitions")).toContain("partitions");
     expect(reasonText(null)).toBe("");
@@ -156,11 +158,23 @@ describe("timeline, crumbs and logs", () => {
     const s = replay(sample);
     const rows = ganttRows(Object.values(s.spans));
     expect(rows.find((r) => r.label === "run demo")).toBeDefined();
-    expect(rows.find((r) => r.label.startsWith("cv_curve"))?.status).toBe("ok");
+    expect(rows.find((r) => r.label === STAGE_PLAIN.cv_curve)?.status).toBe("ok");
+    // planner words on the timeline: no raw stage ids or model terms
+    expect(rows.map((r) => r.label).join(" | ")).not.toMatch(/cv_curve|S2_S3|\bfold\b|advection|stacker|baseline model/);
     const s4 = s.stages!.S4;
     const zoomed = ganttRows(Object.values(s.spans), { from: s4.started_ts!, to: s4.ended_ts! });
     expect(zoomed.some((r) => r.label.startsWith("cv partition"))).toBe(false);
     expect(zoomed.some((r) => r.label.startsWith("dose 2/2"))).toBe(true);
+  });
+
+  it("names spans in plain words", () => {
+    const sp = (kind: string, name: string, k: number | null = null, n: number | null = null, key: string | null = null) => ({ kind, name, key, k, n });
+    expect(spanLabel(sp("stage", "S2_S3"))).toBe(`S2–S3 · ${STAGE_PLAIN.S2_S3}`);
+    expect(spanLabel(sp("stage", "cv_curve"))).toBe(STAGE_PLAIN.cv_curve);
+    expect(spanLabel(sp("task", "fold", 1, 3))).toBe("test area 1/3");
+    expect(spanLabel(sp("task", "advection_check"))).toBe("wind check");
+    expect(spanLabel(sp("task", "stacker_candidate", 1, 4, "mean"))).toBe("blend option 1/4 (mean)");
+    expect(spanLabel(sp("task", "baseline_model", null, null, "hgb_xy"))).toBe("simple model hgb_xy");
   });
 
   it("filters log lines like the server", () => {

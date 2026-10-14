@@ -5,15 +5,41 @@
 // classed targets; full width, with a one-line note, when the run has no zone column), the
 // dose-scale table, predictor histograms, the correlation matrix, per-zone counts, coarse
 // aggregation stats and join provenance.
+// Plain words (phase 4): the technical names stay (this is Model details), but every jargon tile,
+// block and chart has an ⓘ (InfoTip) or a glossary <Term> saying what it means.
 import type { AccuracySections, DataSections, KeyValue, ViewKpi } from "../../api/runs";
 import { useView } from "../../api/runs";
 import { Bars, Heatmap, Histogram, SmallMultiples } from "../../charts";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Table } from "../../components/ui/Table";
+import { Term } from "../../components/ui/Term";
+import { term } from "../../content/glossary";
 import { fmtNum, fmtPct, fmtValue, unitLabel } from "../../theme/format";
-import { Block, FlagList, KpiTiles, Section, ViewPage, useRid, useUnits, type DetailPageProps } from "./common";
+import { Block, FlagList, KpiTiles, Section, ViewPage, useRid, useUnits, type DetailPageProps, type KpiTip } from "./common";
 import { cellText } from "./format";
 
 type FracHist = NonNullable<DataSections["frac_hist"]>;
+
+/** What each QA tile means (by KPI id; "noise" is the fixture's id of the noise floor). */
+export const QA_TILE_TIPS: Partial<Record<string, KpiTip>> = {
+  n_input: { label: "Input points", text: "The temperature readings in the input file, before any were left out." },
+  n_points: { term: "cell", label: "Cells modelled" },
+  dropped: { label: "Dropped (non-finite)", text: "Readings left out because a value was blank, infinite or not a number.", technical: "Non-finite values (NaN, ±inf)" },
+  clipped: {
+    label: "Clipped values",
+    text: "Map-layer values outside their allowed range (set in the project's checks) that were pulled back to its edge, e.g. a tree cover above 100%. The note lists them by layer.",
+    technical: "qa.clip (values clipped to the valid range)",
+  },
+  fill: { term: "grid_fill", label: "Grid fill" },
+  collisions: { label: "Cell collisions", text: "The share of filled squares that received more than one reading. Their readings are averaged into one.", technical: "Cell collision fraction" },
+  background: {
+    label: "Background",
+    text: "The reference temperature taken away from every reading, so the model predicts how much warmer or cooler each place is than it. By default, the median reading.",
+    technical: "Background (subtracted from the target)",
+  },
+  noise_floor: { term: "noise_floor", label: "Rounding-noise floor" },
+  noise: { term: "noise_floor", label: "Rounding-noise floor" },
+};
 
 function FractionalParts({ h }: { h: FracHist }) {
   const units = useUnits();
@@ -22,14 +48,20 @@ function FractionalParts({ h }: { h: FracHist }) {
   const peak = h.shares.reduce((m, v, i) => (v > (h.shares[m] ?? -1) ? i : m), 0);
   const even = h.shares.length ? 1 / h.shares.length : 0;
   const parts = [
-    h.integer_share !== null ? `${fmtPct(h.integer_share, 1)} of targets are whole numbers` : null,
+    h.integer_share !== null ? `${fmtPct(h.integer_share, 1)} of readings are whole numbers` : null,
     h.half_share !== null ? `${fmtPct(h.half_share, 1)} end in .5` : null,
-    h.shares.length ? `the fullest bin (${cats[peak]}) holds ${fmtPct(h.shares[peak], 0)} against ${fmtPct(even, 0)} for evenly spread decimals` : null,
-    h.noise_sd !== null ? `rounding noise floor ${fmtValue(h.noise_sd, units.target, 3)}` : null,
+    h.shares.length ? `the fullest bar (${cats[peak]}) holds ${fmtPct(h.shares[peak], 0)}, where evenly spread decimals would put ${fmtPct(even, 0)}` : null,
+    h.noise_sd !== null ? `${term("noise_floor").label.toLowerCase()} (rounding-noise floor) ${fmtValue(h.noise_sd, units.target, 3)}` : null,
   ].filter(Boolean);
   return (
     <Bars
       title="Fractional part of the target"
+      note={
+        <>
+          Were the readings rounded?
+          <InfoTip term="fractional_part" label="Fractional part of the target" />
+        </>
+      }
       units="share of points"
       categories={cats}
       categoryLabel={`Fractional part (${u || "units"})`}
@@ -73,7 +105,7 @@ function WindArrow({ deg, speed }: { deg: number | null; speed: number | null })
 /** The run's input weather (from the accuracy view's forcing card): date and hours, radiation, wind and station, with its checks. */
 export function ForcingCard({ f }: { f: Forcing }) {
   return (
-    <Block title="Forcing">
+    <Block title="Forcing" tip={<InfoTip term="forcing" label="Forcing" />}>
       <div className="row" style={{ alignItems: "flex-start" }}>
         <WindArrow deg={f.wind_dir_deg} speed={f.wind_speed} />
         <dl className="kv" aria-label="Forcing">
@@ -81,9 +113,19 @@ export function ForcingCard({ f }: { f: Forcing }) {
           <dd>{f.date ?? "—"}</dd>
           <dt>Hours</dt>
           <dd>{f.hours ?? "—"}</dd>
-          <dt>Shortwave down</dt>
+          <dt>
+            Shortwave down
+            <InfoTip label="Shortwave down" text="Sunlight reaching the ground, in watts per square metre." technical="Downwelling shortwave radiation (SW↓)" />
+          </dt>
           <dd>{fmtValue(f.sw_down, "W/m²", 0)}</dd>
-          <dt>Net longwave</dt>
+          <dt>
+            Net longwave
+            <InfoTip
+              label="Net longwave"
+              text="Heat radiation the ground gains from the sky minus what it gives off, in watts per square metre. Negative means the ground loses heat this way."
+              technical="Net longwave radiation (LW↓ − LW↑)"
+            />
+          </dt>
           <dd>{fmtValue(f.lw_net, "W/m²", 0)}</dd>
           <dt>Wind</dt>
           <dd>{f.wind_speed !== null ? `${fmtValue(f.wind_speed, "m/s", 1)}${f.wind_dir_deg !== null ? ` from ${fmtNum(f.wind_dir_deg, 0)}°` : ""}` : "—"}</dd>
@@ -110,7 +152,16 @@ function FlagsAndForcing({ flags }: { flags: DataSections["flags"] | null | unde
   const flagBlock = (
     <Section title="QA flags" data={flags}>
       {(f) => (
-        <Block title="QA flags">
+        <Block
+          title="QA flags"
+          tip={
+            <InfoTip
+              label="QA flags"
+              text="Notes and warnings raised while the input data were checked. A warning can change how the results should be read; an info note needs no action."
+              technical="Data QA flags"
+            />
+          }
+        >
           <FlagList flags={f} />
         </Block>
       )}
@@ -171,14 +222,14 @@ function KeyValues({ items, label }: { items: KeyValue[]; label: string }) {
 
 export default function DataQa({
   title = "Data & QA",
-  intro = "What went into the model: input checks, the grid, the lever doses and the predictors.",
+  intro = "What went into the model, and the checks on it: the readings, the map grid, the size of the tested changes and the map layers.",
 }: DetailPageProps = {}) {
   return (
     <ViewPage view="data" title={title} intro={intro}>
       {(s) => (
         <>
           <Section title="QA tiles" data={s.qa_tiles}>
-            {(t) => <KpiTiles kpis={foldCellSize(t)} label="Data QA" />}
+            {(t) => <KpiTiles kpis={foldCellSize(t)} label="Data QA" tips={QA_TILE_TIPS} />}
           </Section>
           <FlagsAndForcing flags={s.flags} />
           {s.zone_counts && !s.zone_counts.length ? (
@@ -200,6 +251,7 @@ export default function DataQa({
                 {(z) => (
                   <Bars
                     title="Points per zone"
+                    note="Readings in each zone or neighbourhood of the input (used for reporting only)."
                     categories={z.map((r) => r.zone)}
                     categoryLabel="Zone"
                     series={[{ id: "n", label: "Points", values: z.map((r) => r.n) }]}
@@ -216,8 +268,12 @@ export default function DataQa({
           )}
           <Section title="Dose scale" data={s.dose_scale}>
             {(d) => (
-              <Block title="Dose scale">
-                <p className="cap">Doses beyond one standard deviation of the lever are highlighted: the model sees few cells that far from today.</p>
+              <Block title="Dose scale" tip={<InfoTip term="dose_scale" label="Dose scale" />}>
+                <p className="cap">
+                  Each tested amount (dose) next to how much the lever already varies across the city: its standard deviation (sd). Amounts beyond 1 sd are highlighted: few
+                  places today are that far from the typical value, so the model has little to go on there. The last column shows where a typical place would rank in
+                  today&apos;s city after the change.
+                </p>
                 <DoseScale rows={d} />
               </Block>
             )}
@@ -226,6 +282,11 @@ export default function DataQa({
             {(p) => (
               <SmallMultiples
                 title="Predictor distributions"
+                note={
+                  <>
+                    How each <Term id="predictor">map layer</Term> is spread across the cells.
+                  </>
+                }
                 items={p}
                 panelTitle={(h) => `${h.label}${h.unit ? ` (${unitLabel(h.unit)})` : ""}`}
                 renderPanel={(h) => <Histogram bare title={h.label} bins={{ edges: h.edges, counts: h.counts }} xLabel={h.label} unit={unitLabel(h.unit)} height={150} />}
@@ -264,6 +325,16 @@ export default function DataQa({
                   valueLabel="Pearson r"
                   decimals={2}
                   labels={c.names.length <= 10}
+                  note={
+                    <>
+                      Which map layers rise and fall together
+                      <InfoTip
+                        label="Pearson r"
+                        text="How closely two layers move together across the grid: 1 always together, −1 always opposite, 0 unrelated. The model finds it hard to tell the effects of strongly linked layers apart."
+                        technical="Pearson correlation coefficient"
+                      />
+                    </>
+                  }
                   caption={b ? `Strongest pair: ${b[0]} and ${b[1]} (r = ${fmtNum(b[2], 2)}).` : undefined}
                 />
               );
@@ -272,14 +343,23 @@ export default function DataQa({
           <div className="grid2">
             <Section title="Coarse aggregation" data={s.coarse}>
               {(c) => (
-                <Block title="Coarse aggregation">
+                <Block title="Coarse aggregation" tip={<InfoTip term="coarse" label="Coarse aggregation" />}>
                   <KeyValues items={c} label="Coarse aggregation" />
                 </Block>
               )}
             </Section>
             <Section title="Joins" data={s.joins}>
               {(j) => (
-                <Block title="Join provenance">
+                <Block
+                  title="Join provenance"
+                  tip={
+                    <InfoTip
+                      label="Join provenance"
+                      text="Extra data files joined onto the readings by a shared id column, with a fingerprint of each file so a later run can tell whether it changed."
+                      technical="Joins (key, matched / unmatched rows, SHA-256)"
+                    />
+                  }
+                >
                   {j.length ? (
                     <Table
                       caption="Joins"

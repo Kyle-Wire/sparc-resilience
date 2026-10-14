@@ -83,14 +83,16 @@ def output_action(ctx, spec, *, resumable: bool) -> dict | None:
         return None
     if kind == "post":
         if what == "emulator":
-            return {"kind": "build_emulator", "label": "Build emulator", "method": "POST",
+            return {"kind": "build_emulator", "label": "Build quick estimate", "method": "POST",
                     "path": f"/api/runs/{rid}/actions/emulator", "body": {}}
         labels = {"planner": "Run planner pack", "uncertainty": "Compute uncertainty envelopes",
                   "writeup": "Regenerate methods & model card", "baselines": "Score the baselines"}
         return {"kind": "run_job", "label": labels.get(what, f"Run {what}"), "method": "POST",
                 "path": f"/api/runs/{rid}/actions/{what}", "body": {}}
     if kind == "study" and what in ("placebo", "simcheck", "multiverse", "reproduce"):
-        return {"kind": "run_job", "label": f"Run the {what} study", "method": "POST",
+        from sparc.studio.runs.statusboard import STUDY_ACTION_LABELS
+
+        return {"kind": "run_job", "label": STUDY_ACTION_LABELS[what], "method": "POST",
                 "path": f"/api/runs/{rid}/studies/{what}", "body": {}}
     return None
 

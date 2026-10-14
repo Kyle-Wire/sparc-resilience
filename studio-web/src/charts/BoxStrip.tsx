@@ -100,7 +100,7 @@ function Plot(p: BoxStripProps) {
 export function BoxStrip(props: BoxStripProps) {
   const legend = props.legend ?? (
     <span>
-      box = quartiles · line = median · whiskers = {props.whiskerLabel ?? "10th–90th percentile"}
+      box = middle half (quartiles) · line = median · whiskers = {props.whiskerLabel ?? "10th–90th percentile"}
       {props.groups.some((g) => g.mean !== undefined && g.mean !== null) ? " · ○ = mean" : ""}
     </span>
   );

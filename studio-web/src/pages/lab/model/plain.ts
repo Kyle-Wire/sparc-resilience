@@ -3,7 +3,7 @@
 // - "Confident it cools" iff hi < 0; "Confident it warms" iff lo > 0; "Could be zero" when
 //   the interval spans 0.
 // - "partly beyond the conditions measured in this city (23% of the places you changed)" when more
-//   than 20% of the EDITED cells are extrapolated ("mostly beyond…" above half); "A separate cross-check finds less cooling — see
+//   than 20% of the EDITED cells are extrapolated ("mostly beyond…" above half); "The cause-and-effect check finds less cooling — see
 //   How sure are we" (the independent causal check disagrees: less / more cooling or warming, or the
 //   opposite effect, by its estimate against the model's citywide one); "preview only — not verified".
 // - The answer card's headline has no numbers (answerHeadlineText): its big number and likely-range
@@ -79,14 +79,14 @@ export function cityLine(city: Likely, unit: string, decimals = 3): string {
 /** The section name the causal qualifier points to (the answer card turns it into a link). */
 export const CAUSAL_QUALIFIER_LINK = "How sure are we";
 /** The opening words every causal qualifier shares (the card finds the line by them). */
-const CAUSAL_LEAD = "A separate cross-check";
+const CAUSAL_LEAD = "The cause-and-effect check";
 /** "Keep in mind" line when the independent causal check disagrees and its direction is unknown. */
 export const CAUSAL_QUALIFIER = `${CAUSAL_LEAD} gives a different answer — see ${CAUSAL_QUALIFIER_LINK}`;
 
 /**
  * "Keep in mind" line when the independent causal check disagrees, worded by what it finds against
- * the model's estimate of the same quantity (both citywide, negative = cooler): "A separate
- * cross-check finds less cooling — see How sure are we", "…more cooling…", "…less warming…", "…more
+ * the model's estimate of the same quantity (both citywide, negative = cooler): "The cause-and-effect
+ * check finds less cooling — see How sure are we", "…more cooling…", "…less warming…", "…more
  * warming…", or "…the opposite effect…". Without both figures: the generic CAUSAL_QUALIFIER.
  */
 export function causalQualifier(checkDelta: number | null | undefined, modelEstimate: number | null | undefined): string {
@@ -156,7 +156,7 @@ export function plainWording(p: PlainInput): PlainWording {
 export function perCostText(coolingPerCost: number, unit: string, per = "1,000 cost units"): string {
   const v = coolingPerCost * 1000;
   const warming = v < 0 && Number(Math.abs(v).toFixed(3)) !== 0;
-  return `${fmtNum(Math.abs(v), 3)} ${unitLabel(unit)}·cells of ${warming ? "warming" : "cooling"} per ${per}`;
+  return `${fmtNum(Math.abs(v), 3)} ${unitLabel(unit)}·places of ${warming ? "warming" : "cooling"} per ${per}`;
 }
 
 /** "1,200 fewer" / "300 more" (rounded residents). */

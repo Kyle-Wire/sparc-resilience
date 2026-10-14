@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, createRef, type ComponentProps, type ComponentType } from "react";
-import { KIT, LineBand, type ChartHandle, type KitName } from "../charts";
+import { DotRange, KIT, LineBand, type ChartHandle, type KitName } from "../charts";
 import { lastDownload } from "../components/ui/download";
 import { clearResources } from "../api/resource";
 import { useUi } from "../stores/ui";
@@ -164,10 +164,23 @@ describe("chart kit: every chart renders inside ChartFrame", () => {
     const rings = [{ r0_m: 0, r1_m: 0, mean: -1.6, se: 0.2, n: 2155 }, ...Array.from({ length: 33 }, (_, i) => ({ r0_m: i * 30, r1_m: (i + 1) * 30, mean: -0.8 / (i + 1), se: 0.05, n: 300 }))];
     const C = KIT.RingProfile as ComponentType<Record<string, unknown>>;
     const { container } = render(<C title="Spill" rings={rings} unit="°F" width={560} />);
-    const labels = [...container.querySelectorAll("svg.chart text.t-axis")].map((t) => t.textContent ?? "").filter((t) => /edited| m$/.test(t));
-    expect(labels[0]).toBe("edited");
+    const labels = [...container.querySelectorAll("svg.chart text.t-axis")].map((t) => t.textContent ?? "").filter((t) => /your changes| m$/.test(t));
+    expect(labels[0]).toBe("your changes");
     expect(labels.length).toBeGreaterThan(5);
     expect(labels.length).toBeLessThan(rings.length);
+  });
+
+  it("DotRange keeps row labels up to 40 characters, so the amount that tells two scenarios apart shows", () => {
+    const rows = [
+      { id: "a", label: "Cool roofs & surfaces +0.05 reflectivity", est: 0.1, lo: 0.05, hi: 0.15 },
+      { id: "b", label: "Cool roofs & surfaces +0.1 reflectivity", est: 0.2, lo: 0.1, hi: 0.3 },
+      { id: "c", label: "A scenario name that is far too long to show in full here", est: 0.3 },
+    ];
+    const { container } = render(<DotRange title="Citywide cooling per scenario" rows={rows} valueLabel="Citywide cooling" unit="°F" width={640} />);
+    const labels = [...container.querySelectorAll('svg.chart text.t-label[text-anchor="end"]')].map((t) => t.textContent);
+    expect(labels.slice(0, 2)).toEqual(["Cool roofs & surfaces +0.05 reflectivity", "Cool roofs & surfaces +0.1 reflectivity"]);
+    expect(labels[2]).toMatch(/^A scenario name that is far too long.*…$/);
+    expect(labels[2]!.length).toBeLessThanOrEqual(40);
   });
 
   it("Pin to Findings posts the snapshot and uploads the SVG image", async () => {

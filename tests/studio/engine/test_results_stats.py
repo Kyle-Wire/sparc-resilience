@@ -263,7 +263,7 @@ def test_compare_unverified_plan_has_only_city_totals(client, ctx, run_ctx, synt
     assert {"kind": "plan", "id": plan["id"]} in cmp_["needs_exact"]
     meta = {m["key"]: m for g in client.get(f"/api/runs/{rid}/layers").json()["groups"] for m in g["layers"]}
     pb = meta[f"plan:{plan['id']}:planned_benefit"]
-    assert pb["unit"] == "°F·cells" and "footprint total" in pb["label"]
+    assert pb["unit"] == "°F·places" and "footprint total" in pb["label"]
 
 
 def test_reindex_rebuilds_lab_tables(client, ctx, run_ctx, synth_run):

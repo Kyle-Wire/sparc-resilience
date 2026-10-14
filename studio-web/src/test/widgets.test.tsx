@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useState } from "react";
+import { act, useState } from "react";
 import { api } from "../api/client";
 import { CodeArea } from "../components/ui/CodeArea";
 import { Chips } from "../components/ui/Chips";
@@ -11,7 +11,7 @@ import { Tabs } from "../components/ui/Tabs";
 import { Toasts } from "../components/ui/Toast";
 import { VirtualList, visibleRange } from "../components/ui/VirtualList";
 import { useUi } from "../stores/ui";
-import { byText, click, flush, key, mockFetch, render, typeInto } from "./render";
+import { byText, click, flush, key, mockFetch, render, typeInto, waitFor } from "./render";
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -88,12 +88,20 @@ describe("Tabs, Chips, Slider", () => {
 });
 
 describe("CodeArea, VirtualList, Toasts", () => {
-  it("CodeArea numbers lines and marks issues in the gutter", () => {
+  it("CodeArea numbers lines and marks issues in the gutter", async () => {
     const { container } = render(<CodeArea label="config.yml" value={"data:\n  path: x.csv\nmodels: [mgwr]"} issues={[{ line: 2, level: "error", message: "file not found" }]} />);
     const rows = container.querySelectorAll(".gutter div");
     expect(rows).toHaveLength(3);
     expect(rows[1].getAttribute("data-level")).toBe("error");
-    expect(rows[1].getAttribute("title")).toBe("file not found");
+    // the issue shows in a tooltip on hover, not a native title
+    expect(rows[1].hasAttribute("title")).toBe(false);
+    act(() => {
+      rows[1].dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null }));
+    });
+    expect((await waitFor(() => document.querySelector('[role="tooltip"]'), 2000, "gutter tooltip")).textContent).toBe("file not found");
+    act(() => {
+      rows[1].dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: document.body }));
+    });
     expect(container.querySelector("textarea")!.getAttribute("aria-label")).toBe("config.yml");
     expect(container.textContent).toContain("Line 2: error file not found");
   });

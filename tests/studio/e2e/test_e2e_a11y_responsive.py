@@ -179,7 +179,7 @@ def test_map_keyboard_cursor(site, studio_page):
         page.keyboard.press(key)
         wait_for(lambda: live.inner_text() and live.inner_text() != before, 10, f"the readout after {key}")
         readouts.append(live.inner_text())
-    # "<layer>: <value> · <lat>, <lon> · row <n>" on a cell with data, "No observation · <lat>, <lon>" elsewhere
+    # "<layer>: <value> · <lat>, <lon> · row <n>" on a cell with data, "No reading here · <lat>, <lon>" elsewhere
     where = [re.search(r"(\d+\.\d+°[NS], \d+\.\d+°[EW])", t) for t in readouts]
     assert all(where), readouts
     assert len({w.group(1) for w in where}) == len(readouts), f"the cursor did not move: {readouts}"
@@ -193,7 +193,7 @@ def test_map_keyboard_cursor(site, studio_page):
     assert re.match(r"^Observed temperature: .+ · row \d+$", live.inner_text()), live.inner_text()
     assert live.get_attribute("aria-live") == "polite"
     page.keyboard.press("Enter")
-    page.get_by_role("region", name="Pinned cell").wait_for()
+    page.get_by_role("region", name="Pinned place").wait_for()
     sp.shot("map keyboard cursor pinned")
     page.keyboard.press("Escape")
 

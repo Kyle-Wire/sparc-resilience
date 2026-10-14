@@ -4,7 +4,9 @@
 // model-card limitations, and the run's findings. No tab routes the full page any more (the
 // Summary tab is the run's landing page); its run record (header, stage timings, outputs grid)
 // is RunRecord, shown in Model details › Run log (compact there: `detailsOnly`).
-import { useMemo } from "react";
+// Plain words (phase 4): the DEMO and "dirty" chips explain themselves (glossary), the header's
+// jargon (cells, coarse grid, checkpoint) and the accuracy KPIs carry an ⓘ or a <Term>.
+import { useMemo, type ReactNode } from "react";
 import { useResource } from "../../api/resource";
 import type { OverviewSections, RunDetail } from "../../api/runs";
 import { useRunDetailFull, useView } from "../../api/runs";
@@ -13,14 +15,18 @@ import { Bars } from "../../charts";
 import { Badge, modeLabel } from "../../components/ui/Badge";
 import { ActionButton } from "../../components/ui/EmptyState";
 import { Icon } from "../../components/ui/Icon";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { StatusChip } from "../../components/ui/StatusChip";
+import { Term } from "../../components/ui/Term";
+import { useTooltip } from "../../components/ui/Tooltip";
 import { copyText } from "../../components/ui/download";
+import { term } from "../../content/glossary";
 import { Link, runHref, runViewHref } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtDateTime, fmtDuration, fmtInt, fmtNum } from "../../theme/format";
 import { stageTone } from "../../theme/palette";
-import { Block, FlagList, KpiTiles, Section, ViewPage, useRid, type DetailPageProps } from "./common";
+import { Block, DemoChip, FlagList, KpiTiles, Section, TipChip, ViewPage, useRid, type DetailPageProps, type KpiTip } from "./common";
 import { OUTPUT_STATE_TEXT, outputStateStatus, producedByText } from "./format";
 
 /**
@@ -37,11 +43,7 @@ function Header({ detail, compact = false }: { detail: RunDetail; compact?: bool
       actions={
         <>
           <Badge tone="mode">{modeLabel(run.mode, run.coarse_m)}</Badge>
-          {h.demo ? (
-            <Badge tone="demo" title="Synthetic demo data at a fictional location">
-              DEMO
-            </Badge>
-          ) : null}
+          {h.demo ? <DemoChip /> : null}
           <StatusChip status={run.status} />
         </>
       }
@@ -59,21 +61,31 @@ function Header({ detail, compact = false }: { detail: RunDetail; compact?: bool
               {h.git_dirty ? (
                 <>
                   {" "}
-                  <Badge tone="warn" title="The working tree had uncommitted changes when this run started">
-                    dirty
-                  </Badge>
+                  <TipChip tip={term("uncommitted_code").tip}>
+                    <Badge tone="warn">dirty</Badge>
+                  </TipChip>
                 </>
               ) : null}
             </dd>
           </>
         )}
-        <dt>Cells</dt>
+        <dt>
+          Cells
+          <InfoTip term="cell" label="Cells" />
+        </dt>
         <dd>{fmtInt(h.n_points)}</dd>
         <dt>Grid</dt>
         <dd>
           {h.grid_shape ? `${fmtInt(h.grid_shape[0])} × ${fmtInt(h.grid_shape[1])} cells` : "—"}
           {h.cell_m ? ` at ${fmtNum(h.cell_m, 0)} m` : ""}
-          {h.coarse_m ? ` (coarse ${fmtNum(h.coarse_m, 0)} m)` : ""}
+          {h.coarse_m ? (
+            <>
+              {" ("}
+              <Term id="coarse">coarse</Term> {fmtNum(h.coarse_m, 0)} m)
+            </>
+          ) : (
+            ""
+          )}
         </dd>
         {run.duration_s !== null ? (
           <>
@@ -108,7 +120,10 @@ function Header({ detail, compact = false }: { detail: RunDetail; compact?: bool
         ) : null}
         {detail.checkpoint ? (
           <>
-            <dt>Checkpoint</dt>
+            <dt>
+              Checkpoint
+              <InfoTip term="checkpoint" label="Checkpoint" />
+            </dt>
             <dd>
               {detail.checkpoint.present ? `saved, done: ${detail.checkpoint.done.join(", ") || "—"}` : (detail.checkpoint.reason ?? "none")}{" "}
               <Link to={`${runHref(run.id, "details", "files")}#checkpoint`}>details</Link>
@@ -173,6 +188,20 @@ function outputHref(rid: string, view: string): string {
   return runViewHref(rid, view) ?? runHref(rid, "details", "files");
 }
 
+/** An output's name, linking to where it is shown; which step produced it is in a tooltip (hover or focus on the link). */
+function OutputLabel({ href, tip, children }: { href: string; tip: string; children: ReactNode }) {
+  const t = useTooltip<HTMLSpanElement>({ content: tip });
+  const { "aria-describedby": describedBy, ...handlers } = t.triggerProps;
+  return (
+    <span ref={t.anchorRef} className="output-label" {...handlers}>
+      <Link to={href} aria-describedby={describedBy}>
+        {children}
+      </Link>
+      {t.bubble}
+    </span>
+  );
+}
+
 /** The outputs availability grid; `actions` (default on) adds each missing output's remedy next to its MISSING pill. */
 function OutputsGrid({ outputs, rid, actions = true }: { outputs: OutputCell[]; rid: string; actions?: boolean }) {
   const groups = useMemo(() => {
@@ -189,9 +218,9 @@ function OutputsGrid({ outputs, rid, actions = true }: { outputs: OutputCell[]; 
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }} className="stack">
             {list.map((o) => (
               <li key={o.id} className="output-row" data-output={o.id} data-state={o.state}>
-                <span className="output-label" title={`Produced by ${producedByText(o.produced_by)}`}>
-                  <Link to={outputHref(rid, o.view)}>{o.label}</Link>
-                </span>
+                <OutputLabel href={outputHref(rid, o.view)} tip={`Produced by ${producedByText(o.produced_by)}`}>
+                  {o.label}
+                </OutputLabel>
                 <StatusChip status={outputStateStatus(o.state)} text={OUTPUT_STATE_TEXT[o.state] ?? o.state} />
                 {actions && o.state === "missing" && o.action ? (
                   <span className="output-action">
@@ -257,6 +286,20 @@ export function RunRecord({ detailsOnly = false }: DetailPageProps = {}) {
   );
 }
 
+/** What the accuracy key numbers mean (the overview's KPI ids). */
+const OVERVIEW_TIPS: Partial<Record<string, KpiTip>> = {
+  r2: { term: "r2" },
+  rmse: { term: "rmse" },
+  coverage: { term: "coverage" },
+  halfwidth: {
+    label: "Interval half-width",
+    text: "Half the width of a typical prediction range around a prediction. It cannot usefully be smaller than the rounding-noise floor.",
+    technical: "Mean interval half-width",
+  },
+  package: { term: "citywide" },
+  headline: { term: "citywide" },
+};
+
 const STUDY_STATUS: Record<string, string> = { not_run: "not_run", queued: "queued", running: "running", done: "done", stale: "stale", failed: "failed" };
 
 export default function Overview() {
@@ -270,7 +313,7 @@ export default function Overview() {
         {(s) => (
           <>
             <Section title="Key numbers" data={s.kpis}>
-              {(kpis) => <KpiTiles kpis={kpis} label="Run key numbers" />}
+              {(kpis) => <KpiTiles kpis={kpis} label="Run key numbers" tips={OVERVIEW_TIPS} />}
             </Section>
             <div className="grid2">
               <Section title="Stage timings" data={s.timings}>
@@ -291,13 +334,17 @@ export default function Overview() {
                 </Block>
               )}
             </Section>
-            <Section title="Studies" data={s.studies}>
+            <Section title={term("independent_checks").label} data={s.studies}>
               {(studies) => (
-                <Block title="Studies" actions={<Link to={`${runHref(rid, "trust")}#validation`}>Validation</Link>}>
+                <Block
+                  title={term("independent_checks").label}
+                  tip={<InfoTip term="independent_checks" />}
+                  actions={<Link to={`${runHref(rid, "trust")}#validation`}>What they show</Link>}
+                >
                   {studies.length ? (
                     <ul className="row" style={{ listStyle: "none", padding: 0, margin: 0 }} aria-label="Study status">
                       {studies.map((st) => (
-                        <li key={st.kind} className="chip study-chip" title={st.headline ?? undefined}>
+                        <li key={st.kind} className="chip study-chip">
                           <strong>{st.kind}</strong> <StatusChip status={STUDY_STATUS[st.state] ?? st.state} />
                           {st.headline ? <span className="chip-note">{st.headline}</span> : null}
                         </li>
@@ -311,7 +358,15 @@ export default function Overview() {
             </Section>
             <Section title="Model-card limitations" data={s.limitations}>
               {(lim) => (
-                <Block title="Model-card limitations">
+                <Block
+                  title="Model-card limitations"
+                  tip={
+                    <InfoTip
+                      label="Model card"
+                      text="The model card is a short document that says what the model is for, how it was built and tested, and where it should not be relied on."
+                    />
+                  }
+                >
                   {lim.length ? (
                     <ul className="prose" style={{ margin: 0, paddingLeft: 18 }}>
                       {lim.map((l, i) => (

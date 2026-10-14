@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useResource } from "../../api/resource";
 import { getStatusBoard, type StatusBoard as Board } from "../../api/tracking";
-import { Badge, modeLabel } from "../../components/ui/Badge";
+import { ModeBadge } from "../../layouts/tips";
 import { ActionButton, EmptyState } from "../../components/ui/EmptyState";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Link } from "../../router";
@@ -44,7 +44,7 @@ export function StatusBoardTable({ board }: { board: Board }) {
   return (
     <div className="board-frame" data-more={more || undefined}>
       <div className="board-wrap" ref={scroller}>
-        <table className="board" aria-label="Pipeline status board">
+        <table className="board" aria-label="Status of every run">
           <thead>
             <tr className="groups">
               <th scope="col">
@@ -70,7 +70,7 @@ export function StatusBoardTable({ board }: { board: Board }) {
               <tr key={run.id} data-run={run.id}>
                 <th scope="row">
                   <span className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
-                    <Badge tone="mode">{modeLabel(run.mode, run.coarse_m)}</Badge>
+                    <ModeBadge mode={run.mode} coarse_m={run.coarse_m} />
                     <Link to={`/r/${encodeURIComponent(run.id)}`}>{run.label || run.id}</Link>
                     <span className="cap">{fmtDate(run.created_utc)}</span>
                     <StatusChip status={run.status} />
@@ -81,7 +81,8 @@ export function StatusBoardTable({ board }: { board: Board }) {
                   const chip = boardCellChip(cell);
                   const href = boardCellHref(run.id, c.id, c.group, cell);
                   const title = `${run.label || run.id} · ${c.label}: ${chip.text}${chip.meta ? ` (${chip.meta})` : ""}`;
-                  const chipEl = <StatusChip status={chip.status} text={chip.text} meta={chip.meta} title={title} />;
+                  // the cell's row and column headers say which run and step it is (the link's name says it too)
+                  const chipEl = <StatusChip status={chip.status} text={chip.text} meta={chip.meta} />;
                   return (
                     <td key={c.id} className={starts.has(c.id) ? "group-start" : undefined} data-col={c.id} data-state={cell?.state ?? "not_run"}>
                       <span className="cell-actions">

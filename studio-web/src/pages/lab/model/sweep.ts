@@ -1,6 +1,7 @@
 // Sweep curve helpers (SPEC §7.9): the fitted saturation overlay and the pipeline's own
 // response curve, drawn on the same signed scale as the swept ΔT points.
 import type { Sweep, SweepFit } from "../../../api/lab";
+import { shape, term } from "../../../content/glossary";
 import { fmtNum } from "../../../theme/format";
 
 /** Majority sign of the finite values (−1 when the points are mostly cooling). */
@@ -43,22 +44,24 @@ export function fitOverlay(fit: Sweep["fit"], xs: number[], points: { x: number;
 }
 
 /**
- * The caption's fit sentence. `onDose` is the fit on the requested dose (the chart's x axis): its d_s and d90
- * are in requested-dose units. `neigh` is the fit on the neighbourhood dose (the Gaussian-smoothed dose
+ * The caption's fit sentence, in plain words first ("Fitted shape: diminishing; about 90% of the
+ * possible cooling comes by an amount of 31.84 pp"), the fitted parameters after it in brackets.
+ * `onDose` is the fit on the requested dose (the chart's x axis): its d_s and d90 are in
+ * requested-dose units. `neigh` is the fit on the neighbourhood dose (the distance-smoothed dose
  * around each cell, smaller than the requested dose for a regional sweep): quoted in its own units only.
  */
 export function sweepFitText(onDose: SweepFit | null, neigh: SweepFit | null, doseUnit = ""): string {
   let out = "";
   if (onDose) {
-    out += ` Fit on the requested dose: ${onDose.model}`;
-    if (onDose.A !== null) out += `, A = ${fmtNum(onDose.A, 3)}`;
-    if (onDose.ds !== null) out += `, d_s = ${fmtNum(onDose.ds, 2)}${doseUnit}`;
-    if (onDose.d90 !== null) out += `, 90% of the effect by a requested dose of ${fmtNum(onDose.d90, 2)}${doseUnit}`;
+    out += ` Fitted shape: ${shape(onDose.model)?.label.toLowerCase() ?? onDose.model}`;
+    if (onDose.d90 !== null) out += `; about 90% of the possible cooling comes by an amount of ${fmtNum(onDose.d90, 2)}${doseUnit}`;
+    const params = [onDose.A !== null ? `A = ${fmtNum(onDose.A, 3)}` : null, onDose.ds !== null ? `d_s = ${fmtNum(onDose.ds, 2)}${doseUnit}` : null].filter(Boolean);
+    if (params.length) out += ` (fit on the amount asked for: ${params.join(", ")})`;
     out += ".";
   }
   if (neigh && (neigh.ds !== null || neigh.d90 !== null)) {
-    const parts = [neigh.ds !== null ? `d_s = ${fmtNum(neigh.ds, 2)}` : null, neigh.d90 !== null ? `d90 = ${fmtNum(neigh.d90, 2)}` : null].filter(Boolean);
-    out += ` On the neighbourhood dose (the smoothed dose around each cell, as the pipeline's response maps use; not this axis): ${parts.join(", ")}${doseUnit}.`;
+    const parts = [neigh.d90 !== null ? `about 90% of the possible cooling by ${fmtNum(neigh.d90, 2)}${doseUnit}` : null, neigh.ds !== null ? `d_s = ${fmtNum(neigh.ds, 2)}${doseUnit}` : null].filter(Boolean);
+    out += ` On the ${term("neighbourhood_dose").label.toLowerCase()} (the amount smoothed around each place, as the run's response maps use; not this axis): ${parts.join(", ")}.`;
   }
   return out;
 }

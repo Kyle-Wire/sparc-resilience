@@ -47,6 +47,14 @@ describe("launch", () => {
     expect(est("full", "disk")).toBe("≈530 MB");
     expect(container.querySelector('[data-mode="fast"] .mode-pick')!.getAttribute("aria-pressed")).toBe("true");
     expect(container.querySelector('[data-mode="coarse"] .mode-name')!.textContent).toBe("Coarse 60 m");
+    // each mode keeps its name and gets one plain line; memory is "Memory needed", explained in an ⓘ beside the totals
+    expect(container.querySelector('[data-mode="fast"] .mode-pick .cap')!.textContent).toContain("A first look in minutes");
+    expect(container.querySelector('[data-mode="full"] .mode-pick')!.textContent).toContain("Memory needed");
+    expect(container.querySelector('[data-mode="full"] .mode-pick')!.textContent).not.toContain("RAM");
+    expect(container.querySelector('.mode-pick button')).toBeNull(); // no ⓘ nested in the card's button
+    expect(container.querySelector('.start-bar button.infotip[data-term="peak_ram"]')).not.toBeNull();
+    // the stage checklist: plain names with the stage code that reasons refer to
+    expect(container.querySelector('[data-stage="S6"] .stage-text b')!.textContent).toBe("Cause checks S6");
     const coarse = calls.find((c) => c.mode === "coarse")!;
     expect(coarse.coarse_m).toBe(60);
     expect(calls.find((c) => c.mode === "fast")!.stages).toEqual(["S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7"]);

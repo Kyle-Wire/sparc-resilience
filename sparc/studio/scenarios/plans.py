@@ -179,13 +179,13 @@ def plan_inputs(ctx, params: dict, *, db=None, project_dir=None) -> dict:
         if share is None:
             share = float((ctx.cfg_raw.get("planner") or {}).get("paved_plantable_share", 0.2))
         cap = np.minimum(cap, plantable_headroom(ctx.data.frame[var].to_numpy(float), lay, float(share)))
-        constraint.append(f"plantable space (open land + {float(share):.0%} of built-up area)")
+        constraint.append(f"open ground that can take trees, plus {float(share):.0%} of built-up ground")
     if capd.get("region"):
         from sparc.studio.runs.selection import RunSource, resolve
 
         mask = resolve(RunSource(ctx, db), capd["region"])
         cap = np.where(mask, cap, 0.0)
-        constraint.append(f"within the selected region ({int(mask.sum()):,} cells)")
+        constraint.append(f"only in the selected area ({int(mask.sum()):,} places)")
     weight = None
     objective = "total cooling"
     if p.get("objective") == "people":
@@ -197,7 +197,10 @@ def plan_inputs(ctx, params: dict, *, db=None, project_dir=None) -> dict:
         cfg2.raw["optimize"] = {**(cfg2.raw.get("optimize") or {}), "objective": "people", "plantable": False}
         ranges = ((ctx.manifest.get("influence") or {}).get("ranges_m")
                   or (ctx.json("influence.json") or {}).get("ranges_m") or {})
+        from sparc.studio.runs.views import plain_objective
+
         _cap, weight, _c, objective = optimizer_layers(cfg2, ctx.data, var, ranges)
+        objective = plain_objective(objective)
     eq = None
     focus = 0.0
     if p.get("equity"):
@@ -226,7 +229,7 @@ def plan_inputs(ctx, params: dict, *, db=None, project_dir=None) -> dict:
     return {"vr": vr, "budget": float(p["budget"]), "cost": cost, "cap": finite_cap, "weight": weight,
             "equity": eq, "focus": focus, "min_dose": float(p.get("min_dose") or 0.0),
             "multipliers": tuple(float(m) for m in (p.get("multipliers") or DEFAULT_MULTIPLIERS)),
-            "constraint": "; ".join(constraint) or "unconstrained (bounds and headroom only)",
+            "constraint": "; ".join(constraint) or "no limit beyond what each place can take",
             "objective": objective, "lever": var}
 
 
@@ -288,21 +291,26 @@ def _summary(ctx, out: dict, inp: dict) -> dict:
         return {"planned_total": 0.0, "n_cells_treated": 0, "mean_dose_treated": 0.0, "total_cost": 0.0, "gini": 0.0,
                 "min_dose_dropped_cost": 0.0, "pareto": [], "constraint": inp["constraint"],
                 "objective": inp["objective"],
-                "caption": f"Nothing to allocate: {inp['lever']} has no positive-benefit dose ({out['status']})."}
+                "caption": f"Nothing to plan: no amount of {inp['lever']} cools any place ({out['status']})."}
     pts = [{"budget": float(q["budget"]), "benefit": float(q["total_benefit"]), "n_cells": int(q["n_cells"]),
             "n_segments": int(q["n_segments"]), "gini": float(q["gini"])} for q in out["pareto"]["points"]]
-    cap = (f"Budget {inp['budget']:,.4g} on {inp['lever']}: {out['n_cells_treated']:,} cells treated "
-           f"(mean dose {out['mean_dose_treated']:.3g} {lever_unit}), planned cooling "
-           f"{out['planned_total_cooling']:,.4g} {unit}·cells summed over the city; {inp['constraint']}; "
-           f"objective {inp['objective']}.")
+    # Plain words for a planner (never the :.4g format, which writes 2e+04): the lever's glossary name, places,
+    # the lever's amount in words and the cooling in degree·places.
+    from sparc.studio.runs.layers import _lever_name, lever_info
+
+    name = _lever_name(inp["lever"], lever_info(ctx))
+    amount = "pts" if lever_unit == "pp" else lever_unit       # the glossary's unit word, as on every planner page
+    cap = (f"A budget of {inp['budget']:,.0f} on {name} treats {out['n_cells_treated']:,} places (on average "
+           f"+{out['mean_dose_treated']:.1f} {amount} each). Added up place by place it should cool by "
+           f"{out['planned_total_cooling']:,.0f} {unit}·places; the full-model check gives the real total once cooling "
+           f"that spreads to and overlaps with neighbouring places is counted (it can be higher or lower).")
     if out.get("planned_objective") is not None:
-        cap += (f" The objective weights each cell's cooling by the residents around it (the weights average 1 "
-                f"over the cells); its weighted total is {out['planned_objective']:,.4g}, while the planned "
-                f"cooling and the Pareto benefits are the plan's unweighted cooling.")
+        cap += (f" The goal counts each place's cooling by the residents around it (the weights average 1); "
+                f"that weighted total is {out['planned_objective']:,.0f}, while the planned cooling and the "
+                f"trade-off curve show the plan's unweighted cooling.")
     if out.get("min_dose_dropped_cost"):
-        cap += (f" Allocations below {inp['min_dose']:g} {lever_unit} were dropped, leaving "
-                f"{out['min_dose_dropped_cost']:,.4g} of the budget unspent.")
-    cap += " Planned totals add per-cell footprint effects; the closed loop (Verify) shows what spillover keeps."
+        cap += (f" Amounts below {inp['min_dose']:g} {lever_unit} were dropped, leaving "
+                f"{out['min_dose_dropped_cost']:,.0f} of the budget unspent.")
     return {"planned_total": float(out["planned_total_cooling"]), "n_cells_treated": int(out["n_cells_treated"]),
             "mean_dose_treated": float(out["mean_dose_treated"]), "total_cost": float(out["total_cost"]),
             "gini": float(out["gini"]), "min_dose_dropped_cost": float(out.get("min_dose_dropped_cost") or 0.0),

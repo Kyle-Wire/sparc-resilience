@@ -102,6 +102,26 @@ export function useRunLayers(rid: string | null) {
 }
 
 /**
+ * Per-model layers: each base model's held-out prediction (`oof_<model>`) and its miss
+ * (`resid_<model>`). They belong to Model details and expert mode, not a planner's layer picker.
+ */
+export function isPerModelLayer(key: string): boolean {
+  return key.startsWith("oof_") || key.startsWith("resid_");
+}
+
+/**
+ * The catalogue without the per-model layers, keeping the layer on show (a `?layer=` link may
+ * name one). Groups left empty are dropped.
+ */
+export function withoutPerModelLayers(groups: readonly LayerGroup[], current: string | null = null): LayerGroup[] {
+  return groups
+    .map((g) => (g.layers.some((l) => isPerModelLayer(l.key) && l.key !== current)
+      ? { ...g, layers: g.layers.filter((l) => !isPerModelLayer(l.key) || l.key === current) }
+      : g))
+    .filter((g) => g.layers.length > 0);
+}
+
+/**
  * Upload a brushed mask as a selection blob (`PUT /blobs?kind=mask`) and return the portable
  * `{kind: "blob"}` spec that analysis tools and scenarios accept.
  */

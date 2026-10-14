@@ -6,6 +6,7 @@
 import { useId, type ReactNode } from "react";
 import { PLACEBO_KINDS, SIM_GENERATORS, type LaunchableKind, type SimGenerator, type Study } from "../../../api/studies";
 import { Button } from "../../../components/ui/Button";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { NumberField } from "../../../components/ui/NumberField";
 import { Seg } from "../../../components/ui/Seg";
 import { fmtDate } from "../../../theme/format";
@@ -201,7 +202,17 @@ function UncertaintyEditor({ form, onChange, ctx }: EditorProps<"uncertainty">) 
       ) : (
         <p className="cap">The report reads the multiverse, simulation-check and placebo studies attached to this run (attach them on their cards).</p>
       )}
-      <Check checked={f.real_r2_gate} onChange={(v) => onChange({ ...f, real_r2_gate: v })} title="Only keep simulation replicates whose held-out R² is close to the real run's">
+      <Check
+        checked={f.real_r2_gate}
+        onChange={(v) => onChange({ ...f, real_r2_gate: v })}
+        tip={
+          <InfoTip
+            label="the R² gate"
+            text="Only keep made-up datasets on which the model scores about as well as on the real readings, so the simulation check tests a model like the real one."
+            technical="Gate replicates on the real run's held-out R²"
+          />
+        }
+      >
         Gate simulation replicates on the real run's R²
       </Check>
     </div>

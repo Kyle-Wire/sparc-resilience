@@ -18,6 +18,8 @@ import {
 import { invalidate } from "../../api/resource";
 import type { Issue } from "../../api/types";
 import { Badge } from "../../components/ui/Badge";
+import { term } from "../../content/glossary";
+import { TipSpan } from "../../layouts/tips";
 import { Button } from "../../components/ui/Button";
 import { CodeArea, type LineIssue } from "../../components/ui/CodeArea";
 import { Dialog } from "../../components/ui/Dialog";
@@ -217,7 +219,11 @@ export default function ConfigEditor() {
         <p className="eyebrow">Config</p>
         <div className="row">
           <h1>config.yml</h1>
-          {base ? <Badge title="Saved version this text is based on">v{base.version}</Badge> : null}
+          {base ? (
+            <TipSpan tip={`The saved ${term("config_version").label.toLowerCase()} this text starts from.`} technical={term("config_version").technical}>
+              <Badge>v{base.version}</Badge>
+            </TipSpan>
+          ) : null}
           {dirty ? <Badge tone="warn">unsaved</Badge> : null}
           <span className="spacer" />
           <span className="cap" role="status" aria-live="polite">

@@ -23,7 +23,7 @@ export const routes: RouteDef[] = [
       claims: ["/p/:pid/setup", "/p/:pid/setup/inputs", "/p/:pid/launch"],
     },
   },
-  { path: "/p/:pid/setup/inputs", component: Setup, title: "Inputs" },
+  { path: "/p/:pid/setup/inputs", component: Setup, title: "More data" },
   { path: "/p/:pid/setup", component: Setup, title: "Setup" },
   {
     path: "/p/:pid/config",

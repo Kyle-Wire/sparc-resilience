@@ -6,6 +6,7 @@
 import { useFileInspect, useProjectFiles } from "../../../api/projects";
 import { Button } from "../../../components/ui/Button";
 import { Card } from "../../../components/ui/Card";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { Chips } from "../../../components/ui/Chips";
 import { NumberField } from "../../../components/ui/NumberField";
 import { Seg } from "../../../components/ui/Seg";
@@ -19,11 +20,12 @@ import { configuredScenarioNames } from "../model/scenarioNames";
 import { stepIssues } from "../model/steps";
 import { usePreviewGrid } from "./actions";
 
+/** The emissions futures in plain words first, the pathway code after ("Low (SSP1-2.6)"). */
 export const SSPS: readonly Opt[] = [
-  { value: "ssp126", label: "SSP1-2.6" },
-  { value: "ssp245", label: "SSP2-4.5" },
-  { value: "ssp370", label: "SSP3-7.0" },
-  { value: "ssp585", label: "SSP5-8.5" },
+  { value: "ssp126", label: "Low (SSP1-2.6)" },
+  { value: "ssp245", label: "Moderate (SSP2-4.5)" },
+  { value: "ssp370", label: "High (SSP3-7.0)" },
+  { value: "ssp585", label: "Very high (SSP5-8.5)" },
 ];
 
 export const DEFAULT_PERIODS: Record<string, [number, number]> = { "2021-2040": [2021, 2040], "2041-2060": [2041, 2060], "2081-2100": [2081, 2100] };
@@ -177,7 +179,7 @@ function Climate({ centroid, scenarioNames }: { centroid: { lat: number; lon: nu
         <CfgSelect path="climate.table" label="Change-factor table" options={tables} none="none" missingNote="not among the project files" hint="From the CMIP6 input job (Inputs step)." />
       </div>
       <Site centroid={centroid} />
-      <CfgChips path="climate.experiments" label="SSPs" options={SSPS} />
+      <CfgChips path="climate.experiments" label="Emissions futures" options={SSPS} />
       <Periods />
       <div className="field" data-cfg-path="climate.months">
         <span className="field-label">Months of the season</span>
@@ -380,21 +382,25 @@ export function AnalysisStep() {
   return (
     <div className="stack setup-step" data-step="analysis">
       <StepIssues issues={stepIssues("analysis", d.issues)} />
-      <Card title="Causal validation" eyebrow="S6">
+      <Card title="Cause-and-effect checks" eyebrow="Causal validation · S6" tip={<InfoTip term="stage_s6" />}>
         <Causal levers={levers} predictors={predictors} />
       </Card>
-      <Card title="Climate" eyebrow="CMIP6 × adaptation">
+      <Card title="Future climate" eyebrow="Climate · CMIP6 × adaptation" tip={<InfoTip term="stage_climate" />}>
         <Climate centroid={centroid} scenarioNames={names} />
       </Card>
-      <Card title="Optimisation" eyebrow="S7 budget">
+      <Card title="Spending a budget" eyebrow="Optimisation · S7" tip={<InfoTip term="stage_s7" />}>
         <Optimize levers={levers} columns={allColumns(inspect.data)} />
       </Card>
-      <Card title="Planner pack" eyebrow="Post-run">
+      <Card
+        title="Planner pack"
+        eyebrow="After the run"
+        tip={<InfoTip label="Planner pack" text="Maps and tables for planners after a run: heat risk, who is exposed, hot days a year and where cooling helps most." technical="post.planner" />}
+      >
         <Planner />
       </Card>
       <details className="card advanced">
         <summary>
-          <strong>Advanced</strong> <span className="cap">influence, cross-validation, models, stacker, response</span>
+          <strong>Advanced</strong> <span className="cap">how far features reach, how the model is tested, the models and their blend, response curves</span>
         </summary>
         <Advanced />
       </details>

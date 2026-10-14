@@ -17,6 +17,7 @@ import { toast } from "../../../stores/ui";
 import { fmtInt, fmtNum } from "../../../theme/format";
 import { combineSelection, describeSelection, replaceSelection, validateSelection, wrapSelection, type SelPath } from "../model/doc";
 import { debounce } from "../model/timing";
+import { Tip } from "./Tip";
 
 export type ColumnOption = { value: string; label: string; group: string };
 
@@ -408,13 +409,17 @@ export function SelectionBuilder(props: SelectionBuilderProps) {
             <Button size="small" onClick={() => add({ kind: "top", column: columns[0]?.value ?? "pred:target", frac: 0.1, direction: "highest" })}>
               Top %
             </Button>
-            <Button size="small" onClick={() => add({ kind: "region", id: regions[0]?.id ?? "" })} disabled={!regions.length} title={regions.length ? undefined : "No saved regions yet"}>
-              Region
-            </Button>
-            {mapPick ? (
-              <Button size="small" variant="primary" onClick={() => add(mapPick.spec)} title={mapPick.label}>
-                Map selection
+            <Tip tip={regions.length ? null : "No saved regions yet"}>
+              <Button size="small" onClick={() => add({ kind: "region", id: regions[0]?.id ?? "" })} disabled={!regions.length}>
+                Region
               </Button>
+            </Tip>
+            {mapPick ? (
+              <Tip tip={mapPick.label}>
+                <Button size="small" variant="primary" onClick={() => add(mapPick.spec)}>
+                  Map selection
+                </Button>
+              </Tip>
             ) : null}
           </div>
           <div className="row">

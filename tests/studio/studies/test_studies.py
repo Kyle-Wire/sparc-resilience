@@ -433,7 +433,7 @@ def test_status_rows_cover_every_kind(client, fixture_run):
     assert by["placebo"]["state"] == "not_run" and by["placebo"]["attached"] is False
     assert by["placebo"]["action"]["path"] == f"/api/runs/{rid}/studies/placebo"
     assert by["emulator"]["action"]["kind"] == "build_emulator"
-    assert by["literature"]["state"] == "done" and "within ×2" in by["literature"]["headline"]
+    assert by["literature"]["state"] == "done" and "between half and double this run's estimate" in by["literature"]["headline"]
     assert all(r["estimate"]["est_lo"] <= r["estimate"]["est_s"] <= r["estimate"]["est_hi"]
                for r in rows if r["estimate"])
     assert by["planner"]["requirements"]["ok"] is True

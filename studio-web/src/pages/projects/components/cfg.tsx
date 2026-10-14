@@ -9,6 +9,7 @@ import { Chips } from "../../../components/ui/Chips";
 import { Field } from "../../../components/ui/Field";
 import { NumberField } from "../../../components/ui/NumberField";
 import { Seg, type SegOption } from "../../../components/ui/Seg";
+import { TipSpan } from "../../../layouts/tips";
 import { fmtPct, MINUS } from "../../../theme/format";
 import { getPath, joinPath, splitPath, type Path } from "../model/dotted";
 import { draftValue, useDrafts, type Draft } from "../setup/store";
@@ -61,9 +62,9 @@ export function useCfg(): Cfg {
 
 function SuggestedBadge({ conf }: { conf?: number | null }) {
   return (
-    <Badge tone="accent" title={conf !== null && conf !== undefined ? `Suggested from the data (confidence ${fmtPct(conf)})` : "Suggested from the data"}>
-      suggested
-    </Badge>
+    <TipSpan tip={conf !== null && conf !== undefined ? `Suggested from your data (${fmtPct(conf)} sure). Check it before you run.` : "Suggested from your data. Check it before you run."}>
+      <Badge tone="accent">suggested</Badge>
+    </TipSpan>
   );
 }
 

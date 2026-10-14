@@ -8,6 +8,8 @@
 //   server (default http://127.0.0.1:8765, override with SPARC_STUDIO_URL). SSE responses
 //   pass straight through (no buffering, no compression).
 // - Vitest runs every src/**/*.test.{ts,tsx} in jsdom with src/test/setup.ts.
+// - src/content/glossary.ts imports ../sparc/core/glossary.json; server.fs.allow lets the dev
+//   server read that one file outside studio-web/.
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
@@ -16,6 +18,8 @@ import react from "@vitejs/plugin-react";
 import { defineConfig, version as viteVersion, type Plugin } from "vite";
 
 const ROOT = fileURLToPath(new URL(".", import.meta.url));
+/** The shared plain-words glossary (src/content/glossary.ts imports it; the results page reads it too). */
+const GLOSSARY_JSON = join(ROOT, "../sparc/core/glossary.json");
 const API_TARGET = process.env.SPARC_STUDIO_URL ?? "http://127.0.0.1:8765";
 
 function walk(dir: string, out: string[]): void {
@@ -93,6 +97,8 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // The dev server serves only studio-web/ plus the one shared file outside it (the glossary).
+    fs: { allow: [ROOT, GLOSSARY_JSON] },
     proxy: { "/api": proxyEntry, "/auth": proxyEntry, "/openapi.json": proxyEntry },
   },
   preview: {

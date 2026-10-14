@@ -42,7 +42,7 @@ describe("projects routes", () => {
     expect(matchRoute(reg.compiled, "/")!.route.title).toBe("Home");
     expect(matchRoute(reg.compiled, "/projects")!.route.title).toBe("Projects");
     expect(matchRoute(reg.compiled, "/p/p_1/setup/levers")!.params).toEqual({ pid: "p_1", step: "levers" });
-    expect(matchRoute(reg.compiled, "/p/p_1/setup/inputs")!.route.title).toBe("Inputs");
+    expect(matchRoute(reg.compiled, "/p/p_1/setup/inputs")!.route.title).toBe("More data");
     expect(matchRoute(reg.compiled, "/p/p_1/setup")!.route.title).toBe("Setup");
     expect(matchRoute(reg.compiled, "/p/p_1/config")!.route.title).toBe("Config");
     expect(matchRoute(reg.compiled, "/p/p_1/launch")!.route.title).toBe("Launch");

@@ -106,9 +106,9 @@ describe("inputs step", () => {
     expect(row.textContent).toContain("1942-08-01–?");
     click(forcingCard().querySelector('input[aria-label="Use PROVIDENCE T F GREEN"]'));
     // the start button waits for a date
-    const start = byText(forcingCard(), "button", "Fetch forcing") as HTMLButtonElement;
+    const start = byText(forcingCard(), "button", "Fetch the day's weather") as HTMLButtonElement;
     expect(start.disabled).toBe(true);
-    typeInto(forcingCard().querySelector('input[aria-label="Campaign date"]'), "2020-07-29");
+    typeInto(forcingCard().querySelector('input[aria-label="Measurement day"]'), "2020-07-29");
     typeInto(forcingCard().querySelector('input[aria-label="Time zone"]'), "America/New_York");
     expect(start.disabled).toBe(false);
     click(start);

@@ -110,7 +110,7 @@ function Plot(p: HistogramProps & { bins: Bins }) {
     (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
   };
   const binLabel = (i: number) =>
-    `${fmtNum(edges[i], d)} to ${fmtNum(edges[i + 1], d)}${p.unit ? " " + p.unit : ""}: ${fmtInt(counts[i])} ${(p.countLabel ?? "cells").toLowerCase()}`;
+    `${fmtNum(edges[i], d)} to ${fmtNum(edges[i + 1], d)}${p.unit ? " " + p.unit : ""}: ${fmtInt(counts[i])} ${(p.countLabel ?? "places").toLowerCase()}`;
   const onMove = (e: PointerEvent<SVGRectElement>) => {
     const v = toValue(e.clientX);
     if (anchor.current === null) {
@@ -152,7 +152,7 @@ function Plot(p: HistogramProps & { bins: Bins }) {
         }
       }}
     >
-      <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={p.countLabel ?? "Cells"} ticks={yTicks} format={(v) => fmtInt(v)} />
+      <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={p.countLabel ?? "Places"} ticks={yTicks} format={(v) => fmtInt(v)} />
       <Axis scale={sx} orient="bottom" at={H - M.bottom} title={axisTitle(p.xLabel, p.unit)} />
       {counts.map((c, i) => {
         const x0 = sx(edges[i]);
@@ -231,7 +231,7 @@ export function Histogram(props: HistogramProps) {
     (props.brush ? (
       <span>
         Selected {fmtNum(props.brush[0], props.decimals ?? 2)} to {fmtNum(props.brush[1], props.decimals ?? 2)}
-        {props.unit ? " " + props.unit : ""}: {fmtInt(sel)} of {fmtInt(n)} {(props.countLabel ?? "cells").toLowerCase()}
+        {props.unit ? " " + props.unit : ""}: {fmtInt(sel)} of {fmtInt(n)} {(props.countLabel ?? "places").toLowerCase()}
       </span>
     ) : undefined);
   return (

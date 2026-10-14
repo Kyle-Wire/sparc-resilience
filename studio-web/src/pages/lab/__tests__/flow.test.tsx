@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { CompileLever, CompileResult, Edit, Lever } from "../../../api/lab";
 import type { SelectionSpec } from "../../../api/types";
 import type { GridData } from "../../../map/grid";
-import { byText, click, key, render, typeInto } from "../../../test/render";
+import { act } from "react";
+import { byText, click, key, render, typeInto, waitFor } from "../../../test/render";
 import { RID, doc, gridMeta, lever } from "../__fixtures__/lab";
 import { EditSentence, editSentence as editSentenceOf } from "../components/flow/EditSentence";
 import { StepHowMuch } from "../components/flow/StepHowMuch";
@@ -285,14 +286,23 @@ function stub(edits: Edit[], over: Partial<WorkbenchModel> = {}): Stub {
 const radios = (root: ParentNode, group: string) => [...root.querySelectorAll<HTMLButtonElement>(`[role="radiogroup"][aria-label="${group}"] [role="radio"]`)];
 
 describe("Step 01 · What to change", () => {
-  it("creates the change from a lever card in the lever's cooling direction", () => {
+  it("creates the change from a lever card in the lever's cooling direction", async () => {
     const m = stub([]);
     const { container } = render(<StepWhat model={m} index={0} idPrefix="edit-0" />);
     expect(container.querySelectorAll(".stage-num").length).toBe(1);
     expect(byText(container, "[data-lever] strong", "Less paving")).not.toBeNull();
     const dot = container.querySelector('[data-lever="Albedo"] .flow-step-trust')!;
     expect(dot.getAttribute("data-tone")).toBe("warn");
-    expect(dot.getAttribute("title")).toContain(TRUST_TIP);
+    // the dot's words are read with the card; on hover they show with what they mean, in a tooltip (no native title)
+    expect(dot.hasAttribute("title")).toBe(false);
+    act(() => {
+      dot.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null }));
+    });
+    const tip = await waitFor(() => document.querySelector('[role="tooltip"]'), 2000, "trust tooltip");
+    expect(tip.textContent).toContain(TRUST_TIP);
+    act(() => {
+      dot.dispatchEvent(new MouseEvent("mouseout", { bubbles: true, relatedTarget: null }));
+    });
     click(container.querySelector('[data-lever="Pct_Impervious"]'));
     expect(m.addEdit).toHaveBeenCalledWith("Pct_Impervious", { amount: -10 });
   });

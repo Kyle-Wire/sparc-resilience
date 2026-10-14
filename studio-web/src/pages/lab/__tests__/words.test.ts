@@ -56,12 +56,15 @@ describe("Lab words", () => {
     ]);
   });
 
-  it("names future climates in plain words, keeping the pathway code out", () => {
-    expect(futureLabel("ssp245", "2041-2060")).toBe("Mid-century, moderate emissions (2041–2060)");
-    expect(futureLabel("ssp585", "2081-2100")).toBe("End of century, very high emissions (2081–2100)");
-    expect(futureLabel("ssp126", "2021-2040")).toBe("Near-term, low emissions (2021–2040)");
-    expect(futureCaseLabel("ssp245 2041-2060")).toBe("Mid-century, moderate emissions (2041–2060)");
-    expect(futureCaseLabel("SSP2-4.5 2041-2060")).toBe("Mid-century, moderate emissions (2041–2060)");
+  it("names future climates in plain words (the glossary's, as the run pages word them), keeping the pathway code out", () => {
+    expect(futureLabel("ssp245", "2041-2060")).toBe("Moderate emissions, mid-century (2041–2060)");
+    expect(futureLabel("ssp585", "2081-2100")).toBe("Very high emissions, late century (2081–2100)");
+    expect(futureLabel("ssp126", "2021-2040")).toBe("Low emissions, near-term (2021–2040)");
+    // a period the glossary does not name keeps its years; an unknown pathway keeps its code
+    expect(futureLabel("ssp245", "2061-2080")).toBe("Moderate emissions, 2061–2080");
+    expect(futureLabel("xyz", "2041-2060")).toBe("XYZ, mid-century (2041–2060)");
+    expect(futureCaseLabel("ssp245 2041-2060")).toBe("Moderate emissions, mid-century (2041–2060)");
+    expect(futureCaseLabel("SSP2-4.5 2041-2060")).toBe("Moderate emissions, mid-century (2041–2060)");
     expect(futureCaseLabel("today")).toBeNull();
     expect(humiditySourceWord("campaign")).toBe("in the field survey");
     expect(humiditySourceWord("station")).toBe("at the weather station");
@@ -70,8 +73,9 @@ describe("Lab words", () => {
 
   it("never promises a quick estimate the run does not have", () => {
     expect(emptyChangesText(false, "ready")).toBe(LAB_WORDS.emptyChanges);
-    expect(emptyChangesText(true, "no_checkpoint")).toBe("First build the quick estimate (right), then pick what to change.");
-    expect(emptyChangesText(true, "incompatible")).toBe(LAB_WORDS.emptyChangesBuildFirst);
+    // no saved models: no quick estimate can be built either, so the intro sends to a new run
+    expect(emptyChangesText(true, "no_checkpoint")).toBe("This run did not save its trained models, so changes can't be tried on it. Launch a new run to design scenarios.");
+    expect(emptyChangesText(true, "incompatible")).toBe("First build the quick estimate (right), then pick what to change.");
     expect(emptyChangesText(true, "ready")).not.toContain("updates as you go");
   });
 });

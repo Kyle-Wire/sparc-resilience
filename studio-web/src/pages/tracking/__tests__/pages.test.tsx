@@ -54,7 +54,7 @@ describe("Pipeline Status Board", () => {
     expect(rows).toHaveLength(board.rows.length);
     const head = [...container.querySelectorAll("thead tr:not(.groups) th")].map((th) => th.textContent);
     expect(head).toEqual(["Run", ...board.columns.map((c) => c.label)]);
-    expect([...container.querySelectorAll("thead tr.groups th[scope=colgroup]")].map((th) => th.textContent)).toEqual(["Pipeline stages", "Post-run actions", "Studies"]);
+    expect([...container.querySelectorAll("thead tr.groups th[scope=colgroup]")].map((th) => th.textContent)).toEqual(["Run stages", "After-run steps", "Independent checks"]);
     rows.forEach((tr, i) => {
       expect(tr.getAttribute("data-run")).toBe(board.rows[i].run.id);
       const cols = [...tr.querySelectorAll("td")].map((td) => td.getAttribute("data-col"));
@@ -178,18 +178,22 @@ describe("project overview", () => {
     );
     await waitFor(() => container.querySelector("ol.readiness-rail"), 5000, "spine");
     const items = [...container.querySelectorAll("ol.readiness-rail > li")];
-    expect(items.map((li) => li.querySelector(".status")!.textContent)).toEqual(["ok", "check", "missing", "n/a"]);
+    expect(items.map((li) => li.querySelector(".status")!.textContent)).toEqual(["ready", "check", "missing", "not needed yet"]);
     for (const li of items) expect(li.querySelector(".status svg")).not.toBeNull();
-    expect(items[2].querySelector("button")!.textContent).toBe("Fetch layers");
+    expect(items[2].querySelector("button:not(.infotip)")!.textContent).toBe("Fetch layers");
+    // each check explains itself in an ⓘ named after its label (the emulator row in the glossary's words)
+    expect(items[0].querySelector("button.infotip")!.getAttribute("aria-label")).toBe("What is Temperature data?");
+    expect(items[3].querySelector("button.infotip")!.getAttribute("data-term")).toBe("emulator_preview");
     const stages = container.querySelector('ol.project-stages[aria-label="Project stages"]')!;
     expect([...stages.querySelectorAll(".stage-rail-label")].map((l) => l.firstChild!.textContent)).toEqual(["Set up", "Run", "Explore", "Report"]);
     expect(stages.querySelector('[aria-current="step"]')!.textContent).toContain("Explore");
     const table = [...container.querySelectorAll("table")].find((t) => t.querySelector("caption")?.textContent === "Latest runs")!;
     expect([...table.querySelectorAll("thead th")].map((th) => th.textContent)).not.toContain("R²");
+    expect(table.querySelector('thead button.infotip[data-term="trust_grade"]')).not.toBeNull();
     expect(table.querySelector('[data-trust="good"] .trust-dot')).not.toBeNull();
     expect(table.textContent).not.toContain("0.82");
     // the Pipeline Status Board is on the Runs page
-    expect(container.textContent).not.toContain("Pipeline Status Board");
+    expect(container.textContent).not.toContain("Status of every run");
     expect(fetchMock.calls.some((c) => c.url.includes("status-board"))).toBe(false);
   });
 });
@@ -274,18 +278,40 @@ describe("run history", () => {
     expect(all.categories).toEqual(["bbbbbbb · third", "bbbbbbb · second", "aaaaaaa · first"]);
     expect(all.series.map((s) => s.id)).toEqual(["S2_S3", "S4"]);
     expect(all.series[1].values).toEqual([null, 5, null]);
-    expect(stageHistoryChart(rows, "S2_S3").series).toEqual([{ id: "S2_S3", label: "S2_S3", values: [20, 22, 10] }]);
+    // series carry the plain stage name, with its code
+    // the stage in plain words only (no raw id)
+    expect(stageHistoryChart(rows, "S2_S3").series).toEqual([{ id: "S2_S3", label: "Train the models", values: [20, 22, 10] }]);
   });
 
   it("lists runs and links two selected runs to Compare", async () => {
-    const runs = [r("r_a", "p_demo"), r("r_b", "p_demo"), { ...r("r_c", "p_demo"), label: "Third" }].map((x, i) => ({ ...x, label: x.label === "Third" ? "Third" : `Run ${i + 1}` }));
+    const runs = [{ ...r("r_a", "p_demo"), rmse: 0.3421, git_commit: "5a04f44c", git_dirty: true }, r("r_b", "p_demo"), { ...r("r_c", "p_demo"), label: "Third" }].map((x, i) => ({
+      ...x,
+      label: x.label === "Third" ? "Third" : `Run ${i + 1}`,
+    }));
     fetchMock = mockFetch({
       "GET /api/projects/p_demo/runs": { body: { items: runs, next_cursor: null } },
       "GET /api/timings": { body: { unit_rates: [], stage_history: [] } },
+      "GET /api/projects/p_demo/config": { body: { version: 1, yaml: "", raw: {}, effective: { data: { target_units: "degF" } }, changed_from_defaults: [], comments_preserved: false } },
     });
     navigate("/p/p_demo/runs", { replace: true });
     const { container } = render(<RunHistory />);
     await waitFor(() => byText(container, "a", "Run 1"), 5000, "runs");
+    // accuracy columns in plain words, each explained by its glossary ⓘ (technical name inside)
+    const heads = [...container.querySelectorAll("table.tbl thead th")];
+    const head = (label: string) => heads.find((th) => th.textContent === label);
+    for (const [label, id] of [
+      ["Accuracy score", "r2"],
+      ["Typical error", "rmse"],
+      ["Range reliability", "coverage"],
+      ["Saved models", "checkpoint"],
+      ["Code version", "code_version"],
+    ])
+      expect(head(label)?.querySelector(`button.infotip[data-term="${id}"]`), label).not.toBeNull();
+    expect(heads.map((th) => th.textContent)).not.toContain("R²");
+    // the typical error with its unit; unsaved code changes in plain words, not git's "dirty"
+    await waitFor(() => (container.textContent ?? "").includes("0.34 °F"), 5000, "typical error with its unit");
+    expect(container.textContent).toContain("5a04f44 (unsaved changes)");
+    expect(container.textContent).not.toContain("dirty");
     expect(container.querySelector("a.btn.primary")).toBeNull();
     click(container.querySelector('input[aria-label="Select Run 1 for comparison"]'));
     click(container.querySelector('input[aria-label="Select Run 2 for comparison"]'));
@@ -302,12 +328,12 @@ describe("run history", () => {
     });
     navigate("/p/p_demo/runs", { replace: true });
     const { container, unmount } = render(<RunHistory />);
-    await waitFor(() => container.querySelector('table[aria-label="Pipeline status board"]'), 5000, "the board");
+    await waitFor(() => container.querySelector('table[aria-label="Status of every run"]'), 5000, "the board");
     unmount();
     navigate("/runs", { replace: true });
     const all = render(<RunHistory />);
     await flush(4);
-    expect(all.container.textContent).not.toContain("Pipeline Status Board");
+    expect(all.container.textContent).not.toContain("Status of every run");
   });
 });
 

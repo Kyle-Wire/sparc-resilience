@@ -343,6 +343,8 @@ export type ResponseSections = {
 export type ScenarioRow = {
   slug: string;
   name: string;
+  /** Plain display name of a ladder scenario ("Trees & canopy +5 pts"); the name otherwise (absent on older servers). */
+  label?: string | null;
   kind: "single" | "joint";
   lever: string | null;
   dose: number | null;

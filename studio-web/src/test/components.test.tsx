@@ -189,15 +189,21 @@ describe("PlainResult wording", () => {
     expect(confidenceOf(L(0, null, null))).toBe("unknown");
     expect(likelySentence(L(-0.41, -0.52, -0.3), "degF", "the edited area")).toBe("Cools the edited area by 0.41 °F (likely range 0.30–0.52 °F).");
   });
-  it("adds the extrapolation qualifier above 20% and has an expert toggle", () => {
+  it("adds the extrapolation qualifier above 20% and has a technical-details toggle", () => {
     const { container } = render(<PlainResult likely={L(-0.41, -0.52, -0.3)} unit="degF" subject="the edited area" fracExtrapolated={0.35} expert={{ n: 1284, method: "jackknife over 5 folds" }} />);
-    expect(container.textContent).toContain("Confident it cools.");
-    expect(container.textContent).toContain("35% of the edited cells are outside");
-    click(byText(container, "button", "Expert details"));
+    // the confidence chip and sentence are the glossary's
+    expect(container.querySelector(".badge")!.textContent).toBe("Confident it cools");
+    expect(container.textContent).toContain("The whole likely range is below zero: the change cools.");
+    expect(container.textContent).toContain("In 35% of the places changed, the change goes beyond the conditions measured in this city");
+    expect(container.querySelector('button.term[data-term="extrapolated"]')).not.toBeNull();
+    click(byText(container, "button", "Technical details"));
     expect(container.textContent).toContain("jackknife over 5 folds");
+    // technical names keep an ⓘ that explains them
+    expect([...container.querySelectorAll("dt .infotip")].map((b) => b.getAttribute("data-term"))).toEqual(["jackknife_se", "interval_95", "cell"]);
     const z = render(<PlainResult likely={L(-0.1, -0.3, 0.1)} unit="degF" subject="the city" fracExtrapolated={0.1} />);
-    expect(z.container.textContent).toContain("Could be zero.");
-    expect(z.container.textContent).not.toContain("outside the conditions");
+    expect(z.container.querySelector(".badge")!.textContent).toBe("Might be no real effect");
+    expect(z.container.textContent).toContain("The likely range includes zero");
+    expect(z.container.textContent).not.toContain("beyond the conditions");
   });
 });
 
@@ -288,7 +294,8 @@ describe("JobStrip and ConnectionPill", () => {
     useJobs.getState().applyGlobal([{ type: "job.progress", gseq: 1, ts: 1, job_id: "j_1", frac: 0.42, eta_s: 720, eta_lo: 600, eta_hi: 900, stage: "S2_S3", path_tail: ["fold 4/5", "mgwr"] }]);
     const { container } = render(<JobStrip runId="r1" />);
     expect(container.querySelector("a")!.getAttribute("href")).toBe("/jobs/j_1");
-    expect(container.textContent).toContain("S2_S3");
+    // the stage in plain words; its code and technical name are in the term's tooltip
+    expect(container.querySelector('button.term[data-term="stage_s2_s3"]')!.textContent).toBe("Train the models");
     expect(container.textContent).toContain("fold 4/5 › mgwr");
     expect(container.textContent).toContain("≈12 min (10–15 min)");
     expect(container.querySelector('[role="progressbar"]')!.getAttribute("aria-valuenow")).toBe("42");

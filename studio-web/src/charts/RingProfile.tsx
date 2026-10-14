@@ -1,9 +1,12 @@
 // Ring-profile spill chart (SPEC §2 J6, §7.7): mean ΔT inside the edited cells (ring 0) and in
-// distance rings around them, with ±1.96 SE whiskers, so the reach of a scenario is visible.
+// distance rings around them, with ±1.96 SE whiskers, so the reach of a scenario is visible. The
+// default words are a planner's ("your changes", "likely range"); the table keeps the technical ones.
 import { Axis, BandAxis, axisTitle } from "./Axis";
 import { ChartFrame, markProps, useChart, useChartWidth, type ChartTable, type FrameOptions } from "./ChartFrame";
 import { bandScale, extent, linearScale, niceDomain } from "./scales";
 import { fmtInt, fmtNum, fmtSigned } from "../theme/format";
+import { term } from "../content/glossary";
+import { Term } from "../components/ui/Term";
 
 export type Ring = { r0_m: number; r1_m: number; mean: number | null; se?: number | null; n?: number | null };
 
@@ -14,13 +17,16 @@ export type RingProfileProps = FrameOptions & {
   decimals?: number;
   width?: number;
   height?: number;
-  /** Title of the distance axis (default "Distance from the edited cells"). */
+  /** Title of the distance axis (default "Distance from your changes"). */
   axisTitle?: string;
-  /** Label of the ring of the edited cells themselves on the distance axis (default "edited"). */
+  /** Label of the ring of the changed places themselves on the distance axis (default "your changes"). */
   insideLabel?: string;
 };
 
-export function ringLabel(r: Ring, insideLabel = "edited"): string {
+/** Default words: the places changed are "your changes"; the bars' value is the average change. */
+const RING_DEFAULTS = { inside: "your changes", axis: "Distance from your changes", value: "Average change" } as const;
+
+export function ringLabel(r: Ring, insideLabel: string = RING_DEFAULTS.inside): string {
   return r.r0_m === 0 && r.r1_m === 0 ? insideLabel : `${fmtNum(r.r0_m, 0)}–${fmtNum(r.r1_m, 0)} m`;
 }
 
@@ -46,15 +52,15 @@ function Plot(p: RingProfileProps) {
   const d = p.decimals ?? 3;
   return (
     <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="group" aria-label={p.title}>
-      <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={axisTitle(p.valueLabel ?? "Mean ΔT", p.unit)} signed />
-      <BandAxis scale={band} orient="bottom" at={H - M.bottom} title={p.axisTitle ?? "Distance from the edited cells"} titleGap={many ? 72 : undefined} />
+      <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={axisTitle(p.valueLabel ?? RING_DEFAULTS.value, p.unit)} signed />
+      <BandAxis scale={band} orient="bottom" at={H - M.bottom} title={p.axisTitle ?? RING_DEFAULTS.axis} titleGap={many ? 72 : undefined} />
       <line className="zero" x1={M.left} x2={W - M.right} y1={sy(0)} y2={sy(0)} />
       {p.rings.map((r, i) => {
         if (r.mean === null || !Number.isFinite(r.mean)) return null;
         const k = keys[i];
         const x = band(k);
         const edited = i === 0 && r.r0_m === 0;
-        const label = `${k}: ${fmtSigned(r.mean, d)}${p.unit ? " " + p.unit : ""}${r.se ? ` ± ${fmtNum(1.96 * r.se, d)}` : ""}${r.n !== undefined && r.n !== null ? `, ${fmtInt(r.n)} cells` : ""}${r.mean < 0 ? ", cooler" : r.mean > 0 ? ", warmer" : ""}`;
+        const label = `${k}: ${fmtSigned(r.mean, d)}${p.unit ? " " + p.unit : ""}${r.se ? ` ± ${fmtNum(1.96 * r.se, d)}` : ""}${r.n !== undefined && r.n !== null ? `, ${fmtInt(r.n)} places` : ""}${r.mean < 0 ? ", cooler" : r.mean > 0 ? ", warmer" : ""}`;
         return (
           <g key={k}>
             <rect
@@ -77,7 +83,11 @@ function Plot(p: RingProfileProps) {
 }
 
 export function RingProfile(props: RingProfileProps) {
-  const legend = props.legend ?? <span>dark bar = edited cells · lighter bars = rings around them · whiskers = ±1.96 SE · negative = cooler</span>;
+  const legend = props.legend ?? (
+      <span>
+        dark bar = places you changed · lighter bars = rings around them · lines = <Term id="interval_95" technical="±1.96 SE (95% interval)">{term("interval_95").label.toLowerCase()}</Term> · negative = cooler
+      </span>
+    );
   return (
     <ChartFrame {...props} legend={legend} table={ringTable(props)}>
       <Plot {...props} />

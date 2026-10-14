@@ -180,22 +180,20 @@ When attached studies finish, an `uncertainty` job runs automatically. Envelopes
 
 - **Left sidebar:**
   - project switcher;
-  - project nav: Overview · Setup · Inputs · Launch · Runs · **Scenario Lab** (emphasised) · Studies · Exports · Findings. Each entry is declared by the route module that owns its target (§12.3 `projectNav`):
+  - project nav (as built after the redesign, §19): Overview · Set up · Runs · **Scenario Lab** · Reports, then a collapsed **Advanced** group (Studies · Config editor · Activity). Each entry is declared by the route module that owns its target (§12.3 `projectNav`):
 
     | Entry | Target | Owner |
     |---|---|---|
     | Overview | `/p/:pid` | tracking |
-    | Setup | `/p/:pid/setup/data` | projects |
-    | Inputs | `/p/:pid/setup/inputs` | projects |
-    | Launch | `/p/:pid/launch` | projects |
+    | Set up | `/p/:pid/setup/data` (also current on the other setup steps and on Launch) | projects |
     | Runs | `/p/:pid/runs` | tracking |
     | Scenario Lab | `/r/<active run>/lab` (disabled with a reason until a run with a checkpoint exists) | lab |
-    | Studies | `/p/:pid/studies` | studies |
-    | Exports | `/p/:pid/exports` | studies |
-    | Findings | `/p/:pid/findings` | studies |
+    | Reports | `/p/:pid/exports` (tabs: Reports & exports · Notes, the Findings notebook; `/p/:pid/findings` redirects to Notes) | studies |
+    | Studies (Advanced) | `/p/:pid/studies` | studies |
+    | Config editor (Advanced) | `/p/:pid/config` | projects |
+    | Activity (Advanced) | `/jobs` | tracking |
 
-    The config editor (`/p/:pid/config`) is reached from Setup, not from the nav.
-  - at the bottom: Activity, Settings.
+  - at the bottom: Settings.
 - **Top bar:**
   - breadcrumb (Project › Run › Tab);
   - active-run chip (mode badge, R², date, switcher);
@@ -254,14 +252,9 @@ The owner column names the frontend work item that implements the route module (
 | `/settings` | Settings | Workspace, thread budget and slots, engine budget and idle timeout, watch roots, cache manager, storage manager, network check, about | tracking |
 | `*` | Not found | Link home | foundation |
 
-**Run tabs are registry-driven.** Each route module can declare `runTab: {id, label, group, order}`. `RunLayout` (foundation) builds the tab bar from those declarations. Groups:
-- **Model**: Overview, Data, Accuracy, Distance, Influence
-- **Effects**: Response, Causal
-- **Decisions**: Scenarios, Climate, Budget, Planner, Lab
-- **Trust**: Validation, Uncertainty, Provenance
-- **Run**: Track, Map, Docs, Files
+**Run tabs are registry-driven.** Each route module can declare `runTab: {id, label, order, views}`. `RunLayout` (foundation) builds the tab bar from those declarations. As built after the redesign (§19) there are seven tabs and no groups: **Summary** (`/r/:rid`) · **Map** · **What cools** (`/effects`) · **Heat risk** (`/heat/:section?`: Today · Who is exposed · Future climate) · **Scenario Lab** (`/lab`) · **How much to trust this** (`/trust`) · **Model details** (`/details/:section?`: Data & checks · Accuracy · Reach & spatial structure · Response curves · Cause-and-effect audit · Uncertainty sources · Run log · Provenance · Documents · Files). A tab's `views` lists the server view ids it shows, and its status dot is the worst of theirs. The old per-view paths (`/r/:rid/accuracy`, `/climate`, `/track`, …) are redirect routes (`src/pages/legacy/routes.ts`).
 
-**Run tab ids** are a fixed vocabulary shared by the frontend route modules and the server: `overview, data, accuracy, distance, influence, response, causal, scenarios, climate, budget, planner, lab, validation, uncertainty, provenance, track, map, docs, files`.
+**Run tab ids** (the server's view ids) are a fixed vocabulary shared by the frontend route modules and the server: `overview, data, accuracy, distance, influence, response, causal, scenarios, climate, budget, planner, lab, validation, uncertainty, provenance, track, map, docs, files`.
 
 Each tab shows a status dot (ready, partial, running, missing (+ action), stale). The dot comes from `GET /api/runs/{rid}/outputs` → `tabs[]`, keyed by tab id. The server computes it by grouping catalog outputs by `OutputSpec.view` (§6.1), whose values are these tab ids or a viewer kind. Tabs with no catalog outputs of their own (`track`, `map`, `files`, `provenance`, `lab`, `validation`) use fixed rules: `track` = running if a job is active; `lab` = missing (+ "needs a checkpoint") without `checkpoint.pkl`; the others are always ready. Route modules do not declare outputs.
 
@@ -2722,6 +2715,14 @@ A completeness review checked this spec and `api.md` against the operation, outp
 ## 19. As-built changes
 
 This is the changelog of the specification after the completeness review (§18). It lists, milestone by milestone, every behaviour that differs from the text above as built, including the deviations each work item reported during implementation and review, and ends with the gaps still open at release. Wire-level details are in `api.md` §19. Where the body of this spec was brought up to date (the status line, J1 step 2, §8's emulator and attach rules, §9.1, §11 item 15, §14.5 item 1, §17.1), the entry here records the change.
+
+### Redesign (2026-10): brand look, seven run tabs, Lab step flow, plain language
+
+- **Look**: the brand's paper/ink tokens, Inter and JetBrains Mono, a crimson accent (`--accent-strong` behind white text), the purple→gold sequential ramp and a colour-blind-safe diverging ΔT ramp ("← cooler · warmer →").
+- **Information architecture**: the project nav and the seven run tabs of §3.1–§3.2; each fact has one home and the other tabs link to it. The server's view ids, APIs and `RUN_TAB_IDS` are unchanged; the restructuring is client-side.
+- **Scenario Lab**: Design is a step flow (01 What to change · 02 Where · 03 How much, the quick-estimate pane, **Run full model**, one Advanced options disclosure); a result is an answer card plus one accordion (Where it cools · Heat risk & people · Against future warming · What was actually changed · How sure are we · Technical details). Lab › Climate moved to Heat risk › Future climate; Sweeps are "Try amounts" under More tools.
+- **Plain language**: one shared glossary, `sparc/core/glossary.json` (Studio's `src/content/glossary.ts`, and the standalone results page), gives every repeated concept a plain label, a one- or two-sentence tip and its technical name — e.g. R² → "Accuracy score", RMSE → "Typical error", coverage → "Range reliability", emulator preview → "Quick estimate", run exact → "Run full model", grid cell → "Place", 95% interval → "Likely range", saturating / linear / sigmoid / censored → "Diminishing / Steady / Slow start, then strong / Hit the limit", verdicts Robust / Direction only / Not established → "Solid / Direction clear / Not proven". Planner-facing pages use the plain labels; the technical meaning is in an ⓘ (`InfoTip`) or a dotted-underline `Term`, both opening on hover, focus and tap. Model details keeps technical section names, each with an ⓘ.
+- **No native titles**: tooltips replace every `title="…"` on HTML elements in `src/pages` and `src/components`; `src/test/no-native-title.test.ts` guards it (an `<iframe>`'s accessible name is exempt).
 
 ### Foundation (core progress, core instrumentation, backend and frontend foundations)
 

@@ -4,7 +4,8 @@
 // (hollow points when mostly extrapolated), the fitted saturation overlay and the pipeline's own
 // response curve. The overlay, its d90 line and the caption use the fit on the requested dose
 // (the x axis); the fit on the neighbourhood dose (smaller for a regional sweep) is only quoted,
-// in its own units.
+// in its own units. Plain words (phase 4): amounts, not doses; the glossary's terms with an ⓘ; no
+// native titles.
 import { useMemo, useState } from "react";
 import { errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
@@ -13,9 +14,11 @@ import { isActiveStatus, type JobStatus, type SelectionSpec } from "../../api/ty
 import { LineBand, type LineSeries } from "../../charts";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table } from "../../components/ui/Table";
+import { shape, term } from "../../content/glossary";
 import { useRunGrid, useRunLayers } from "../../map/data";
 import type { GridData } from "../../map/grid";
 import { Link, navigate, useRoute } from "../../router";
@@ -24,9 +27,14 @@ import { toast } from "../../stores/ui";
 import { fmtDateTime, fmtNum, fmtPct, fmtSigned, unitLabel } from "../../theme/format";
 import { ConfirmDialog } from "./components/Dialogs";
 import { LabFrame, labHref } from "./components/LabFrame";
+import { Tip } from "./components/Tip";
 import { SelectionBuilder, columnOptions } from "./components/SelectionBuilder";
 import { parseNumberList } from "./model/library";
 import { dominantSign, fitOverlay, overlayXs, pipelineCurve, sweepFitText } from "./model/sweep";
+import { leverWords } from "./model/words";
+
+/** The run's name for a lever: its plain words, else the catalogue label. */
+const leverName = (levers: readonly Lever[], v: string) => leverWords(levers.find((l) => l.var === v), v).name;
 
 function NewSweep({ rid, grid, levers }: { rid: string; grid: GridData; levers: Lever[] }) {
   const regions = useRegions(rid);
@@ -47,16 +55,19 @@ function NewSweep({ rid, grid, levers }: { rid: string; grid: GridData; levers: 
       invalidate(`run:${rid}:lab`);
       navigate(labHref(rid, `sweeps/${encodeURIComponent(r.sweep_id)}`));
     } catch (e) {
-      toast("error", "Could not start the sweep", { body: errorMessage(e) });
+      toast("error", "Could not start the runs", { body: errorMessage(e) });
     } finally {
       setBusy(false);
     }
   };
   return (
-    <section className="card stack" aria-label="New sweep">
-      <h3>New sweep</h3>
+    <section className="card stack" aria-label="Try several amounts">
+      <h3 className="lab-tip-head">
+        Try several amounts
+        <InfoTip term="sweep" />
+      </h3>
       <label className="field">
-        <span className="field-label">Lever</span>
+        <span className="field-label">What to change</span>
         <select
           value={lever}
           onChange={(e) => {
@@ -67,22 +78,22 @@ function NewSweep({ rid, grid, levers }: { rid: string; grid: GridData; levers: 
         >
           {levers.map((l) => (
             <option key={l.var} value={l.var}>
-              {l.label}
+              {leverWords(l).name}
             </option>
           ))}
         </select>
       </label>
       <label className="field">
-        <span className="field-label">Doses{lv?.unit ? ` (${unitLabel(lv.unit)})` : ""}</span>
+        <span className="field-label">Amounts to try{lv?.unit ? ` (${unitLabel(lv.unit)})` : ""}</span>
         <input value={doses} onChange={(e) => setDoses(e.target.value)} aria-invalid={parsed.bad.length > 0 || undefined} />
-        <span className="hint">{parsed.bad.length ? `Not numbers: ${parsed.bad.join(", ")}` : "Each dose is one exact run (≈ the exact time per scenario)."}</span>
+        <span className="hint">{parsed.bad.length ? `Not numbers: ${parsed.bad.join(", ")}` : `Each amount is one ${term("exact_engine").label.toLowerCase()} run (about as long as one scenario).`}</span>
       </label>
       <div className="field">
         <span className="field-label">Where (optional)</span>
         <SelectionBuilder rid={rid} grid={grid} value={where} onChange={setWhere} columns={columns} regions={regions.data ?? []} levers={levers} idPrefix="sweep" />
       </div>
       <Button variant="primary" busy={busy} disabled={!lever || parsed.values.length < 2 || parsed.bad.length > 0} onClick={() => void start()}>
-        Run sweep ({parsed.values.length} doses)
+        Run {parsed.values.length} amounts
       </Button>
     </section>
   );
@@ -106,10 +117,10 @@ function SweepView({ rid, swid, unit, item, levers }: { rid: string; swid: strin
   const main = curve.map((p) => p.region ?? p.city);
   const series: LineSeries[] = [];
   if (hasRegion)
-    series.push({ id: "region", label: "Region mean", x: xs, y: main.map((l) => l.estimate), lo: main.map((l) => l.lo), hi: main.map((l) => l.hi), hollow: curve.map((p) => p.frac_extrapolated > 0.2), points: true, emphasis: true });
+    series.push({ id: "region", label: "Average in the area", x: xs, y: main.map((l) => l.estimate), lo: main.map((l) => l.lo), hi: main.map((l) => l.hi), hollow: curve.map((p) => p.frac_extrapolated > 0.2), points: true, emphasis: true });
   series.push({
     id: "city",
-    label: "City mean",
+    label: "Citywide average",
     x: xs,
     y: curve.map((p) => p.city.estimate),
     lo: curve.map((p) => p.city.lo),
@@ -120,9 +131,9 @@ function SweepView({ rid, swid, unit, item, levers }: { rid: string; swid: strin
   });
   const ox = overlayXs(xs);
   const fit = fitOverlay(fitOnDose, ox, curve.map((p, i) => ({ x: p.dose, y: main[i].estimate })));
-  if (fit) series.push({ id: "fit", label: `Fit (${fitOnDose?.model})`, x: ox, y: fit, dashed: true });
+  if (fit) series.push({ id: "fit", label: `Fitted shape (${(fitOnDose ? shape(fitOnDose.model)?.label : null) ?? fitOnDose?.model})`, x: ox, y: fit, dashed: true });
   const pipe = pipelineCurve(s.pipeline_curve, dominantSign(main.map((l) => l.estimate)));
-  if (pipe) series.push({ id: "pipeline", label: "Pipeline response curve", x: pipe.x, y: pipe.y, dashed: true, muted: true });
+  if (pipe) series.push({ id: "pipeline", label: "The run's own response curve", x: pipe.x, y: pipe.y, dashed: true, muted: true });
   const remove = async () => {
     await deleteSweep(swid);
     invalidate(`run:${rid}:lab`);
@@ -133,46 +144,55 @@ function SweepView({ rid, swid, unit, item, levers }: { rid: string; swid: strin
     <section className="stack" aria-label="Sweep">
       <div className="row">
         <h3>
-          {String(s.params.lever)} at {s.params.doses.map((d) => fmtNum(d, 2)).join(", ")}
+          {leverName(levers, String(s.params.lever))} at {s.params.doses.map((d) => fmtNum(d, 2)).join(", ")}
+          {doseUnit}
         </h3>
         <StatusChip status={s.status} />
         <span className="spacer" />
-        <Button size="small" variant="danger" onClick={() => setConfirm(true)} disabled={active} title={active ? "Cancel the sweep's job first" : undefined}>
-          Delete
-        </Button>
+        <Tip tip={active ? "Cancel its runs first (in the job strip below)." : null}>
+          <Button size="small" variant="danger" onClick={() => setConfirm(true)} disabled={active}>
+            Delete
+          </Button>
+        </Tip>
       </div>
       {confirm ? (
-        <ConfirmDialog title="Delete this sweep?" confirmLabel="Delete sweep" onConfirm={remove} onClose={() => setConfirm(false)}>
-          <p>The sweep and its {s.points.length} exact point results will be deleted.</p>
+        <ConfirmDialog title="Delete these amounts?" confirmLabel="Delete" onConfirm={remove} onClose={() => setConfirm(false)}>
+          <p>These amounts and their {s.points.length} {term("exact_engine").label.toLowerCase()} results will be deleted.</p>
         </ConfirmDialog>
       ) : null}
       {item?.job_id ? <JobStrip jobId={item.job_id} /> : null}
       {curve.length ? (
         <LineBand
-          title="Response to the swept lever"
+          title={term("dose_response").label}
           units={`${u} (negative = cooler)`}
           series={series}
-          xLabel={`Requested dose${doseUnit}`}
-          yLabel="Mean ΔT"
+          xLabel={`Amount asked for${doseUnit}`}
+          yLabel="Average change"
           yUnit={u}
           yInclude={[0]}
-          refLines={[{ axis: "y", value: 0 }, ...(fitOnDose?.d90 ? [{ axis: "x" as const, value: fitOnDose.d90, label: "d90" }] : [])]}
-          caption={`${hasRegion ? "Region and city" : "City"} mean ΔT with the likely range at each requested dose; hollow points are mostly extrapolated.${sweepFitText(fitOnDose, nf, doseUnit)}`}
+          refLines={[{ axis: "y", value: 0 }, ...(fitOnDose?.d90 ? [{ axis: "x" as const, value: fitOnDose.d90, label: "90% point" }] : [])]}
+          caption={
+            <>
+              {hasRegion ? "Average change in the area and citywide" : "Average change citywide"}, with the likely range at each amount; hollow points lie mostly {term("extrapolated").label.toLowerCase()}.
+              {sweepFitText(fitOnDose, nf, doseUnit)}
+              {fitOnDose ? <InfoTip term="saturation" /> : null}
+            </>
+          }
         />
       ) : (
         <p className="cap">No points yet{s.status === "running" ? ": the sweep is running." : "."}</p>
       )}
       <Table
-        caption="Sweep points"
+        caption="Results by amount"
         csvName={`sweep-${swid}`}
         rowKey={(p) => String(p.dose)}
         columns={[
-          { key: "dose", label: "Dose", align: "right", value: (p) => p.dose },
-          { key: "city", label: "City mean", unit: u, align: "right", value: (p) => p.city.estimate, render: (p) => `${fmtSigned(p.city.estimate, 4)}${p.city.se !== null ? ` ± ${fmtNum(1.96 * p.city.se, 4)}` : ""}` },
-          { key: "region", label: "Region mean", unit: u, align: "right", value: (p) => p.region?.estimate ?? null, render: (p) => (p.region ? `${fmtSigned(p.region.estimate, 3)}${p.region.se !== null ? ` ± ${fmtNum(1.96 * p.region.se, 3)}` : ""}` : "—") },
-          { key: "realized", label: "Realised dose", align: "right", value: (p) => p.realized, render: (p) => fmtNum(p.realized, 2) },
-          { key: "neigh", label: "Neighbourhood dose", align: "right", value: (p) => p.neighbourhood_dose ?? null, render: (p) => fmtNum(p.neighbourhood_dose ?? null, 2) },
-          { key: "ex", label: "Extrapolated", align: "right", value: (p) => p.frac_extrapolated, render: (p) => fmtPct(p.frac_extrapolated) },
+          { key: "dose", label: "Amount", align: "right", value: (p) => p.dose },
+          { key: "city", label: "Citywide", unit: u, align: "right", value: (p) => p.city.estimate, render: (p) => `${fmtSigned(p.city.estimate, 4)}${p.city.se !== null ? ` ± ${fmtNum(1.96 * p.city.se, 4)}` : ""}` },
+          { key: "region", label: "In the area", unit: u, align: "right", value: (p) => p.region?.estimate ?? null, render: (p) => (p.region ? `${fmtSigned(p.region.estimate, 3)}${p.region.se !== null ? ` ± ${fmtNum(1.96 * p.region.se, 3)}` : ""}` : "—") },
+          { key: "realized", label: term("realised").label, align: "right", value: (p) => p.realized, render: (p) => fmtNum(p.realized, 2) },
+          { key: "neigh", label: term("neighbourhood_dose").label, align: "right", value: (p) => p.neighbourhood_dose ?? null, render: (p) => fmtNum(p.neighbourhood_dose ?? null, 2) },
+          { key: "ex", label: term("extrapolated").label, align: "right", value: (p) => p.frac_extrapolated, render: (p) => fmtPct(p.frac_extrapolated) },
         ]}
         rows={curve}
       />
@@ -191,26 +211,26 @@ export default function Sweeps() {
   if (!grid.data || !levers.data) return <p className="cap">Loading…</p>;
   const unit = grid.data.meta.units.target;
   return (
-    <LabFrame rid={rid} title="Try amounts">
+    <LabFrame rid={rid} title={term("sweep").label}>
       <div className="lab-split">
         <div className="stack">
           <NewSweep rid={rid} grid={grid.data} levers={levers.data} />
           <Table<SweepListItem>
-            caption="Sweeps of this run"
+            caption="Amounts tried on this run"
             csvName={null}
             rowKey={(s) => s.id}
             highlight={(s) => s.id === swid}
             columns={[
-              { key: "lever", label: "Lever", value: (s) => s.lever, render: (s) => <Link to={labHref(rid, `sweeps/${encodeURIComponent(s.id)}`)}>{s.lever}</Link> },
-              { key: "doses", label: "Doses", value: (s) => s.doses.join(", ") },
+              { key: "lever", label: "What to change", value: (s) => leverName(levers.data!, s.lever), render: (s) => <Link to={labHref(rid, `sweeps/${encodeURIComponent(s.id)}`)}>{leverName(levers.data!, s.lever)}</Link> },
+              { key: "doses", label: "Amounts", value: (s) => s.doses.join(", ") },
               { key: "status", label: "Status", value: (s) => s.status, render: (s) => <StatusChip status={s.status} /> },
               { key: "created", label: "Created", value: (s) => s.created_utc, render: (s) => fmtDateTime(s.created_utc) },
             ]}
             rows={sweeps.data ?? []}
-            empty={<span className="cap">{sweeps.data ? "No sweeps yet." : "Loading…"}</span>}
+            empty={<span className="cap">{sweeps.data ? "Nothing tried yet." : "Loading…"}</span>}
           />
         </div>
-        {swid ? <SweepView rid={rid} swid={swid} unit={unit} item={sweeps.data?.find((s) => s.id === swid)} levers={levers.data} /> : <p className="cap">Choose a sweep, or run a new one.</p>}
+        {swid ? <SweepView rid={rid} swid={swid} unit={unit} item={sweeps.data?.find((s) => s.id === swid)} levers={levers.data} /> : <p className="cap">Choose one, or try new amounts.</p>}
       </div>
     </LabFrame>
   );

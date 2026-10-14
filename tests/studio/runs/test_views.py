@@ -145,6 +145,18 @@ def test_budget_top_cells_rank_by_cooling_not_by_row(client, demo, place_run):
     assert [c["row"] for c in top2] == [int(i) for i in by_dose.index[:25]]
 
 
+def test_budget_checked_cooling_note_says_which_way():
+    """The full-model check of a budget plan can find more cooling than planned (cooling spreads to nearby
+    places) or less (neighbouring changes overlap); the note never calls a higher check a loss."""
+    from sparc.studio.runs.views import _realised_note
+
+    assert _realised_note(583.0, 624.0) == ("Higher than planned: the full model also counts cooling that spreads "
+                                            "to nearby places.")
+    assert _realised_note(1704.0, 1037.0).startswith("Lower than planned: neighbouring changes overlap")
+    assert _realised_note(583.0, 590.0) is None                      # within 5%: no note
+    assert _realised_note(None, 590.0) is None and _realised_note(583.0, None) is None
+
+
 def test_response_literature_sends_the_extrapolated_share(client, fixture_run, synth):
     """The literature panel's SPARC rows carry the extrapolated share of the scenario they scale from
     (``manifest.literature.sparc.<quantity>.frac_extrapolated``)."""
@@ -182,13 +194,19 @@ def test_overview_grid_chips_and_stage_reasons(client, ctx, demo, fixture_run):
     # cv_curve is disabled in the config: the remedy is a new run with it, from the prefilled Launch page
     cv = grid["cv_distance"]
     assert cv["state"] == "missing"
-    assert cv["action"] == {"kind": "open", "label": "Re-run with the CV curve", "method": "GET",
+    assert cv["action"] == {"kind": "open", "label": "Re-run with the distance test", "method": "GET",
                             "path": f"/p/{demo['id']}/launch?from={rid}"}
     # one row per post-run action that has not run, carrying its action; no rows for optional files
     planner = [g for g in s["outputs_grid"] if g["produced_by"] == "post:planner"]
     assert [g["id"] for g in planner] == ["planner"]
     assert planner[0]["action"]["path"] == f"/api/runs/{rid}/actions/planner"
     assert "events" not in grid and "checkpoint" not in grid and "results_page" not in grid
+    # KPI labels are the glossary's plain words (sparc/core/glossary.json), the same ones Studio's tooltips use
+    from sparc.core.glossary import label
+
+    kpis = {k["id"]: k["label"] for k in s["kpis"]}
+    assert [kpis[i] for i in ("r2", "rmse", "coverage")] == [label("r2"), label("rmse"), label("coverage")]
+    assert kpis["r2"] == "Accuracy score" and kpis["halfwidth"] == "Typical range width"
     timing = {t["stage"]: t for t in s["timings"]}
     assert timing["cv_curve"]["state"] == "skipped"
     assert timing["cv_curve"]["reason"] == "disabled_by_config:cv.distance_curve.enabled"
@@ -205,10 +223,27 @@ def test_overview_grid_chips_and_stage_reasons(client, ctx, demo, fixture_run):
                               "created_utc": "2026-10-01T22:00:00Z", "updated_utc": "2026-10-01T22:00:00Z"})
     chips = {c["kind"]: c for c in get_view(client, rid, "overview")["sections"]["studies"]}
     assert chips["placebo"]["state"] == "done" and chips["placebo"]["study_id"] == "st_plac0001"
-    assert chips["placebo"]["headline"] == "model 2/3 and causal 3/3 placebos passed"
+    assert chips["placebo"]["headline"] == "fake-change tests passed: model 2/3, cause-and-effect check 3/3"
     board = client.get(f"/api/projects/{demo['id']}/status-board").json()
     cells = next(r for r in board["rows"] if r["run"]["id"] == rid)["cells"]
     assert cells["cv_curve"]["state"] == "disabled" and cells["placebo"]["study_id"] == "st_plac0001"
+
+
+def test_overview_limitations_are_plain(client, fixture_run):
+    """The model card's fixed limitations (sparc/core/writeup.py) reach the Trust tab in plain words."""
+    rid, _ = fixture_run
+    lim = get_view(client, rid, "overview")["sections"]["limitations"]
+    assert lim[:4] == [
+        "Describes one hot afternoon; it says nothing about night-time heat.",
+        "The cooling estimates come from patterns in the data. Things the data does not record, such as building "
+        "shade, watering or traffic heat, could push them up or down.",
+        "Where a scenario pushes places beyond anything measured in the city, its result is less certain (the share "
+        "is shown with each result).",
+        "The built-in heat-physics model used typical weather, not the measured day's: fetch the day's weather in "
+        "Set up.",
+    ]
+    text = " ".join(lim)
+    assert "associations" not in text and "extrapolations" not in text and "forcing" not in text
 
 
 def test_partial_run_offers_resume(client, demo, place_run):
@@ -344,7 +379,7 @@ def test_caveats_match_the_results_page(node, synth, tmp_path):
     m2["placebo"] = {"n_placebos": 3, "n_pass_model": 1, "n_pass_causal": 2}
     ours = _check_parity(rd, m2)
     text = " ".join(ours)
-    assert "about 1.13 times the truth (one effect generator so far)" in text
+    assert "about 1.13 times its true size (one simulation method so far)" in text
     assert '"Canopy Increase +10"' in text and "−0.18 °F" in text and "−0.06 °F" in text
     assert "in 2 of 3 tests" in text and ours[-1] == "A project caveat."
 
@@ -359,7 +394,7 @@ def test_caveat_without_simcheck_states_no_uncomputed_share(synth):
     assert not m.get("simcheck")
     cav = caveats_for(SimpleNamespace(manifest=m, cfg_raw=m.get("config") or {}, run_dir=synth))
     eff = [c for c in cav if c.startswith("Effect sizes")]
-    assert len(eff) == 1 and "not computed" in eff[0] and "too small or too large" in eff[0], cav
+    assert len(eff) == 1 and "not yet checked" in eff[0] and "too small or too large" in eff[0], cav
     assert not any("two-thirds" in c or "attenuated" in c for c in cav)
 
 
@@ -405,3 +440,29 @@ def test_cell_curves_rebuild_every_fitted_shape(client, fixture_run, synth):
     k = int(np.flatnonzero(resp["curve_model"].to_numpy() == "insufficient")[0])
     ins = client.get(f"/api/runs/{rid}/cells/{k}").json()["curves"]["impervious"]
     assert ins["model"] == "insufficient" and ins["benefit"] == [] and ins["dose"] == []
+
+
+
+def test_ladder_scenarios_and_plan_amounts_read_in_plain_words(client, demo, place_run):
+    """Configured ladder scenarios carry a plain display label (the lever's glossary name and the signed amount in
+    its unit word) beside their configured name and slug, on the run view, the Lab's configured list and Compare;
+    budget amounts in percentage points read "pts" (the Lab's word), never "pp"."""
+    rid = RUN_ID
+    place_run(demo)
+    rows = {r["name"]: r for r in get_view(client, rid, "scenarios")["sections"]["rows"]}
+    assert rows["Canopy Increase +5"]["label"] == "Trees & canopy +5 pts"
+    assert rows["Impervious Decrease −10"]["label"] == "Less paving −10 pts"
+    assert rows["Albedo Increase +0.1"]["label"] == "Cool roofs & surfaces +0.1 reflectivity"
+    assert rows["Cooling package"]["label"] == "Cooling package"                 # a joint scenario keeps its name
+    assert rows["Canopy Increase +5"]["slug"] == "canopy-increase-plus-5"                 # slugs unchanged
+    configured = {c["name"]: c for c in client.get(f"/api/runs/{rid}/scenarios").json()["configured"]}
+    assert configured["Impervious Decrease −10"]["label"] == "Less paving −10 pts"
+    slug = configured["Albedo Increase +0.1"]["slug"]
+    cmp = client.post(f"/api/runs/{rid}/compare", json={"items": [{"kind": "configured", "slug": slug},
+                                                                  {"kind": "baseline"}]})
+    assert cmp.status_code == 201, cmp.text
+    assert cmp.json()["items"][0]["label"] == "Cool roofs & surfaces +0.1 reflectivity"
+    kpis = {k["id"]: k for k in get_view(client, rid, "budget")["sections"]["kpis"]}
+    assert kpis["mean_dose"]["unit"] == "pts"
+    layers = {m["key"]: m for g in client.get(f"/api/runs/{rid}/layers").json()["groups"] for m in g["layers"]}
+    assert layers["alloc_dose"]["unit"] == "pts"

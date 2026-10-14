@@ -2,6 +2,8 @@
 // its live job, its child runs (each linking to its run and tracker), the result view for its
 // kind, attach/detach, resume, delete, and for simulation checks a merge across studies
 // (`POST /api/studies/simcheck/merge`, inline).
+// Plain words (phase 4): the kind's plain name and what it does are in an ⓘ beside it; tooltips
+// replace native titles.
 import { useEffect, useState } from "react";
 import { errorMessage, isApiError } from "../../api/client";
 import { invalidate } from "../../api/resource";
@@ -24,6 +26,7 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { Markdown } from "../../components/ui/Markdown";
 import { StatusChip } from "../../components/ui/StatusChip";
@@ -31,7 +34,7 @@ import { downloadText, fileSlug } from "../../components/ui/download";
 import { Link, navigate, runHref, useRoute } from "../../router";
 import { toast, useUi } from "../../stores/ui";
 import { fmtDate, fmtDateTime, fmtDuration, fmtNum } from "../../theme/format";
-import { announceJob, AttachToggle, Check, runLabel } from "./components/common";
+import { announceJob, AttachToggle, Check, KIND_TERMS, runLabel, TipSpan } from "./components/common";
 import { BiasCorrectionCard, GeneratorTable, StudyViewPanel } from "./components/StudyViews";
 import "./studies.css";
 
@@ -56,6 +59,7 @@ function ChildRuns({ study }: { study: Study }) {
             <th scope="col">Status</th>
             <th scope="col" className="r">
               R²
+              <InfoTip term="r2" />
             </th>
             <th scope="col" className="r">
               Time
@@ -190,7 +194,7 @@ function Header({ study }: { study: Study }) {
           <h1 style={{ margin: 0 }}>{typeof study.summary?.label === "string" ? study.summary.label : label}</h1>
           <StatusChip status={study.status} />
           {study.origin === "imported" ? <Badge>imported</Badge> : null}
-          {study.stale_vs.length ? <StatusChip status="stale" text="stale vs run" /> : null}
+          {study.stale_vs.length ? <StatusChip status="stale" text="out of date" /> : null}
         </div>
         <div className="sx-actions">
           {attachable ? <AttachToggle studyId={study.id} runId={study.target_run_id!} attached={study.attached_runs.includes(study.target_run_id!)} label={label} /> : null}
@@ -199,14 +203,17 @@ function Header({ study }: { study: Study }) {
               Resume
             </Button>
           ) : null}
-          <Button variant="danger" onClick={() => setConfirm(true)} disabled={ACTIVE.has(study.status)} title={ACTIVE.has(study.status) ? "Cancel the job first" : undefined}>
-            Delete
-          </Button>
+          <TipSpan tip={ACTIVE.has(study.status) ? "Cancel the study's job first, then delete it." : null}>
+            <Button variant="danger" onClick={() => setConfirm(true)} disabled={ACTIVE.has(study.status)}>
+              Delete
+            </Button>
+          </TipSpan>
         </div>
       </div>
       <div className="sx-meta" role="group" aria-label="Study details">
         <span>
           Kind <b>{label}</b>
+          {KIND_TERMS[study.kind as StudyKind] ? <InfoTip term={KIND_TERMS[study.kind as StudyKind]!} technical={label} /> : null}
         </span>
         <span>
           Run{" "}

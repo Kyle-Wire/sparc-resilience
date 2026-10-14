@@ -65,14 +65,14 @@ def _null_artifact_caveat(m: dict, units: str) -> str | None:
     arts = [a for a in r0.get("null_artifact") or [] if isinstance(a, dict)]
     a = next(x for x in arts if x.get("product") == "rf")
     d = next((x for x in arts if x.get("product") == "direct"), None)
-    text = ("Canopy effects are not established by this data: when the simulation plants no canopy effect at all "
-            "and imitates how the temperature product was made (a land-cover model filling unsampled streets), the "
-            f"pipeline still reports {_sfmt(a.get('delta'), 2)} {units} for \"{r0.get('scenario')}\", as large as the "
-            f"real estimate ({_sfmt(r0.get('estimate'), 2)} {units}).")
+    text = ("Tree-canopy effects are not proven by this data: in a simulation with no canopy effect at all, built "
+            "the way the temperature data were made (a land-cover model filling in streets that were not measured), "
+            f"the analysis still reports {_sfmt(a.get('delta'), 2)} {units} for \"{r0.get('scenario')}\", as large as "
+            f"the real estimate ({_sfmt(r0.get('estimate'), 2)} {units}).")
     if d is not None:
-        text += (f" Without that land-cover fill the spurious change is {_sfmt(d.get('delta'), 2)} {units}, so most of "
-                 "it is written into the target by the product itself.")
-    return text + " Raw traverse readings, not the gridded product, are needed to settle canopy."
+        text += (f" Without that land-cover fill-in the false change is {_sfmt(d.get('delta'), 2)} {units}, so most of "
+                 "it comes from how the temperature data were made.")
+    return text + " Raw street measurements, not the gridded data, are needed to settle the canopy effect."
 
 
 def caveats_for(ctx) -> list[str]:
@@ -86,52 +86,53 @@ def caveats_for(ctx) -> list[str]:
     items: list[str] = []
     fi = qa.get("target_fraction_integer_valued") or 0
     if fi > 0.3:
-        items.append(f"The temperature product is rounded: {_fmt(100 * fi, 0)}% of readings are whole degrees, "
-                     f"so errors below about 0.3 {units} are noise.")
+        items.append(f"The temperature data are rounded: {_fmt(100 * fi, 0)}% of readings are whole degrees, "
+                     f"so differences smaller than about 0.3 {units} are only rounding noise.")
     rows = (m.get("cv_distance") or {}).get("rows") or []
     main = next((r for r in rows if isinstance(r, dict) and r.get("main")), None)
     if main:
-        items.append(f"Accuracy varies by area: held-out fold R² ranges from {_fmt(main.get('fold_r2_min'), 2)} to "
-                     f"{_fmt(main.get('fold_r2_max'), 2)}, so some neighbourhoods are predicted much better than "
-                     "others.")
+        items.append(f"Accuracy varies by area: the accuracy score in test areas ranges from "
+                     f"{_fmt(main.get('fold_r2_min'), 2)} to {_fmt(main.get('fold_r2_max'), 2)}, so some "
+                     "neighbourhoods are predicted much better than others.")
     sc = (m.get("simcheck") or {}).get("bias_correction")
     if isinstance(sc, dict) and sc.get("share_range"):
         a, b = sc["share_range"][0], sc["share_range"][-1]
         if (sc.get("n_generators") or 2) < 2 or a == b:
-            share = f"about {_fmt(a, 2)} times the truth (one effect generator so far)"
+            share = f"about {_fmt(a, 2)} times its true size (one simulation method so far)"
         else:
-            share = f"{_fmt(a, 2)}–{_fmt(b, 2)} times the truth depending on how the effect is generated"
-        items.append("Effect sizes carry attribution uncertainty: when a known canopy effect is planted on this "
-                     "city's layout and passed through the same kind of temperature product, the pipeline recovers "
+            share = f"{_fmt(a, 2)}–{_fmt(b, 2)} times its true size, depending on how the effect is simulated"
+        items.append("Effect sizes are uncertain: when a known tree-canopy effect is planted in made-up data with this "
+                     "city's layout and run through the same kind of temperature data, the analysis gets back "
                      f"{share} (see Methods & validation).")
     else:
-        items.append("Effect sizes are not checked against known answers yet: how much of a planted canopy effect "
-                     "the pipeline recovers on this city is not computed until a simulation check runs, so "
-                     "scenario magnitudes may be too small or too large. Treat them as approximate.")
+        items.append("Effect sizes are not yet checked against a known answer: until a simulation check runs, we "
+                     "cannot say how much of a real tree-canopy effect the analysis recovers in this city. Scenario "
+                     "sizes may be too small or too large, so treat them as approximate.")
     null = _null_artifact_caveat(m, units)
     if null:
         items.append(null)
     pz = _placebo(ctx)
     if pz and pz.get("n_placebos") and (pz.get("n_pass_model") or 0) < pz["n_placebos"]:
         n, k = pz["n_placebos"], pz.get("n_pass_model") or 0
-        items.append(f"Placebo layers (canopy and paving moved to the wrong place) still received some modelled "
-                     f"effect in {n - k} of {n} tests: a smooth layer can pick up chance large-scale patterns. "
-                     "Compare real effects with that floor, and lean on the causal check, which passed "
+        items.append(f"Fake-change tests (tree canopy and paving moved to the wrong places) still showed some "
+                     f"effect in {n - k} of {n} tests: a smooth map layer can pick up chance citywide patterns. "
+                     "Compare real effects with that floor, and lean on the cause-and-effect check, which passed "
                      f"{pz.get('n_pass_causal') or 0} of {n}.")
     ext = [s.get("name") for s in (m.get("scenarios") or []) if isinstance(s, dict)
            and (s.get("frac_extrapolated") or 0) > 0.2]
     if ext:
-        items.append("These scenarios push more than 20% of edited cells beyond observed conditions: "
-                     f"{', '.join(str(e) for e in ext)}. Treat them as extrapolation, not predictions.")
+        items.append("These scenarios push more than 20% of the changed places beyond conditions measured in the "
+                     f"city: {', '.join(str(e) for e in ext)}. Treat their results as rough extrapolations, not "
+                     "predictions.")
     pv = (m.get("physics") or {}).get("v_norm_m")
     forcing = ((m.get("config") or raw).get("physics") or {}).get("forcing_info")
     if isinstance(pv, dict) and isinstance(pv.get("mean"), (int, float)) and pv["mean"] < 1 and not forcing:
-        items.append("The physics model runs without advection (no wind record was supplied) and with a generic "
-                     "energy balance for the configured time window.")
+        items.append("The physics model leaves out wind carrying heat between places (no wind record was "
+                     "supplied) and uses generic sunshine and heat values for the chosen hours.")
     if m.get("climate"):
-        items.append("Climate futures use the delta method: today's measured pattern plus each model's change in "
-                     "summer average daily highs. They assume land-cover effects stay the same as the climate warms, "
-                     "and the hottest days may warm more than the seasonal average.")
+        items.append("Climate futures add each climate model's change in average summer daily highs to today's "
+                     "measured pattern. They assume trees, paving and roofs change temperatures the same way as the "
+                     "climate warms, and the hottest days may warm more than the summer average.")
     for c in (raw.get("report") or {}).get("caveats") or []:
         items.append(str(c))
     return items

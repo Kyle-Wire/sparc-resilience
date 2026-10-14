@@ -7,6 +7,7 @@ import type { SelectionSpec } from "../../../../api/types";
 import { Button } from "../../../../components/ui/Button";
 import { NumberField } from "../../../../components/ui/NumberField";
 import { StageNum } from "../../../../components/ui/StageRail";
+import { useTooltip } from "../../../../components/ui/Tooltip";
 import {
   FLOW_WORDS,
   TOP_SHARE,
@@ -24,6 +25,7 @@ import {
 import type { WorkbenchModel } from "../../model/useWorkbench";
 import { LAB_WORDS, WHERE_PRESETS, type WherePreset } from "../../model/words";
 import { SelectionBuilder } from "../SelectionBuilder";
+import { Tip } from "../Tip";
 import type { StepProps } from "./types";
 import "./flow.css";
 
@@ -48,6 +50,31 @@ export function flowContext(model: Pick<WorkbenchModel, "grid" | "regions" | "te
 }
 
 export type ChoiceOption<T extends string> = { value: T; label: ReactNode; hint?: string; disabled?: boolean };
+
+/** One pill of a ChoiceGroup: its hint is a tooltip (hover, focus, tap), not a native title. */
+function ChoicePill<T extends string>({ option: o, checked, tabbable, onPick }: { option: ChoiceOption<T>; checked: boolean; tabbable: boolean; onPick: () => void }) {
+  const t = useTooltip<HTMLButtonElement>({ content: o.hint ?? "" });
+  const tip = o.hint ? t.triggerProps : null;
+  return (
+    <button
+      ref={t.anchorRef}
+      type="button"
+      role="radio"
+      aria-checked={checked}
+      disabled={o.disabled}
+      tabIndex={tabbable ? 0 : -1}
+      data-value={o.value}
+      {...(tip ?? {})}
+      onClick={(e) => {
+        tip?.onClick(e);
+        onPick();
+      }}
+    >
+      {o.label}
+      {o.hint ? t.bubble : null}
+    </button>
+  );
+}
 
 /**
  * A single choice as wrapping pills (role="radiogroup"): arrow keys, Home and End move the choice,
@@ -75,19 +102,7 @@ export function ChoiceGroup<T extends string>({ label, value, options, onChange,
   return (
     <div ref={ref} className={["lab-flow-choices", className ?? ""].filter(Boolean).join(" ")} role="radiogroup" aria-label={label} onKeyDown={onKey}>
       {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          role="radio"
-          aria-checked={o.value === value}
-          disabled={o.disabled}
-          title={o.hint}
-          tabIndex={o === tabbable ? 0 : -1}
-          data-value={o.value}
-          onClick={() => o.value !== value && onChange(o.value)}
-        >
-          {o.label}
-        </button>
+        <ChoicePill key={o.value} option={o} checked={o.value === value} tabbable={o === tabbable} onPick={() => o.value !== value && onChange(o.value)} />
       ))}
     </div>
   );
@@ -237,9 +252,11 @@ export function StepWhere({ model, index, idPrefix, onDrawingChange }: StepWhere
       {detail}
       {!custom && (current !== "draw" || read === "draw") ? <p className="cap flow-step-applies">{fill(FLOW_WORDS.applies, { where: phrase })}</p> : null}
       {custom ? null : (
-        <button type="button" className="flow-step-link" aria-expanded={showBuilder} aria-controls={`${idPrefix}-where-custom`} title={WHERE_PRESETS.custom.hint} onClick={() => (showBuilder ? closeBuilder() : setBuilderOpen(true))}>
-          {showBuilder ? FLOW_WORDS.customClose : WHERE_PRESETS.custom.label}
-        </button>
+        <Tip tip={showBuilder ? null : WHERE_PRESETS.custom.hint}>
+          <button type="button" className="flow-step-link" aria-expanded={showBuilder} aria-controls={`${idPrefix}-where-custom`} onClick={() => (showBuilder ? closeBuilder() : setBuilderOpen(true))}>
+            {showBuilder ? FLOW_WORDS.customClose : WHERE_PRESETS.custom.label}
+          </button>
+        </Tip>
       )}
       {showBuilder ? (
         <div className="flow-step-custom" id={`${idPrefix}-where-custom`}>

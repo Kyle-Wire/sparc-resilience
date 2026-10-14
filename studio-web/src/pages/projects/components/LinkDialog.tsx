@@ -48,7 +48,7 @@ const TITLES: Record<LinkKind, string> = {
   climate: "Link the CMIP6 change factors (climate.table)",
   layers: "Link people & land cover (planner.layers)",
   features_join: "Use the open predictors in this project",
-  features_new_project: "Create the _open project",
+  features_new_project: "Create a copy of this project",
 };
 
 export function LinkDialog({
@@ -91,7 +91,7 @@ export function LinkDialog({
       invalidate(`project:${pid}`);
       if (r.new_project_id) {
         invalidate("projects");
-        toast("success", "Created the _open project", { href: `/p/${encodeURIComponent(r.new_project_id)}`, linkLabel: "Open it" });
+        toast("success", "Created a copy of this project", { href: `/p/${encodeURIComponent(r.new_project_id)}`, linkLabel: "Open it" });
       } else toast("success", r.version ? `Linked into the config (version ${r.version})` : "Linked into the config");
       onApplied?.(r);
       onClose();

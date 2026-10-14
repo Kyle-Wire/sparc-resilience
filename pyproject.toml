@@ -115,7 +115,8 @@ include = ["sparc*"]
 "*" = ["*.yml", "*.yaml", "*.json", "*.csv"]
 "sparc" = ["templates/**/*.yml", "templates/**/*.yaml", "templates/**/*.json", "templates/**/*.csv", "templates/**/*.py", "templates/**/.gitkeep", "templates/**/*.txt"]
 "sparc.studio" = ["static/**/*", "examples/**/*"]
-"sparc.core" = ["results_page/*.html"]
+# glossary.json (plain words shared by Studio and the results page) is also matched by "*" above; listed for clarity.
+"sparc.core" = ["results_page/*.html", "glossary.json"]
 
 [tool.ruff]
 target-version = "py310"

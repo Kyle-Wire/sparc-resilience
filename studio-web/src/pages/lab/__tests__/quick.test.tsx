@@ -288,7 +288,9 @@ describe("PreviewPane", () => {
     const { container } = render(<PreviewPane model={model({ doc: d, compile: compile({ levers: { Pct_Canopy: { n_cells: 0, mean_requested: 0, total_requested: 0, predicted_mean_realised: 0, clipped_share: 0, est_cost: 27600 } } }), preview: preview(summary({ n_edited: 0, edited_mean: Number.NaN })) })} />);
     const cost = ddOf(container, QUICK_WORDS.cost)!;
     expect(cost.querySelector(".qe-value")!.textContent).toBe("about 27,600");
-    expect(cost.querySelector("[role=tooltip]")!.hasAttribute("hidden")).toBe(true); // what the cost units are, on hover or focus
+    // what the cost units are, in an ⓘ (hover, focus or tap), not a native title
+    expect(cost.querySelector("button.infotip")!.getAttribute("aria-label")).toBe("What is the estimated cost?");
+    expect(cost.querySelector("[title]")).toBeNull();
     const hero = container.querySelector(".qe-hero")!;
     expect(hero.hasAttribute("data-numeric")).toBe(false);
     expect(hero.querySelector(".qe-big")!.textContent).toBe(QUICK_WORDS.noChangeYet);
@@ -309,7 +311,10 @@ describe("PreviewPane", () => {
     const { container } = render(<PreviewPane model={model({ noEmulator: true, preview: null, emulator: { present: false, kernel_cells: null, levers: {}, action } })} />);
     const region = container.querySelector('[aria-label="Preview"]')!;
     expect(region.querySelector("[data-no-emulator]")).not.toBeNull();
-    expect(region.querySelectorAll("button").length).toBe(1);
+    // one action (the ⓘ beside the kicker only explains the quick estimate); no native title on it
+    expect(region.querySelectorAll("button:not(.infotip)").length).toBe(1);
+    expect(region.querySelector("button.infotip[data-term=emulator_preview]")).not.toBeNull();
+    expect(region.querySelector("button[title]")).toBeNull();
     const button = await waitFor(() => byText(region, "button", "Build quick estimate (≈1 min)"), 5000, "build button");
     expect(button.classList.contains("accent")).toBe(false); // the accent is Run full model's
     click(button);
@@ -323,13 +328,20 @@ describe("PreviewPane", () => {
       const { container } = render(<PreviewPane model={model({ noEmulator: true, preview: null, emulator: { present: false, kernel_cells: null, levers: {}, action }, ...over })} />);
       return container.querySelector("[data-no-emulator]")!;
     };
-    // no model either: no promise about the full model, the title is not repeated by the body
-    const none = box({ engineState: "no_checkpoint" });
+    // no saved models: the estimate cannot be built either (its build needs checkpoint.pkl), so the box
+    // sends to Launch instead of offering a build that would fail; the title is not repeated by the body
+    const none = box({ engineState: "no_checkpoint", pid: "p_demo" });
     expect(none.querySelector(".qe-empty-title")!.textContent).toBe("No quick estimate yet");
-    expect(none.querySelector(".cap")!.textContent).toBe(LAB_WORDS.noQuickEstimateNoModel);
+    expect(none.querySelector(".cap")!.textContent).toBe("Launch a new run (Fast takes a few minutes) to try changes.");
     expect(none.textContent).not.toContain("either way");
     expect(none.querySelector(".cap")!.textContent).not.toMatch(/^No quick estimate/);
-    expect(noQuickEstimateText("incompatible")).toBe(LAB_WORDS.noQuickEstimateNoModel);
+    expect(none.getAttribute("data-no-checkpoint")).toBe("true");
+    expect(none.querySelector("button:not(.infotip)")).toBeNull();
+    expect(none.querySelector("a")!.getAttribute("href")).toBe("/p/p_demo/launch");
+    expect(none.querySelector("a")!.textContent).toBe("Launch a run");
+    // a model that cannot load: the estimate is still the way in
+    expect(noQuickEstimateText("incompatible")).toBe(LAB_WORDS.noQuickEstimateBuildOnly);
+    expect(box({ engineState: "incompatible" }).querySelector("button")).not.toBeNull();
     // a model that runs: the full model works either way
     expect(box({ engineState: "ready" }).querySelector(".cap")!.textContent).toBe(LAB_WORDS.noQuickEstimate);
     expect(LAB_WORDS.noQuickEstimate).toContain("either way");
@@ -377,7 +389,7 @@ describe("the full model is up to date", () => {
   it("drops the accent: the button goes to the answer, one line says it is up to date, without the number", () => {
     const m = model({ result: r, storeSid: "sc_a", store: draftStore() });
     const { container } = render(<RunFullModel model={m} />);
-    const buttons = [...container.querySelectorAll("button")];
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("button:not(.infotip)")];
     expect(buttons.map((b) => b.textContent)).toEqual([LAB_WORDS.seeFullResult]);
     expect(buttons[0].classList.contains("accent")).toBe(false);
     click(buttons[0]);
@@ -412,8 +424,11 @@ describe("RunFullModel", () => {
   it("is the one accent button, runs the full model and shows the engine as one line", () => {
     const m = model();
     const { container } = render(<RunFullModel model={m} />);
-    const buttons = [...container.querySelectorAll("button")];
+    // one action; the engine line's ⓘ only explains what the full model is
+    const buttons = [...container.querySelectorAll<HTMLButtonElement>("button:not(.infotip)")];
     expect(buttons.length).toBe(1);
+    expect(container.querySelector("[data-engine] button.infotip")!.getAttribute("data-term")).toBe("exact_engine");
+    expect(buttons[0].hasAttribute("title")).toBe(false);
     expect(buttons[0].textContent).toBe("Run full model (≈ 2 min)");
     expect(buttons[0].classList.contains("accent")).toBe(true);
     expect(buttons[0].disabled).toBe(false);
@@ -437,7 +452,7 @@ describe("RunFullModel", () => {
     expect(loading.container.querySelector("[data-engine]")!.textContent).toBe("Loading model… 40%");
     // no checkpoint: no button that can never be pressed; the engine line says it, once
     const noModel = render(<RunFullModel model={model({ canRun: false, engineState: "no_checkpoint", runReason: "This run has no checkpoint, so only the preview is available." })} />);
-    expect(noModel.container.querySelector("button")).toBeNull();
+    expect(noModel.container.querySelector("button:not(.infotip)")).toBeNull();
     expect(noModel.container.querySelector("[data-no-model]")).not.toBeNull();
     expect(noModel.container.querySelector("[data-engine]")!.textContent).toBe("Model not available for this run — quick estimate only");
     expect(noModel.container.querySelector("[data-run-why]")).toBeNull();

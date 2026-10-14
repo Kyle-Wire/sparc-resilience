@@ -4,9 +4,14 @@
 // calibration, CATE and model-slope maps, sensitivity, controls and the DAG audit. The complete
 // page is Model details › Cause-and-effect audit; How much to trust this reads one line per
 // lever from `causalAgreement`.
+// Plain words (phase 4): Model details keeps the technical names (θ, CATE, BLP, E-value, DAG
+// audit, partial dependence); every block and chart has an ⓘ or a glossary <Term> beside it.
 import type { CausalTreatment, Sections } from "../../api/runs";
 import { BoxStrip, Forest, LineBand, type LineSeries } from "../../charts";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Pill } from "../../components/ui/Pill";
+import { Term } from "../../components/ui/Term";
+import { lever as leverWords } from "../../content/glossary";
 import { Seg } from "../../components/ui/Seg";
 import { Link, codecs, useUrlState } from "../../router";
 import { fmtNum, fmtPct, unitLabel } from "../../theme/format";
@@ -61,23 +66,53 @@ function primaryCheck(audit: CausalTreatment["audit"]): CausalTreatment["audit"]
   return audit.find((a) => a.check === "adoption_vs_theta_sum") ?? audit.find((a) => a.model !== null && a.causal !== null) ?? null;
 }
 
+/**
+ * One step of a lever, in words, for "… °F cooler per percentage point of tree canopy": a pp lever
+ * counts percentage points of its glossary measure, a 0–1 lever (albedo) whole units of it.
+ */
+export function perStepPhrase(name: string, t: Pick<Treatment, "unit" | "label">, leverUnits: Record<string, string>): string {
+  const w = leverWords(name);
+  const measure = w?.measure ?? (t.label || humanize(name)).toLowerCase();
+  const u = t.unit ?? "";
+  const i = u.indexOf(" per ");
+  const lu = unitLabel(leverUnits[name]) || (i >= 0 ? unitLabel(u.slice(i + " per ".length)) : "");
+  if (lu === "pp" || lu === "%") return `percentage point of ${measure}`;
+  if (!lu || lu === "unit" || lu === "units" || lu === "albedo" || lu === "1") return `unit of ${measure}${lu === "albedo" ? " (0–1 scale)" : ""}`;
+  return `${lu} of ${measure}`;
+}
+
+/** "cooler" / "warmer" for an effect per step (negative = cooler). */
+const coolWord = (v: number) => (v < 0 ? "cooler" : "warmer");
+
 export function causalAgreement(name: string, t: Treatment, targetUnit: string, leverUnits: Record<string, string>): CausalAgreement {
-  const label = t.label || humanize(name);
+  // the lever's plain name from the glossary ("Trees & canopy"), else the catalogue label
+  const label = leverWords(name)?.name ?? (t.label || humanize(name));
   const audit = t.audit ?? [];
-  if (!audit.length) return { lever: name, label, status: "unknown", line: `${label}: no independent check of this lever in this run.` };
-  const per = treatmentUnits(t.unit, name, targetUnit, leverUnits).effect;
+  if (!audit.length) return { lever: name, label, status: "unknown", line: `${label}: the cause-and-effect check did not test this lever in this run.` };
+  const u = unitLabel(treatmentUnits(t.unit, name, targetUnit, leverUnits).effect.split(" per ")[0]) || unitLabel(targetUnit);
+  const per = perStepPhrase(name, t, leverUnits);
   const p = primaryCheck(audit);
-  const nums = p && p.model !== null && p.causal !== null ? ` (model ${fmtNum(p.model, 3)}, check ${fmtNum(p.causal, 3)} ${per})` : "";
+  const m = p && p.model !== null ? p.model : null;
+  const c = p && p.causal !== null ? p.causal : null;
+  const same = m !== null && c !== null && Math.sign(m) === Math.sign(c);
+  const nums =
+    m === null || c === null
+      ? ""
+      : same
+        ? ` (model ${fmtNum(Math.abs(m), 2)} ${u}, check ${fmtNum(Math.abs(c), 2)} ${u} ${coolWord(m)} per ${per})`
+        : ` (model ${fmtNum(Math.abs(m), 2)} ${u} ${coolWord(m)}, check ${fmtNum(Math.abs(c), 2)} ${u} ${coolWord(c)} per ${per})`;
   if (audit.some((a) => /sign/i.test(a.verdict))) {
-    return { lever: name, label, status: "conflict", line: `${label}: the independent check points the other way${nums}. Treat this lever's effect as unproven.` };
+    return { lever: name, label, status: "conflict", line: `${label}: the check points the other way${nums}. Treat this lever's effect as unproven.` };
   }
   if (audit.some((a) => a.flag && !/shape/i.test(a.verdict))) {
-    return { lever: name, label, status: "size", line: `${label}: the independent check agrees on the direction but finds a different size${nums}.` };
+    const agrees = same ? `agrees it ${m! < 0 ? "cools" : "warms"}` : "agrees on the direction";
+    const size = same ? `a ${Math.abs(c!) < Math.abs(m!) ? "smaller" : "larger"} effect` : "a different size";
+    return { lever: name, label, status: "size", line: `${label}: the check ${agrees} but finds ${size}${nums}.` };
   }
   if (audit.some((a) => a.flag)) {
-    return { lever: name, label, status: "size", line: `${label}: the independent check agrees on the size${nums}, but the effect builds up differently as the amount grows.` };
+    return { lever: name, label, status: "size", line: `${label}: the check agrees on the size${nums}, but the effect builds up differently as the amount grows.` };
   }
-  return { lever: name, label, status: "agrees", line: `${label}: the independent check agrees with the model${nums}.` };
+  return { lever: name, label, status: "agrees", line: `${label}: the check agrees with the model${nums}.` };
 }
 
 function DrCurve({ t, name }: { t: Treatment; name: string }) {
@@ -106,6 +141,17 @@ function DrCurve({ t, name }: { t: Treatment; name: string }) {
     <div className="stack" style={{ gap: 6 }}>
       <LineBand
         title={`${t.label}: dose–response`}
+        note={
+          <>
+            <Term id="dose_response">Dose–response</Term> from the separate causal analysis
+            {pd ? (
+              <>
+                ; dashed: the model&apos;s <Term id="own_cell">own-cell</Term> <Term id="partial_dependence">partial dependence</Term>
+              </>
+            ) : null}
+            .
+          </>
+        }
         units={u}
         series={series}
         xLabel={t.label}
@@ -117,7 +163,7 @@ function DrCurve({ t, name }: { t: Treatment; name: string }) {
       />
       {!pd ? <OlderCode title="Model partial-dependence overlay" /> : null}
       {t.cate_layer ? (
-        <Block title={`${t.label}: CATE and model slopes per cell`}>
+        <Block title={`${t.label}: CATE and model slopes per cell`} tip={<InfoTip term="cate" label="CATE" />}>
           <p className="cap">
             The causal effect per cell (CATE) beside the model's own slopes, from causal_cells.parquet:{" "}
             <Link to={map + encodeURIComponent(t.cate_layer)}>CATE</Link> · <Link to={map + encodeURIComponent(`mslope_${name}`)}>model adoption slope</Link> ·{" "}
@@ -142,6 +188,16 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
           {(f) => (
             <Forest
               title={`${t.label}: causal estimates vs model`}
+              note={
+                <>
+                  The separate analysis&apos;s effect on the spot (own), on the neighbours (nbr) and in total (sum), beside the model&apos;s.
+                  <InfoTip
+                    label="θ own, θ nbr and θ sum"
+                    text="θ is the effect of one unit more of the lever, estimated from the readings alone: in the changed place (own), in the places around it (nbr), and both together (sum)."
+                    technical="Double machine learning estimates θ_own, θ_nbr, θ_sum (±1.96 SE)"
+                  />
+                </>
+              }
               units={per}
               rows={f.map((r) => ({ id: r.id, label: r.label, est: r.est, lo: r.lo, hi: r.hi, se: r.se, compare: r.model }))}
               valueLabel="Effect per unit"
@@ -159,7 +215,7 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
         </Section>
         <Section title="Audit" data={t.audit}>
           {(a) => (
-            <Block title="Audit verdicts">
+            <Block title="Audit verdicts" tip={<InfoTip term="causal_audit" label="Causal audit" />}>
               <ul className="stack" style={{ listStyle: "none", padding: 0, margin: 0, gap: 6 }}>
                 {a.map((x) => (
                   <li key={x.check} className="row">
@@ -185,6 +241,12 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
           {(c) => (
             <BoxStrip
               title={`${t.label}: effect heterogeneity (CATE)`}
+              note={
+                <>
+                  How much the effect varies from place to place.
+                  <InfoTip term="cate" label="CATE" />
+                </>
+              }
               units={per}
               groups={[{ label: t.label, q: c.q, mean: c.mean }]}
               valueLabel="CATE"
@@ -198,17 +260,31 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
         </Section>
         <Section title="Sensitivity" data={t.sensitivity}>
           {(s) => (
-            <Block title="Sensitivity to hidden confounding">
+            <Block title="Sensitivity to hidden confounding" tip={<InfoTip term="e_value" label="Sensitivity to hidden confounding" />}>
               <dl className="kv" aria-label="Sensitivity">
                 <dt>E-value</dt>
                 <dd>{fmtNum(s.e_value, 2)}</dd>
                 <dt>E-value of the CI bound</dt>
                 <dd>{fmtNum(s.e_value_ci, 2)}</dd>
-                <dt>Robustness value</dt>
+                <dt>
+                  Robustness value
+                  <InfoTip
+                    label="Robustness value"
+                    text="The share of the unexplained variation in both the lever and the temperature that a hidden factor would have to explain to remove the effect (at α = 0.05: to make it no longer significant)."
+                    technical="Robustness value RV_q (Cinelli & Hazlett)"
+                  />
+                </dt>
                 <dd>{fmtPct(s.rv_q, 0)}</dd>
                 <dt>Robustness value (α = 0.05)</dt>
                 <dd>{fmtPct(s.rv_q_alpha, 0)}</dd>
-                <dt>Design effect</dt>
+                <dt>
+                  Design effect
+                  <InfoTip
+                    label="Design effect"
+                    text="How much the clustering of nearby readings widens the uncertainty, compared with the same number of independent readings. 1 means no widening."
+                    technical="Design effect (spatial clustering)"
+                  />
+                </dt>
                 <dd>{fmtNum(s.design_effect, 2)}</dd>
               </dl>
               <p className="cap">
@@ -221,13 +297,29 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
       </div>
       <Section title="Controls" data={t.controls}>
         {(c) => (
-          <Block title="Controls">
+          <Block
+            title="Controls"
+            tip={
+              <InfoTip
+                label="Controls"
+                text="The other map layers, and a smooth map-wide pattern, that the causal analysis holds fixed so they cannot pass for the lever's effect."
+                technical="Confounders and spatial basis of the double machine learning"
+              />
+            }
+          >
             <dl className="kv" aria-label="Controls">
               <dt>Controls</dt>
               <dd>{c.names.join(", ") || "—"}</dd>
               <dt>Spatial basis scale</dt>
               <dd>{fmtDistance(c.basis_scale_m)}</dd>
-              <dt>Hole-scale ratio</dt>
+              <dt>
+                Hole-scale ratio
+                <InfoTip
+                  label="Hole-scale ratio"
+                  text="The size of the smooth map-wide pattern next to the size of the lever's patches. Near or below 1, the pattern may soak up part of the lever's own effect."
+                  technical="Spatial basis scale ÷ treatment hole scale"
+                />
+              </dt>
               <dd>
                 {fmtNum(c.hole_scale_ratio, 2)}{" "}
                 {c.hole_warning ? (
@@ -252,7 +344,12 @@ function TreatmentView({ name, t }: { name: string; t: Treatment }) {
 
 export default function Causal({
   title = "Causal audit",
-  intro = "An independent check of the model's effects: double machine learning on the observed variation, with neighbourhood spillover, heterogeneity and sensitivity analysis.",
+  intro = (
+    <>
+      A <Term id="causal_audit">cause-and-effect check of the model&apos;s effects</Term>: double machine learning on the observed variation, with neighbourhood spillover,
+      heterogeneity (<Term id="cate">CATE</Term>) and sensitivity analysis.
+    </>
+  ),
 }: DetailPageProps = {}) {
   const [tSel, setTSel] = useUrlState("t", codecs.optString());
   return (
@@ -281,7 +378,10 @@ export default function Causal({
           <Section title="Flags" data={s.flags}>
             {(f) =>
               f.length ? (
-                <Block title="Flags">
+                <Block
+                  title="Flags"
+                  tip={<InfoTip label="causal flags" text="Audit checks where the model and the separate causal analysis disagree, by lever." technical="Causal audit flags" />}
+                >
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
                     {f.map((x, i) => (
                       <li key={i}>
@@ -296,7 +396,7 @@ export default function Causal({
             }
           </Section>
           {s.dag_audit ? (
-            <Block title="DAG audit">
+            <Block title="DAG audit" tip={<InfoTip term="dag_audit" label="DAG audit" />}>
               <GenericTableView table={s.dag_audit} caption="DAG audit" csvName="dag-audit" />
             </Block>
           ) : (

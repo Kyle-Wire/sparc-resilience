@@ -6,15 +6,17 @@
 // much to trust this (and the Runs page's comparison columns).
 import { useEffect } from "react";
 import type { Action, ReadinessRow, RunSummary } from "../../api/types";
-import { Badge, DemoBadge, modeLabel } from "../../components/ui/Badge";
 import { Card } from "../../components/ui/Card";
 import { ActionButton, EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { StageRail, type StageRailStage, type StageStatus } from "../../components/ui/StageRail";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table, type Column } from "../../components/ui/Table";
 import { useProjectContext } from "../../layouts/ProjectLayout";
 import type { ProjectDetail } from "../../layouts/resources";
+import { DemoTag, ModeBadge } from "../../layouts/tips";
+import { isTermId, term, type TermId } from "../../content/glossary";
 import { TRUST_GRADE_LABEL, trustGrade, type TrustGrade } from "../../content/trust";
 import { Link, matchRoute, redirectTarget, useRegistry, type Registry } from "../../router";
 import { activeJobs, useJobs } from "../../stores/jobs";
@@ -23,11 +25,33 @@ import "./tracking.css";
 
 /** Readiness state → chip status word and text (icon + text, never colour alone). */
 const READY_CHIP: Record<ReadinessRow["state"], { status: string; text: string; rail: StageStatus }> = {
-  ok: { status: "done", text: "ok", rail: "done" },
+  ok: { status: "done", text: "ready", rail: "done" },
   warn: { status: "stale", text: "check", rail: "todo" },
   missing: { status: "missing", text: "missing", rail: "todo" },
-  "n/a": { status: "not_requested", text: "n/a", rail: "skipped" },
+  "n/a": { status: "not_requested", text: "not needed yet", rail: "skipped" },
 };
+
+/** What each readiness check is about (its ⓘ): a glossary term, or one plain sentence. */
+const READY_TIP: Record<string, TermId | string> = {
+  data: "The file of temperature readings the model learns from: one row per reading, with where it was taken.",
+  columns: "Which columns of the file hold the temperature, the coordinates and the map layers.",
+  levers: "levers",
+  roles: "Which map layers stand for tree cover, paving, surface reflectivity and so on, so the built-in heat-physics model can use them.",
+  forcing: "forcing",
+  climate_table: "How much warmer the city is expected to get, from climate models. The future-climate results need it.",
+  people_layers: "Where people live and what covers the ground. Heat risk and who benefits from cooling need them.",
+  config_valid: "Whether the project's settings pass every check, so that a run can start.",
+  runs: "The model's runs on this project. Every result comes from a run.",
+  emulator: "emulator_preview",
+  studies: "Independent checks of a run's results, such as fake-change tests and simulation checks.",
+};
+
+/** The ⓘ of a readiness row (null for a key without words). */
+function ReadyTip({ k, label }: { k: string; label: string }) {
+  const t = READY_TIP[k];
+  if (!t) return null;
+  return isTermId(t) ? <InfoTip term={t} label={label} /> : <InfoTip label={label} text={t} />;
+}
 
 export type Cta = { label: string; to: string; hint: string };
 
@@ -51,7 +75,7 @@ export function primaryCta(detail: Pick<ProjectDetail, "project" | "readiness" |
     return {
       label: "Launch run",
       to: `/p/${pid}/launch`,
-      hint: `${runName(finished)} is ready to explore, but it saved no checkpoint: designing new scenarios needs a run that does.`,
+      hint: `${runName(finished)} is ready to explore, but it did not save its trained models, so new scenarios can't be tried on it. Launch a new run to design scenarios.`,
     };
   const live = runs.find(isLive);
   if (live) return { label: "Launch run", to: `/p/${pid}/launch`, hint: `${runName(live)} is still running: its results appear as each stage finishes.` };
@@ -143,7 +167,10 @@ function Spine({ rows }: { rows: ReadinessRow[] }) {
           label: (
             <span className="row" style={{ gap: 8 }}>
               <StatusChip status={chip.status} text={chip.text} />
-              <b>{r.label}</b>
+              <span>
+                <b>{r.label}</b>
+                <ReadyTip k={r.key} label={r.label} />
+              </span>
             </span>
           ),
           meta: r.detail,
@@ -157,12 +184,13 @@ function Spine({ rows }: { rows: ReadinessRow[] }) {
 const RUN_COLS: Column<RunSummary>[] = [
   { key: "status", label: "Status", value: (r) => r.status, render: (r) => <StatusChip status={r.status} /> },
   { key: "label", label: "Run", value: (r) => r.label ?? r.id, render: (r) => <Link to={`/r/${encodeURIComponent(r.id)}`}>{r.label || r.id}</Link> },
-  { key: "mode", label: "Mode", value: (r) => r.mode, render: (r) => <Badge tone="mode">{modeLabel(r.mode, r.coarse_m)}</Badge> },
+  { key: "mode", label: "Kind of run", value: (r) => r.mode, render: (r) => <ModeBadge mode={r.mode} coarse_m={r.coarse_m} /> },
   { key: "created", label: "Started", value: (r) => r.created_utc, render: (r) => fmtDate(r.created_utc) },
   { key: "duration", label: "Duration", align: "right", value: (r) => r.duration_s, render: (r) => fmtDuration(r.duration_s) },
   {
     key: "trust",
-    label: "Trust",
+    label: term("trust_grade").label,
+    tip: <InfoTip term="trust_grade" />,
     value: (r) => {
       const g = trustGrade({ r2: r.r2, coverage: r.coverage })?.grade;
       return g ? GRADE_ORDER[g] : null;
@@ -192,7 +220,7 @@ export default function ProjectOverview() {
       <header className="page-head">
         <div className="row">
           <h1>{p.name}</h1>
-          {p.demo ? <DemoBadge /> : null}
+          {p.demo ? <DemoTag /> : null}
         </div>
         <div className="row">
           <Link className="btn primary" to={cta.to}>
@@ -203,7 +231,7 @@ export default function ProjectOverview() {
       </header>
       <StageRail className="project-stages" stages={journey.stages} current={journey.current} orientation="horizontal" label="Project stages" />
       <div className="grid2" style={{ alignItems: "start" }}>
-        <Card title="Readiness" eyebrow={`${p.readiness_score.done} of ${p.readiness_score.total} ready`}>
+        <Card title={term("readiness").label} eyebrow={`${p.readiness_score.done} of ${p.readiness_score.total} checks pass`} actions={<InfoTip term="readiness" />}>
           {detail.readiness.length ? <Spine rows={detail.readiness} /> : <p className="cap">No readiness checks reported.</p>}
         </Card>
         <div className="stack">

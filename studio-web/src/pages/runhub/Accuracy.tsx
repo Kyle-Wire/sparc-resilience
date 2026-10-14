@@ -4,12 +4,17 @@
 // design card. The forcing card (model input, not accuracy) is on Data & checks (./DataQa). Usable mid-run: the server computes metrics from
 // predictions.parquet and marks the ViewModel `live`. The complete page is Model details ›
 // Accuracy; How much to trust this reuses `finalModel` and `ObsPredChart`.
+// Plain words (phase 4): this is Model details, so the technical names stay (R², RMSE, stacker,
+// physics card, advection, CV design), each explained by an ⓘ or a glossary <Term> beside it.
 import type { AccuracySections, CoverageRow, ModelRow } from "../../api/runs";
 import type { SelectionSpec } from "../../api/types";
 import { Bars, BoxStrip, DotRange, HexbinScatter, Histogram, SmallMultiples } from "../../charts";
 import { Badge } from "../../components/ui/Badge";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Pill } from "../../components/ui/Pill";
 import { Table } from "../../components/ui/Table";
+import { Term } from "../../components/ui/Term";
+import { Tooltip } from "../../components/ui/Tooltip";
 import { Link, navigate } from "../../router";
 import { encodeSelection, useRunSelection } from "../../stores/selection";
 import { fmtInt, fmtNum, fmtPct, fmtSigned, fmtValue, unitLabel } from "../../theme/format";
@@ -120,6 +125,12 @@ function ResidualHistogram({ hist }: { hist: NonNullable<AccuracySections["resid
     <div className="stack" style={{ gap: 6 }}>
       <Histogram
         title="Residuals (observed − predicted)"
+        note={
+          <>
+            How far each test place&apos;s reading is from the prediction.
+            <InfoTip term="residual" label="Residual" />
+          </>
+        }
         units={u}
         bins={hist}
         xLabel="Residual"
@@ -154,6 +165,12 @@ function CoveragePanels({ ih }: { ih: NonNullable<AccuracySections["interval_hon
   return (
     <SmallMultiples
       title="Interval honesty"
+      note={
+        <>
+          Do the prediction ranges hold in each test area, at each distance and in each zone?
+          <InfoTip term="interval_honesty" label="Interval honesty" />
+        </>
+      }
       units="% of held-out cells inside the 90% interval"
       items={panels}
       panelTitle={(p) => p.label}
@@ -193,6 +210,11 @@ function CoveragePanels({ ih }: { ih: NonNullable<AccuracySections["interval_hon
           <span>
             <i className="box" style={{ background: "var(--s2)" }} />
             adaptive interval
+            <InfoTip
+              label="Global and adaptive intervals"
+              text="The global prediction range has the same width everywhere. The adaptive one is wider where the model is less sure and narrower where it is surer."
+              technical="Global vs locally adaptive conformal interval"
+            />
           </span>
           <span>outlined = more than 5 points under the {fmtPct(target, 0)} target</span>
         </>
@@ -218,6 +240,11 @@ function StackerPanel({ st }: { st: NonNullable<AccuracySections["stacker"]> }) 
       <div className="grid2">
         <Bars
           title="Stacker candidates"
+          note={
+            <>
+              The ways of blending the models that were tried; the lowest <Term id="rmse">RMSE</Term> wins.
+            </>
+          }
           units={u}
           categories={st.candidates.map((c) => c.name)}
           categoryLabel="Candidate"
@@ -230,6 +257,12 @@ function StackerPanel({ st }: { st: NonNullable<AccuracySections["stacker"]> }) 
         />
         <Bars
           title="Blend weights per fold"
+          note={
+            <>
+              How much each model counts in each test area&apos;s blend.
+              <InfoTip term="blend_weights" label="Blend weights" />
+            </>
+          }
           categories={st.folds.map((f) => `Fold ${f.fold + 1}`)}
           series={st.models.map((m) => ({ id: m, label: m, values: st.folds.map((f) => f.weights[m] ?? 0) }))}
           mode="percent"
@@ -265,7 +298,20 @@ function PhysicsCard({ ph }: { ph: NonNullable<AccuracySections["physics"]> }) {
         csvName="physics-parameters"
         rowKey={(r) => r.name}
         columns={[
-          { key: "label", label: "Parameter", value: (r) => r.label, render: (r) => <span title={r.name}>{r.label}</span> },
+          {
+            key: "label",
+            label: "Parameter",
+            value: (r) => r.label,
+            render: (r) => (
+              <Tooltip content={
+                <>
+                  Technical: <code>{r.name}</code>
+                </>
+              }>
+                {r.label}
+              </Tooltip>
+            ),
+          },
           {
             key: "mean",
             label: "Mean ± sd",
@@ -328,7 +374,11 @@ function PhysicsCard({ ph }: { ph: NonNullable<AccuracySections["physics"]> }) {
 
 export default function Accuracy({
   title = "Accuracy",
-  intro = "Held-out accuracy from spatially blocked cross-validation: every prediction here was made without the cell's own block.",
+  intro = (
+    <>
+      Held-out accuracy from <Term id="cv_design">spatially blocked cross-validation</Term>: every prediction here was made without the cell&apos;s own block.
+    </>
+  ),
 }: DetailPageProps = {}) {
   const rid = useRid();
   return (
@@ -343,7 +393,16 @@ export default function Accuracy({
         <>
           <Section title="Per-model accuracy" data={s.models}>
             {(m) => (
-              <Block title="Per-model accuracy">
+              <Block
+                title="Per-model accuracy"
+                tip={
+                  <InfoTip
+                    label="Per-model accuracy"
+                    text="Each model scored on areas it was not trained on. R²: the accuracy score (1 is perfect). RMSE and MAE: the typical error. Bias: how much it predicts too warm (+) or too cool (−) on average. Blend weight: how much it counts in the final blend."
+                    technical="Held-out R², RMSE, MAE, bias and stacker weight per model"
+                  />
+                }
+              >
                 <ModelsTable rows={m} />
               </Block>
             )}
@@ -363,6 +422,12 @@ export default function Accuracy({
                 z.length ? (
                   <BoxStrip
                     title="Residuals by zone"
+                    note={
+                      <>
+                        Does the model miss more in some zones than others?
+                        <InfoTip term="residual" label="Residual" />
+                      </>
+                    }
                     units={`${unitLabel(vm.units.target)} (observed − predicted)`}
                     groups={z}
                     valueLabel="Residual"
@@ -381,6 +446,11 @@ export default function Accuracy({
               {(f) => (
                 <BoxStrip
                   title="Residuals by fold"
+                  note={
+                    <>
+                      The same misses, one box per <Term id="held_out_fold">test area</Term> (fold).
+                    </>
+                  }
                   units={`${unitLabel(vm.units.target)} (observed − predicted)`}
                   groups={f}
                   valueLabel="Residual"
@@ -399,14 +469,14 @@ export default function Accuracy({
           </Section>
           <Section title="Stacker" data={s.stacker}>
             {(st) => (
-              <Block title="Stacker">
+              <Block title="Stacker" tip={<InfoTip term="stacker" label="Stacker" />}>
                 <StackerPanel st={st} />
               </Block>
             )}
           </Section>
           <Section title="Physics card" data={s.physics}>
             {(ph) => (
-              <Block title="Physics card">
+              <Block title="Physics card" tip={<InfoTip term="physics_card" label="Physics card" />}>
                 <PhysicsCard ph={ph} />
               </Block>
             )}
@@ -417,7 +487,8 @@ export default function Accuracy({
               {(a) => {
                 const verdict = (
                   <>
-                    <strong>Advection:</strong> {a.verdict}{" "}
+                    <strong>Advection:</strong>
+                    <InfoTip term="advection" label="Advection" /> {a.verdict}{" "}
                     {a.selected !== null ? <Badge tone={a.selected ? "accent" : undefined}>{a.selected ? "advection kept" : "advection off"}</Badge> : null}
                   </>
                 );
@@ -442,7 +513,11 @@ export default function Accuracy({
             </Section>
             <Section title="CV design" data={s.cv_design}>
               {(cv) => (
-                <Block title="CV design" actions={<Link to={`/r/${encodeURIComponent(rid)}/map?layer=fold`}>Show folds on the map</Link>}>
+                <Block
+                  title="CV design"
+                  tip={<InfoTip term="cv_design" label="CV design" />}
+                  actions={<Link to={`/r/${encodeURIComponent(rid)}/map?layer=fold`}>Show folds on the map</Link>}
+                >
                   <dl className="kv" aria-label="CV design">
                     <dt>Folds</dt>
                     <dd>{fmtInt(cv.n_folds)}</dd>

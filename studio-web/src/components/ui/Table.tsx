@@ -16,6 +16,8 @@ export type Column<T> = {
   render?: (row: T) => ReactNode;
   sortable?: boolean;
   width?: string;
+  /** An explanation beside the header (an InfoTip ⓘ), outside the sort button; not in the CSV. */
+  tip?: ReactNode;
 };
 
 export type TableProps<T> = {
@@ -149,6 +151,7 @@ export function Table<T>({
                       {active ? <Icon name={sort!.dir === "asc" ? "chevronUp" : "chevronDown"} size={12} /> : null}
                     </button>
                   )}
+                  {c.tip ?? null}
                 </th>
               );
             })}

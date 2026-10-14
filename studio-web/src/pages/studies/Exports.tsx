@@ -20,10 +20,13 @@ import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { useProjectContext } from "../../layouts/ProjectLayout";
 import { useRunOutputs } from "../../layouts/resources";
 import { SectionLoading } from "../../layouts/SectionNav";
+import { TipSpan } from "../../layouts/tips";
+import { term } from "../../content/glossary";
 import { codecs, Link, runHref, useRoute, useUrlState } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtDate, fmtRelative, fmtSignedValue } from "../../theme/format";
@@ -170,7 +173,7 @@ export function ReportBuilder({ pid, rid }: { pid: string; rid: string }) {
           </div>
         </fieldset>
         <PickList
-          legend="Exact results"
+          legend="Full model results"
           items={resultItems}
           picked={sel.resultIds}
           onChange={(ids) => setSel((cur) => withSelection(cur, { resultIds: ids }))}
@@ -179,7 +182,7 @@ export function ReportBuilder({ pid, rid }: { pid: string; rid: string }) {
               {(r.scenario_id && names.get(r.scenario_id)) || r.kind} · {fmtSignedValue(r.city.estimate)} {r.stale ? <Badge tone="warn">stale</Badge> : null} <small>{fmtDate(r.created_utc)}</small>
             </>
           )}
-          empty="No exact results on this run yet (Scenario Lab)."
+          empty="No full model results on this run yet: run one in the Scenario Lab."
         />
         <PickList
           legend="Budget plans"
@@ -260,7 +263,7 @@ function BundleCard({ pid, run }: { pid: string; run: RunSummary }) {
   return (
     <Card title="Run bundle" eyebrow="ZIP" aria-label="Run bundle">
       <p className="cap" style={{ margin: 0 }}>
-        The selected outputs with a contents manifest and a README giving units and sign conventions.
+        The result files you pick, in one ZIP file, with a list of its contents and a README that gives the units and says which sign means cooler.
       </p>
       {outs.error && !outs.data ? <EmptyState error={outs.error} /> : null}
       {choices.length ? (
@@ -289,11 +292,11 @@ function BundleCard({ pid, run }: { pid: string; run: RunSummary }) {
         <p className="cap">This run has no outputs to bundle yet.</p>
       ) : null}
       <Check checked={ckpt} onChange={setCkpt} disabled={!ckBytes}>
-        Include the checkpoint{ckBytes ? ` (${fmtBytes(ckBytes)})` : " (none)"}
+        Include the saved models{ckBytes ? ` (${fmtBytes(ckBytes)})` : " (none saved)"}
       </Check>
       {ckpt && ckBytes && ckBytes >= CHECKPOINT_WARN_BYTES ? (
         <p className="callout" role="note" data-testid="checkpoint-warning">
-          The checkpoint adds {fmtBytes(ckBytes)} to the ZIP. It is only useful to resume or open this run in another Studio with the same code; leave it out to share results.
+          The saved models add {fmtBytes(ckBytes)} to the ZIP. They are only useful to resume or open this run in another Studio with the same code; leave them out to share results.
         </p>
       ) : null}
       <div className="sx-actions">
@@ -312,9 +315,14 @@ function GisCard({ pid, run }: { pid: string; run: RunSummary }) {
   const [busy, setBusy] = useState(false);
   const noCrs = grid.data ? !grid.data.crs : false;
   return (
-    <Card title="GIS pack" eyebrow="GeoTIFF + GeoPackage" aria-label="GIS pack">
+    <Card
+      title="GIS pack"
+      tip={<InfoTip label="GIS pack" text="Map files for mapping software such as QGIS or ArcGIS, so the layers can sit next to your own city data." technical="GeoTIFF + GeoPackage (data CRS)" />}
+      eyebrow="GeoTIFF + GeoPackage"
+      aria-label="GIS pack"
+    >
       <p className="cap" style={{ margin: 0 }}>
-        Every layer as a GeoTIFF in the data's CRS, the hexagon summaries as GeoPackage, and the logger sites and pairs with longitude and latitude.
+        Every map layer as a GeoTIFF in the data's map projection, the hexagon summaries as a GeoPackage, and the measurement sites and pairs with longitude and latitude.
       </p>
       {noCrs ? (
         <p className="callout" role="note">
@@ -352,10 +360,12 @@ function PageCard({ pid, run }: { pid: string; run: RunSummary }) {
   return (
     <Card title="Standalone results page" eyebrow="results.html" aria-label="Standalone results page">
       <p className="cap" style={{ margin: 0 }}>
-        One self-contained HTML file with the maps, charts and caveats of this run, readable offline.
+        One web page file with this run's maps, charts and things to keep in mind. It opens in any browser, without Studio or the internet, so you can email it.
       </p>
       <div className="field">
-        <label htmlFor="page-placebo">Placebo results to include</label>
+        <label htmlFor="page-placebo">
+          {term("placebo").label} results to include <InfoTip term="placebo" />
+        </label>
         <select id="page-placebo" value={study} onChange={(e) => setStudy(e.target.value)}>
           <option value="">The run's own (if attached)</option>
           {placebo.map((s) => (
@@ -452,14 +462,16 @@ export function ExportHistory({ pid }: { pid: string }) {
                     {e.draft ? (
                       <>
                         {" "}
-                        <Badge tone="warn" title="Built from a preview or an unverified plan">
-                          draft
-                        </Badge>
+                        <TipSpan tip={`Built from a ${term("emulator_preview").label.toLowerCase()} or a plan not yet checked with the full model.`}>
+                          <Badge tone="warn">draft</Badge>
+                        </TipSpan>
                       </>
                     ) : null}
                   </td>
                   <td>{e.run_id ? <Link to={`/r/${enc(e.run_id)}`}>{e.run_id}</Link> : <span className="cap">—</span>}</td>
-                  <td title={e.created_utc}>{fmtRelative(e.created_utc)}</td>
+                  <td>
+                    <TipSpan tip={e.created_utc}>{fmtRelative(e.created_utc)}</TipSpan>
+                  </td>
                   <td>
                     <StatusChip status={STATUS_OF[e.status] ?? e.status} />
                   </td>

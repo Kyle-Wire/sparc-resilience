@@ -69,7 +69,7 @@ describe("Library › Set up with this run", () => {
     });
     navigate(`/r/${RID}/lab/library`, { replace: true });
     const { container } = render(<Library />);
-    await waitFor(() => container.querySelector('figure.chart-frame[data-chart="City-mean change per scenario"]'), 8000, "configured scenario effects");
+    await waitFor(() => container.querySelector('figure.chart-frame[data-chart="Citywide cooling per scenario"]'), 8000, "configured scenario effects");
     const groups = [...container.querySelectorAll("[data-group]")].map((g) => g.getAttribute("data-group"));
     expect(groups).toEqual(["configured", "project"]);
     const setUp = container.querySelector('[data-group="configured"]')!;
@@ -77,28 +77,35 @@ describe("Library › Set up with this run", () => {
     expect(setUp.querySelector("h2")).toBeNull();
     expect(setUp.querySelector("h3.kicker")!.textContent).toBe("Set up with this run");
     // the ladders repeat What cools' dose-response curves: a one-line link instead
-    expect(setUp.querySelector('figure.chart-frame[data-chart="Scenario ladders"]')).toBeNull();
+    expect(setUp.querySelector('figure.chart-frame[data-chart="Amount ladders"]')).toBeNull();
     expect(setUp.querySelector("[data-ladders-link] a")!.getAttribute("href")).toBe(`/r/${RID}/effects`);
     // the causal band is How much to trust this's: no diamonds or "outside the causal band" caption, a badge per row
-    const effects = setUp.querySelector('figure.chart-frame[data-chart="City-mean change per scenario"]')!;
+    const effects = setUp.querySelector('figure.chart-frame[data-chart="Citywide cooling per scenario"]')!;
     expect(effects.querySelector("figcaption")!.textContent).not.toMatch(/causal/i);
+    // drawn as cooling, the same way round as What cools and the Summary: a cooling scenario sits above zero
+    expect(effects.querySelector(".chart-units")!.textContent).toBe("Units: °F of cooling (higher = cooler)");
+    const cools = rows.find((r) => r.delta.hi !== null && r.delta.hi < 0)!;
+    const mark = [...effects.querySelectorAll("svg.chart [aria-label]")].find((m) => m.getAttribute("aria-label")!.startsWith(`${cools.label || cools.name}: `))!;
+    expect(mark.getAttribute("aria-label")).toMatch(/: \+\d/);
     // the numbers are listed once, in the table below: the chart has no table view
     expect(effects.querySelector("details.table-view")).toBeNull();
     // the configured scenarios are listed once, in this group (the old "Configured in this run" table is gone)
-    const tables = [...container.querySelectorAll("table.tbl")].filter((t) => t.querySelector("caption")?.textContent === "Configured scenarios");
+    const tables = [...container.querySelectorAll("table.tbl")].filter((t) => t.querySelector("caption")?.textContent === "Scenarios set up with this run");
     expect(tables.length).toBe(1);
     expect(setUp.contains(tables[0])).toBe(true);
     expect(tables[0].querySelectorAll("tbody tr").length).toBe(rows.length);
     expect(byText(container, "h3", "Configured in this run")).toBeNull();
-    // in the Lab, the rows act in place: clone, pin, map, and re-run exactly when the fold detail is missing
+    // in the Lab, the rows act in place: clone, pin, map, and run the full model again when the result by test area is missing
     const first = tables[0].querySelector(`[data-configured="${rows[0].slug}"]`)!.closest("tr")!;
     expect(byText(first, "button", "Clone to edit")).not.toBeNull();
     expect(byText(first, "button", "Pin")).not.toBeNull();
     expect(byText(first, "a", "Map")!.getAttribute("href")).toBe(`/r/${RID}/map?layer=${encodeURIComponent(`sc:${rows[0].slug}`)}`);
-    expect(byText(first, "button", "Re-run exactly")).not.toBeNull();
-    expect(first.textContent).toContain("causal differs");
+    expect(byText(first, "button", "Run full model again")).not.toBeNull();
+    expect(first.textContent).toContain("cause-and-effect check: different size");
+    // their explanations are tooltips, not native titles
+    expect(first.querySelector("[title]")).toBeNull();
     const second = tables[0].querySelector(`[data-configured="${rows[1].slug}"]`)!.closest("tr")!;
-    expect(byText(second, "button", "Re-run exactly")).toBeNull();
+    expect(byText(second, "button", "Run full model again")).toBeNull();
     // one row has a verdict, so the Verdict column shows
     expect(byText(tables[0], "th", /^Verdict/)).not.toBeNull();
     expect(byText(setUp, "a", "Open in Lab")).toBeNull();
@@ -114,8 +121,8 @@ describe("Library › Set up with this run", () => {
     fetchMock = mockFetch({ ...runRoutes(), [`GET /api/runs/${RID}/views/scenarios`]: { body: vm } });
     navigate(`/r/${RID}/lab/library`, { replace: true });
     const { container } = render(<Library />);
-    await waitFor(() => [...container.querySelectorAll("table.tbl")].find((t) => t.querySelector("caption")?.textContent === "Configured scenarios"), 8000, "configured table");
-    const table = [...container.querySelectorAll("table.tbl")].find((t) => t.querySelector("caption")?.textContent === "Configured scenarios")!;
+    await waitFor(() => [...container.querySelectorAll("table.tbl")].find((t) => t.querySelector("caption")?.textContent === "Scenarios set up with this run"), 8000, "configured table");
+    const table = [...container.querySelectorAll("table.tbl")].find((t) => t.querySelector("caption")?.textContent === "Scenarios set up with this run")!;
     expect(byText(table, "th", /^Confidence/)).not.toBeNull();
     expect(byText(table, "th", /^Verdict/)).toBeNull();
   });
@@ -130,21 +137,21 @@ describe("Library › Set up with this run", () => {
 });
 
 describe("Plans › Plan from this run", () => {
-  it("is the first entry, read-only, with the budget numbers, Pareto, dose and closed-loop maps and top cells", async () => {
+  it("is the first entry, read-only, with the budget numbers, Pareto, the amount and checked-cooling maps and top places", async () => {
     fetchMock = mockFetch({ ...runRoutes(), [`GET /api/runs/${RID}/views/budget`]: { body: viewFixture("budget") } });
     navigate(`/r/${RID}/lab/plans`, { replace: true });
     const { container } = render(<Plans />);
-    await waitFor(() => container.querySelector('figure.chart-frame[data-chart^="Cooling bought per budget"]'), 8000, "run plan Pareto");
+    await waitFor(() => container.querySelector('figure.chart-frame[data-chart^="How much cooling each budget buys"]'), 8000, "run plan Pareto");
     const sections = [...container.querySelectorAll('[data-composer="plans"] > section')];
     const run = sections[0];
     expect(run.getAttribute("data-plan")).toBe("run");
     expect(run.querySelector("h2")!.textContent).toBe("Plan from this run");
     expect(run.querySelector("header")!.textContent).toContain("read-only");
     expect(run.querySelector(".kpis")!.textContent).toContain("Cells treated");
-    expect(byText(run, "h3", "Dose and closed-loop maps")).not.toBeNull();
-    expect([...run.querySelectorAll("table.tbl caption")].some((c) => c.textContent === "Top cells by cooling")).toBe(true);
+    expect(byText(run, "h3", "Planned amounts and checked cooling, on the map")).not.toBeNull();
+    expect([...run.querySelectorAll("table.tbl caption")].some((c) => c.textContent === "Top places by cooling")).toBe(true);
     // read-only: no plan actions, and no link out to another plans page
-    expect(byText(run, "button", /Verify|Delete|Plan → scenario/)).toBeNull();
+    expect(byText(run, "button", /Check|Delete|Make a scenario/)).toBeNull();
     expect(byText(run, "a", "Re-plan in Lab")).toBeNull();
     // then a new plan, then the saved plans
     expect(sections.slice(1).map((s) => s.querySelector("h2")?.textContent)).toEqual(["New plan", "Saved plans"]);
@@ -159,7 +166,7 @@ describe("Plans › Plan from this run", () => {
     const { container } = render(<Plans />);
     await waitFor(() => container.querySelector('[data-status="no positive-benefit segments"]'), 8000, "no-allocation state");
     const empty = container.querySelector('[data-plan="run"] [data-status="no positive-benefit segments"]')!;
-    expect(empty.textContent).toContain("No cell has a positive cooling footprint");
+    expect(empty.textContent).toContain("No place cools anything, on the spot or nearby, with this lever");
     expect(empty.querySelector("a")).toBeNull();
   });
 });

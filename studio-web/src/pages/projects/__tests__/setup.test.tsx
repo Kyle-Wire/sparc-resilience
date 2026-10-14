@@ -3,6 +3,7 @@
 // every step shows server issues at their dotted paths, missing physics roles raise the
 // "placebo, simcheck, planner and emulator need these" warning, ladder names use U+2212, and
 // saving sends If-Match with a 409 opening the conflict dialog.
+import { act } from "react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { useDrafts } from "../setup/store";
@@ -57,7 +58,12 @@ describe("data step: suggested mapping", () => {
     expect(selectValue(container, "data.coord_unit")).toBe("m");
     const badge = container.querySelector('[data-cfg-path="data.target"] .badge');
     expect(badge?.textContent).toBe("suggested");
-    expect(badge?.getAttribute("title")).toContain("80%");
+    // how sure the suggestion is shows in a tooltip (focus, hover or tap), not a native title
+    expect(badge?.hasAttribute("title")).toBe(false);
+    const chip = badge!.closest<HTMLElement>("[data-tip-chip]")!;
+    act(() => chip.focus());
+    expect(document.querySelector('[role="tooltip"]')!.textContent).toContain("80% sure");
+    act(() => chip.blur());
     expect(m.calls.some((c) => c.method === "POST" && c.url.endsWith("/columns/suggest") && (c.body as { path: string }).path === "data/city.csv")).toBe(true);
     // the draft now differs from the saved config: the save bar lists the sections
     const bar = container.querySelector('[aria-label="Unsaved changes"]')!;
@@ -173,7 +179,7 @@ describe("issues at dotted paths", () => {
     const { container } = renderStep(<PhysicsStep />, `/p/${PID}/setup/physics`);
     await flush(3);
     const warn = container.querySelector(".roles-warning")!;
-    expect(warn.textContent).toContain("placebo, simcheck, planner and emulator need these");
+    expect(warn.textContent).toContain("fake-change tests, simulation checks, the planner pack and quick estimates need these");
     expect(warn.getAttribute("data-missing")).toBe("canopy");
     // the role-level server warning is shown at physics.roles
     expect(container.textContent).toContain("canopy role not mapped");
@@ -222,7 +228,7 @@ describe("saving the draft", () => {
     const { container } = renderAt(`/p/${PID}/setup/about`, <Setup />);
     await waitFor(() => container.querySelector('[data-cfg-path="report.title"] input'), 5000, "about step");
     typeInto(container.querySelector('[data-cfg-path="report.title"] input'), "Demo heat study");
-    const save = await waitFor(() => byText(container, "button", "Save config"), 2000, "save bar");
+    const save = await waitFor(() => byText(container, "button", "Save settings"), 2000, "save bar");
     click(save);
     await waitFor(() => document.querySelector(".conflict-dialog"), 5000, "conflict dialog");
     expect(puts[0].ifMatch).toBe("3");
@@ -240,8 +246,11 @@ describe("saving the draft", () => {
     const { container } = renderAt(`/p/${PID}/setup/levers`, <Setup />);
     await waitFor(() => container.querySelector('[role="tab"]'), 5000, "tabs");
     const dots = Object.fromEntries([...container.querySelectorAll<HTMLElement>(".step-tab")].map((t) => [t.textContent, t.dataset.stepDot]));
-    expect(dots).toMatchObject({ Data: "ok", Levers: "ok", Physics: "warn", Inputs: "missing" });
-    expect(container.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toContain("Levers");
+    expect(dots).toMatchObject({ Data: "ok", "What you can change": "ok", "Weather & physics settings": "warn", "More data": "missing", "Extra analyses": "ok" });
+    expect(container.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toContain("What you can change");
+    // the step says what it sets in plain words; the config sections it edits are in its ⓘ
+    expect(container.querySelector(".step-intro")!.textContent).toContain("tree cover");
+    expect(container.querySelector(".step-intro button.infotip")!.getAttribute("aria-label")).toBe("What is the What you can change step?");
     expect(container.querySelector('[data-step="levers"]')).not.toBeNull();
     m.restore();
   });

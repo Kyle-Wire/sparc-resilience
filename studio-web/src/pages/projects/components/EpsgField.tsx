@@ -4,6 +4,7 @@
 import { useId, useState } from "react";
 import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/Button";
+import { TipSpan } from "../../../layouts/tips";
 import { fmtNum } from "../../../theme/format";
 import { normaliseEpsg, searchEpsg, utmForLonLat } from "../model/epsg";
 import { IssueLines, useCfg } from "./cfg";
@@ -55,13 +56,15 @@ export function EpsgField({ hint, centroid, confidence }: { hint?: string | null
     <div data-cfg-path="data.crs" className="epsg-field">
       <div className="field">
         <label htmlFor={id}>
-          Coordinate reference system (EPSG)
+          Map projection of the coordinates (EPSG code)
           {c.suggested("data.crs") ? (
             <>
               {" "}
-              <Badge tone="accent" title={confidence !== null && confidence !== undefined ? `Suggested from the data (confidence ${Math.round(confidence * 100)}%)` : "Suggested from the data"}>
-                suggested
-              </Badge>
+              <TipSpan
+                tip={confidence !== null && confidence !== undefined ? `Suggested from your data (${Math.round(confidence * 100)}% sure). Check it before you run.` : "Suggested from your data. Check it before you run."}
+              >
+                <Badge tone="accent">suggested</Badge>
+              </TipSpan>
             </>
           ) : null}
         </label>
@@ -114,7 +117,7 @@ export function EpsgField({ hint, centroid, confidence }: { hint?: string | null
           ) : null}
         </div>
         <span className="hint">
-          Needed for open data, the CMIP6 site, GeoTIFF exports and the people objective.
+          Needed to download open and climate data, export GIS maps and plan for the most people cooled.
           {hint && hint !== cur ? (
             <>
               {" "}

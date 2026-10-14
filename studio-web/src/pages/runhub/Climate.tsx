@@ -6,32 +6,54 @@
 // there "Can adaptation keep up?", the Lab's Climate × adaptation matrix that follows on the same
 // page (#adapt), is the one home of the offset) and a future-temperature map computed
 // client-side (observed + warming).
+// Plain words (phase 4): futures by emissions and period ("Moderate emissions, mid-century
+// (2041–2060)"; "Moderate, mid-century" on chart rows), the pathway code only in a tooltip's
+// technical line; p10/median/p90 as the low end / middle / high end of the climate models; cells
+// as places; the offset as the share of the expected warming a scenario cancels out.
 import { useMemo, useState } from "react";
 import type { ClimateSections, ClimateProjection } from "../../api/runs";
 import type { LayerGroup, LayerMeta } from "../../api/types";
 import { Bars, DotRange, Gauge, SmallMultiples } from "../../charts";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Seg } from "../../components/ui/Seg";
+import { Term } from "../../components/ui/Term";
+import { term } from "../../content/glossary";
 import { MapView } from "../../map/MapView";
 import { runLayerLoader, useRunGrid, useRunLayers } from "../../map/data";
 import { findLayer } from "../../map/LayerPicker";
 import { Link } from "../../router";
 import { fmtNum, fmtPct, fmtSignedValue, unitLabel } from "../../theme/format";
+import { futureName, futureShort, plainCase } from "./climateWords";
 import { Block, GenericTableView, Section, ViewPage, useRid, useUnits } from "./common";
 import { heatHref, useDewpoint } from "./HeatRisk";
 
-const projLabel = (p: Pick<ClimateProjection, "label" | "period">) => `${p.label} ${p.period.replace("-", "–")}`;
+/** A projection in full ("Moderate emissions, mid-century (2041–2060)") and on a chart row ("Moderate, mid-century"). */
+const projLabel = (p: Pick<ClimateProjection, "experiment" | "label" | "period">) => futureName(p.experiment, p.period, p.label);
+const projShort = (p: Pick<ClimateProjection, "experiment" | "label" | "period">) => futureShort(p.experiment, p.period, p.label);
+/** The climate models' low end, middle and high end (10th percentile, median, 90th percentile). */
+const STAT_WORD = { p10: "low end", median: "middle estimate", p90: "high end" } as const;
+
+/** The ⓘ of the warming figures: what the emissions futures and the climate-model range are. */
+function WarmingNote() {
+  return (
+    <>
+      <Term id="ssp" /> · <Term id="climate_models" />
+    </>
+  );
+}
 
 function Warming({ w }: { w: ClimateProjection[] }) {
   const u = unitLabel(useUnits().target);
   const mid = w.find((p) => /2041/.test(p.period) && /245/.test(p.experiment)) ?? w[0];
   return (
     <DotRange
-      title="Warming by scenario and period"
-      units={`${u} above the baseline`}
+      title="Warming by emissions future and period"
+      note={<WarmingNote />}
+      units={`${u} warmer than 1995–2014`}
       rows={w.map((p) => ({
         id: p.id,
-        label: projLabel(p),
+        label: projShort(p),
         est: p.median,
         lo: p.p10,
         hi: p.p90,
@@ -41,11 +63,11 @@ function Warming({ w }: { w: ClimateProjection[] }) {
       }))}
       valueLabel="Warming"
       unit={u}
-      rangeLabel="10th–90th percentile of models"
-      outerLabel="model range"
+      rangeLabel="Most models"
+      outerLabel="All models"
       caption={
         mid
-          ? `${projLabel(mid)}: median warming ${fmtSignedValue(mid.median, u, 2)} across ${mid.n_models ?? "?"} models (10th–90th percentile ${fmtNum(mid.p10, 2)} to ${fmtNum(mid.p90, 2)} ${u}). Grey dots are individual models.`
+          ? `${projLabel(mid)}: ${fmtSignedValue(mid.median, u, 2)}, the middle estimate of ${mid.n_models ?? "?"} climate models (most models: ${fmtNum(mid.p10, 2)} to ${fmtNum(mid.p90, 2)} ${u}). Grey dots are individual models.`
           : undefined
       }
     />
@@ -57,36 +79,48 @@ function Exposure({ e }: { e: NonNullable<ClimateSections["exposure"]> }) {
   const ths = e.thresholds.map(String);
   const [th, setTh] = useState(ths[0] ?? "");
   const t = ths.includes(th) ? th : ths[0];
-  if (!t) return <p className="cap">No exposure thresholds configured.</p>;
+  if (!t) return <p className="cap">No temperatures to count are set in this run's settings.</p>;
   const keyOf = (rec: Record<string, unknown>) => Object.keys(rec).find((k) => Number(k) === Number(t)) ?? t;
   const today = e.present[keyOf(e.present)] ?? null;
-  const cats = ["Today", ...e.groups.map((g) => `${g.label}${g.variant && g.variant !== "no adaptation" ? ` · ${g.variant}` : ""}`)];
+  const cats = ["Today", ...e.groups.map((g) => `${futureShort(g.experiment, g.period, g.label)}${g.variant && g.variant !== "no adaptation" ? ` · ${g.variant}` : ""}`)];
   const vals = [today, ...e.groups.map((g) => g.share[keyOf(g.share)]?.median ?? null)];
   const lo = [null, ...e.groups.map((g) => g.share[keyOf(g.share)]?.p10 ?? null)];
   const hi = [null, ...e.groups.map((g) => g.share[keyOf(g.share)]?.p90 ?? null)];
   const pct = (a: (number | null)[]) => a.map((v) => (v === null ? null : v * 100));
   const worst = e.groups.reduce<{ label: string; v: number } | null>((m, g) => {
     const v = g.share[keyOf(g.share)]?.median;
-    return v !== null && v !== undefined && (!m || v > m.v) ? { label: g.label, v } : m;
+    // ">=": on a tie (several futures at 100%) the later group, listed hotter, wins
+    return v !== null && v !== undefined && (!m || v >= m.v) ? { label: futureName(g.experiment, g.period, g.label), v } : m;
   }, null);
   return (
     <Bars
-      title={`Share of cells at or above ${fmtNum(Number(t), 0)} ${u}`}
+      title={`Share of places with an air temperature at or above ${fmtNum(Number(t), 0)} ${u}`}
+      note={
+        <>
+          Each <Term id="cell">place</Term> is one square of the map
+        </>
+      }
       labelGutter={Math.max(...cats.map((c) => c.length)) * 6.6 + 16}
-      units="% of cells"
+      units="% of places"
       categories={cats}
       orientation="h"
-      series={[{ id: "share", label: "Share of cells", values: pct(vals), lo: pct(lo), hi: pct(hi) }]}
-      valueLabel="Cells at or above the threshold"
+      series={[{ id: "share", label: "Share of places", values: pct(vals), lo: pct(lo), hi: pct(hi) }]}
+      valueLabel="Places at or above the air temperature"
       unit="%"
       decimals={1}
       domain={[0, 100]}
       actions={
         ths.length > 1 ? (
-          <Seg<string> label="Threshold" size="small" value={t} onChange={setTh} options={ths.map((x) => ({ value: x, label: `≥ ${fmtNum(Number(x), 0)} ${u}` }))} />
+          <Seg<string> label="Air temperature" size="small" value={t} onChange={setTh} options={ths.map((x) => ({ value: x, label: `≥ ${fmtNum(Number(x), 0)} ${u}` }))} />
         ) : undefined
       }
-      caption={`Today ${fmtPct(today, 1)} of cells reach ${fmtNum(Number(t), 0)} ${u}${worst ? `; ${worst.label} raises this to ${fmtPct(worst.v, 1)} (median model; whiskers are the 10th–90th percentile of models)` : ""}.`}
+      caption={`Today ${fmtPct(today, 1)} of places reach an air temperature of ${fmtNum(Number(t), 0)} ${u}.${
+        worst
+          ? worst.v >= 0.995
+            ? ` Every place reaches ${fmtNum(Number(t), 0)} ${u} in the hottest futures (e.g. ${worst.label}).`
+            : ` In the hottest future, ${worst.label}, ${fmtPct(worst.v, 1)} of places do (the climate models' middle estimate; whiskers show the range of most models).`
+          : ""
+      }`}
     />
   );
 }
@@ -110,8 +144,8 @@ function FutureMap({ warming }: { warming: ClimateProjection[] }) {
       ...obs,
       key: `future:${proj.id}:${stat}`,
       group: "climate",
-      label: `${projLabel(proj)} (${stat === "median" ? "median" : stat === "p10" ? "10th percentile" : "90th percentile"} warming)`,
-      desc: `Observed temperature plus ${fmtSignedValue(delta, u, 2)} of warming.`,
+      label: `${projLabel(proj)} (${STAT_WORD[stat]} of warming)`,
+      desc: `Measured temperature plus ${fmtSignedValue(delta, u, 2)} of warming.`,
       stats: {
         ...obs.stats,
         lo: shift(obs.stats.lo, delta),
@@ -129,14 +163,14 @@ function FutureMap({ warming }: { warming: ClimateProjection[] }) {
   }, [obs, proj, stat, delta, u]);
   const load = useMemo(() => (base && obs ? async () => addConst(await base(obs), delta) : null), [base, obs, delta]);
   if (grid.error) return <EmptyState error={grid.error} />;
-  if (layers.data && !obs) return <p className="cap">This run has no observed-temperature layer to project.</p>;
+  if (layers.data && !obs) return <p className="cap">This run has no measured-temperature layer to project.</p>;
   if (!grid.data || !load || !groups.length) return <p className="cap">Loading the map…</p>;
   return (
     <div className="stack">
       <div className="row">
         <label className="row cap">
-          Projection
-          <select value={proj?.id ?? ""} onChange={(e) => setPid(e.target.value)} aria-label="Projection">
+          Future climate
+          <select value={proj?.id ?? ""} onChange={(e) => setPid(e.target.value)} aria-label="Future climate">
             {warming.map((p) => (
               <option key={p.id} value={p.id}>
                 {projLabel(p)}
@@ -145,16 +179,17 @@ function FutureMap({ warming }: { warming: ClimateProjection[] }) {
           </select>
         </label>
         <Seg<"median" | "p10" | "p90">
-          label="Warming statistic"
+          label="Climate-model estimate"
           size="small"
           value={stat}
           onChange={setStat}
           options={[
-            { value: "p10", label: "p10" },
-            { value: "median", label: "median" },
-            { value: "p90", label: "p90" },
+            { value: "p10", label: "Low end" },
+            { value: "median", label: "Middle" },
+            { value: "p90", label: "High end" },
           ]}
         />
+        <InfoTip term="climate_models" technical="Low end = 10th percentile, middle = median, high end = 90th percentile of the CMIP6 models" />
       </div>
       <MapView grid={grid.data} groups={groups} loadLayer={load} layerKey={groups[0].layers[0].key} height={420} title="Future temperature" />
     </div>
@@ -172,10 +207,16 @@ function addConst(values: ArrayLike<number>, d: number): Float32Array {
 function Offset({ o }: { o: NonNullable<ClimateSections["offset"]> }) {
   return (
     <SmallMultiples
-      title="Share of median warming offset"
+      title={term("climate_offset").label}
+      note={
+        <>
+          Cancels out this share of the expected warming
+          <InfoTip term="climate_offset" />
+        </>
+      }
       items={o}
       minPanelWidth={200}
-      panelTitle={(x) => `${x.label} · ${x.variant}`}
+      panelTitle={(x) => `${plainCase(x.label)} · ${x.variant}`}
       renderPanel={(x) => (
         <Gauge
           bare
@@ -184,7 +225,7 @@ function Offset({ o }: { o: NonNullable<ClimateSections["offset"]> }) {
           min={0}
           max={Math.max(1, x.share ?? 0)}
           ticks={[1]}
-          label="of median warming offset"
+          label="of the expected warming cancelled"
           format={(v) => fmtPct(v, 0)}
           tone={(x.share ?? 0) >= 1 ? "good" : "accent"}
           size={180}
@@ -192,13 +233,13 @@ function Offset({ o }: { o: NonNullable<ClimateSections["offset"]> }) {
       )}
       table={{
         columns: [
-          { key: "p", label: "Projection" },
-          { key: "v", label: "Variant" },
-          { key: "s", label: "Share offset", unit: "%" },
+          { key: "p", label: "Future climate" },
+          { key: "v", label: "Adaptation" },
+          { key: "s", label: "Warming cancelled", unit: "%" },
         ],
-        rows: o.map((x) => [x.label, x.variant, x.share === null ? null : x.share * 100]),
+        rows: o.map((x) => [plainCase(x.label), x.variant, x.share === null ? null : x.share * 100]),
       }}
-      caption="1 (the tick) means the adaptation fully cancels the median warming of that projection."
+      caption="The tick marks 100%: there the adaptation cancels out all of the expected warming in that future."
     />
   );
 }
@@ -215,7 +256,13 @@ export default function Climate({ embedded }: { embedded?: boolean } = {}) {
     <ViewPage
       view="climate"
       title="Future climate"
-      intro="Downscaled CMIP6 change factors added to the campaign temperatures: how hot the city gets under each scenario, and how much configured adaptation offsets."
+      intro={
+        <>
+          How much hotter the city gets in each <Term id="ssp">emissions future</Term> and time period: the{" "}
+          <Term id="climate_models" technical="Downscaled CMIP6 change factors">climate models&apos;</Term> warming added to the measured temperatures
+          {embedded ? "." : ", and how much of it the configured adaptation cancels out."}
+        </>
+      }
       actions={
         embedded ? undefined : (
           <Link to={adaptHref} className="cap">
@@ -229,11 +276,11 @@ export default function Climate({ embedded }: { embedded?: boolean } = {}) {
           <Section title="Warming" data={s.warming}>
             {(w) => <Warming w={w} />}
           </Section>
-          <Section title="Model × projection table" data={s.models_table}>
+          <Section title="Warming by climate model" data={s.models_table}>
             {(t) => (
               <details className="card" data-models-table="true">
-                <summary>Warming by model</summary>
-                <GenericTableView table={t} caption="Warming by model and projection" csvName="warming-by-model" />
+                <summary>Warming by climate model</summary>
+                <GenericTableView table={{ ...t, columns: t.columns.map((c) => ({ ...c, label: plainCase(c.label) })) }} caption="Warming by climate model and future" csvName="warming-by-model" />
               </details>
             )}
           </Section>
@@ -242,7 +289,7 @@ export default function Climate({ embedded }: { embedded?: boolean } = {}) {
               <Section title="Exposure" data={s.exposure}>
                 {(e) => <Exposure e={e} />}
               </Section>
-              <Section title="Warming offset" data={s.offset}>
+              <Section title={term("climate_offset").label} data={s.offset}>
                 {(o) => <Offset o={o} />}
               </Section>
             </div>
@@ -252,7 +299,7 @@ export default function Climate({ embedded }: { embedded?: boolean } = {}) {
               {(e) => <Exposure e={e} />}
             </Section>
           )}
-          <Section title="Future-temperature map" data={s.warming}>
+          <Section title="Future temperature map" data={s.warming}>
             {(w) => (
               <Block title="Future temperature">
                 <FutureMap warming={w} />

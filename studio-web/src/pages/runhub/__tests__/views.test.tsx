@@ -169,7 +169,7 @@ describe("view behaviour", () => {
       expect(text).toContain("Residents by heat-risk category");
       expect(text).not.toContain("Not established");
       expect(r.container.querySelector('[aria-label="Exposure in each climate future"]')).toBeNull();
-      click(byText(r.container, "button", "Humid (21 °C)"));
+      click(byText(r.container, "button", "Humid (dew point 70 °F)"));
       await waitFor(() => r.calls.some((c) => c.url.endsWith("/views/heat?dewpoint_C=21")), 3000, "what-if request");
       await waitFor(() => r.container.textContent?.includes("your setting"), 3000, "what-if view");
       // the what-if dewpoint is page state, so Future climate uses it too
@@ -188,8 +188,8 @@ describe("view behaviour", () => {
     for (const k of ["brief", "kpis", "today", "futures", "hist"] as const) vm.sections[k] = null;
     const r = await renderView(page, vm);
     try {
-      expect(r.container.textContent).toContain("no campaign humidity");
-      expect(byText(r.container, "button", "Typical summer (16 °C)")).not.toBeNull();
+      expect(r.container.textContent).toContain("no humidity reading for the measurement day");
+      expect(byText(r.container, "button", "Typical summer (dew point 61 °F)")).not.toBeNull();
       expect(r.container.textContent).not.toContain("could not be displayed");
     } finally {
       r.restore();
@@ -208,6 +208,31 @@ describe("view behaviour", () => {
       expect(un.container.querySelector('[aria-label="Verdict per scenario"]')!.textContent).toContain("Robust");
     } finally {
       un.restore();
+    }
+  });
+
+  it("Model details keeps the technical names and explains each jargon heading with a glossary ⓘ or Term (no native titles)", async () => {
+    const terms = (root: Element) => new Set([...root.querySelectorAll<HTMLElement>("button.infotip[data-term], button.term[data-term]")].map((b) => b.dataset.term));
+    const expected: [ViewName, string[], string[]][] = [
+      ["accuracy", ["Stacker", "Physics card", "CV design"], ["stacker", "blend_weights", "physics_card", "advection", "cv_design", "residual", "interval_honesty"]],
+      ["distance", ["Stack vs baselines"], ["distance_skill", "baselines"]],
+      ["causal", ["Audit verdicts", "Sensitivity to hidden confounding"], ["causal_audit", "cate", "e_value", "dose_response", "partial_dependence"]],
+      ["uncertainty", ["What the evidence supports"], ["envelope", "estimation", "specification", "attribution", "causal_band", "verdict_robust"]],
+    ];
+    for (const [view, headings, ids] of expected) {
+      const r = await renderView(PAGES.find((p) => p.view === view)!, viewFixture(view) as never);
+      try {
+        expect(r.container.querySelector("[title]"), view).toBeNull();
+        const text = r.container.textContent ?? "";
+        for (const h of headings) expect(text, `${view}: ${h}`).toContain(h);
+        const found = terms(r.container);
+        for (const id of ids) expect(found.has(id), `${view}: ${id}`).toBe(true);
+        // an ⓘ sits beside a heading, never inside it
+        expect(r.container.querySelector("h2 button.infotip, h3 button.infotip"), view).toBeNull();
+      } finally {
+        r.restore();
+        r.unmount();
+      }
     }
   });
 
@@ -350,7 +375,7 @@ describe("view behaviour", () => {
       vm.sections.caption = caption;
       const r = await renderView(page, vm);
       try {
-        const fig = [...r.container.querySelectorAll("figure.chart-frame")].find((f) => f.getAttribute("data-chart")?.startsWith("Cooling bought"));
+        const fig = [...r.container.querySelectorAll("figure.chart-frame")].find((f) => f.getAttribute("data-chart")?.startsWith("How much cooling each budget buys"));
         expect(fig).toBeDefined();
         expect(fig!.querySelector("figcaption")!.textContent).toContain(caption);
       } finally {
@@ -395,7 +420,7 @@ describe("view behaviour", () => {
     vm.sections.status = "no positive-benefit segments";
     const r = await renderView(PAGES.find((p) => p.view === "budget")!, vm);
     try {
-      expect(r.container.querySelector('[data-status="no positive-benefit segments"]')!.textContent).toContain("No cell has a positive cooling footprint");
+      expect(r.container.querySelector('[data-status="no positive-benefit segments"]')!.textContent).toContain("No place cools anything, on the spot or nearby, with this lever");
     } finally {
       r.restore();
     }
@@ -412,7 +437,7 @@ describe("view behaviour", () => {
       { id: "cv_curve", state: "skipped", seconds: null, source: "manifest", reason: "disabled_by_config:cv.distance_curve.enabled" },
     ];
     const overview = viewFixture("overview");
-    const rerun = { kind: "open" as const, label: "Re-run with the CV curve", method: "GET" as const, path: `/p/p_1/launch?from=${rid}` };
+    const rerun = { kind: "open" as const, label: "Re-run with the distance test", method: "GET" as const, path: `/p/p_1/launch?from=${rid}` };
     overview.sections.outputs_grid = [
       { id: "cv_distance", label: "Skill vs distance", group: "trust", state: "missing", produced_by: "stage:cv_curve", view: "distance", action: rerun },
     ];
@@ -425,8 +450,8 @@ describe("view behaviour", () => {
       expect(r.container.querySelectorAll("[data-older-code]").length).toBe(0);
       const note = r.container.querySelector("[data-absent]")!;
       expect(note.textContent).toContain("Skill vs block size");
-      expect(note.textContent).toContain("disabled in the config (cv.distance_curve.enabled)");
-      expect(note.querySelector("button")!.textContent).toBe("Re-run with the CV curve");
+      expect(note.textContent).toContain("turned off in the project settings");
+      expect(note.querySelector("button")!.textContent).toBe("Re-run with the distance test");
     } finally {
       r.restore();
     }
@@ -443,7 +468,7 @@ describe("view behaviour", () => {
     ];
     const overview = viewFixture("overview");
     overview.sections.outputs_grid = [
-      { id: "cv_distance", label: "Skill vs distance", group: "trust", state: "missing", produced_by: "stage:cv_curve", view: "distance", action: { kind: "open", label: "Re-run with the CV curve", method: "GET", path: `/p/p_1/launch?from=${rid}` } },
+      { id: "cv_distance", label: "Skill vs distance", group: "trust", state: "missing", produced_by: "stage:cv_curve", view: "distance", action: { kind: "open", label: "Re-run with the distance test", method: "GET", path: `/p/p_1/launch?from=${rid}` } },
     ];
     const r = await renderView({ view: "distance", tab: "details/reach", Page: () => <Distance detailsOnly /> }, vm, {
       [`GET /api/runs/${rid}`]: { body: detail },
@@ -453,7 +478,7 @@ describe("view behaviour", () => {
       await waitFor(() => r.container.querySelector('[data-on-trust="distance"]'), 3000, "the line to Trust");
       expect(r.container.querySelector('[data-on-trust="distance"] a')!.getAttribute("href")).toBe(`/r/${rid}/trust#distance`);
       expect(r.container.querySelector('[data-on-trust="validation"] a')!.getAttribute("href")).toBe(`/r/${rid}/trust#validation`);
-      expect(r.container.textContent).not.toContain("Re-run with the CV curve");
+      expect(r.container.textContent).not.toContain("Re-run with the distance test");
       expect(r.container.textContent).not.toContain("cv.distance_curve.enabled");
       expect(r.container.textContent).not.toContain("stack not distinguishable");
       expect(r.container.querySelectorAll("[data-absent], [data-older-code]").length).toBe(0);
@@ -493,7 +518,7 @@ describe("view behaviour", () => {
     }
   });
 
-  it("Planner equity bars are labelled as mean cooling in the target unit, by quintile of the measure", async () => {
+  it("Planner equity bars are labelled as average cooling in the target unit, by fifth of places ranked by the measure", async () => {
     const vm = viewFixture("planner");
     vm.units = { ...vm.units, target: "°F" };
     vm.sections.equity = {
@@ -509,10 +534,19 @@ describe("view behaviour", () => {
       const fig = [...r.container.querySelectorAll("figure.chart-frame")].find((f) => (f.getAttribute("data-chart") ?? "").toLowerCase().includes("population density"))!;
       expect(fig).toBeDefined();
       const head = [...fig.querySelectorAll("details.table-view th")].map((th) => th.textContent ?? "");
-      expect(head.some((h) => h.startsWith("Mean cooling") && h.includes("°F"))).toBe(true);
+      expect(head.some((h) => h.startsWith("Average cooling") && h.includes("°F"))).toBe(true);
       expect(head.some((h) => h.startsWith("population density"))).toBe(false);
       expect(fig.textContent).toContain("Units: °F (positive = cooler)");
-      expect(fig.querySelector("svg.chart")!.textContent).toContain("Mean cooling (°F)");
+      expect(fig.querySelector("svg.chart")!.textContent).toContain("Average cooling (°F)");
+      // quintiles as fifths of places, named at the ends by the measure
+      const rows = [...fig.querySelectorAll("details.table-view tbody tr")].map((tr) => tr.querySelector("td")?.textContent ?? "");
+      expect(rows).toEqual(["Lowest density", "2nd fifth", "Middle fifth", "4th fifth", "Highest density"]);
+      // the concentration index explains itself in a tooltip chip, not a native title
+      const block = fig.closest("section.card")!;
+      expect(block.querySelector("[title]")).toBeNull();
+      expect(block.querySelectorAll("[data-tip-chip]").length).toBe(2);
+      expect(block.textContent).toContain("Who gets the cooling:");
+      expect(block.textContent).toContain("Share of residents aged 60+: −0.05");
     } finally {
       r.restore();
     }

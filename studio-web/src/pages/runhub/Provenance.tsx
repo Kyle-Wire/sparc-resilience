@@ -2,6 +2,8 @@
 // flag, platform; environment.txt with a diff against another run of the project; the
 // effective config with its diff vs the project config and vs DEFAULTS; launch.json; and
 // "Reproduce this run" (POST /api/runs/{rid}/studies/reproduce).
+// Plain words (phase 4): each block has an ⓘ (InfoTip) saying what it is for; the "dirty" chip
+// explains itself (glossary `uncommitted_code`).
 import { useState } from "react";
 import { errorMessage } from "../../api/client";
 import { reproduceRun, useProjectRuns, useRunConfig, useRunDetailFull, useRunEnvironment } from "../../api/runs";
@@ -10,12 +12,14 @@ import { Button } from "../../components/ui/Button";
 import { CodeArea } from "../../components/ui/CodeArea";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Icon } from "../../components/ui/Icon";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Table } from "../../components/ui/Table";
 import { copyText } from "../../components/ui/download";
+import { term } from "../../content/glossary";
 import { useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
 import { fmtDateTime } from "../../theme/format";
-import { Block, Section, ViewPage, useRid, type DetailPageProps } from "./common";
+import { Block, Section, TipChip, ViewPage, useRid, type DetailPageProps } from "./common";
 import { humanize } from "./format";
 
 const show = (v: unknown) => (v === undefined ? "—" : typeof v === "string" ? v : JSON.stringify(v));
@@ -55,7 +59,7 @@ function ReproduceButton({ rid }: { rid: string }) {
         try {
           const r = await reproduceRun(rid);
           useJobs.getState().upsert(r.job);
-          toast("info", "Reproduction started: a child run re-fits S0–S3 and checks the results", { href: `/jobs/${r.job.id}`, linkLabel: "Track" });
+          toast("info", "Reproduction started: a new run retrains the models (stages S0–S3) and checks that the results match", { href: `/jobs/${r.job.id}`, linkLabel: "Track" });
         } catch (e) {
           toast("error", "Could not start the reproduction", { body: errorMessage(e) });
         } finally {
@@ -76,6 +80,13 @@ function Environment({ rid, pid }: { rid: string; pid: string | null }) {
   return (
     <Block
       title="Environment"
+      tip={
+        <InfoTip
+          label="Environment"
+          text="The software packages and their versions installed when the run ran. Compare with another run to see what changed between them."
+          technical="environment.txt (pip freeze)"
+        />
+      }
       actions={
         <label className="row cap">
           Diff with
@@ -141,8 +152,17 @@ function Config({ rid }: { rid: string }) {
   return (
     <Block
       title="Effective configuration"
+      tip={
+        <InfoTip
+          label="Effective configuration"
+          text="Every setting the run actually used: the project's settings merged with SPARC's defaults. The tables below list what differs from each."
+          technical="Effective config (YAML)"
+        />
+      }
       actions={
-        <Badge title={`Config directory: ${c.config_dir}`}>from {c.source === "launch" ? "launch.json" : c.source === "manifest" ? "the manifest" : "the import config"}</Badge>
+        <TipChip tip={`Config directory: ${c.config_dir}`}>
+          <Badge>from {c.source === "launch" ? "launch.json" : c.source === "manifest" ? "the manifest" : "the import config"}</Badge>
+        </TipChip>
       }
     >
       <CodeArea label="Run configuration (YAML)" value={c.yaml} readOnly rows={18} />
@@ -184,7 +204,7 @@ function Config({ rid }: { rid: string }) {
 
 export default function Provenance({
   title = "Provenance",
-  intro = "Everything needed to trust and repeat this run: hashes of the inputs, config and code, the software environment and the exact launch snapshot.",
+  intro = "Everything needed to check and repeat this run: fingerprints (hashes) of the inputs, settings and code, the software it ran on and the exact settings it was launched with.",
 }: DetailPageProps = {}) {
   const rid = useRid();
   const detail = useRunDetailFull(rid);
@@ -200,7 +220,16 @@ export default function Provenance({
           <div className="grid2">
             <Section title="Hashes" data={s.hashes}>
               {(h) => (
-                <Block title="Hashes">
+                <Block
+                  title="Hashes"
+                  tip={
+                    <InfoTip
+                      label="Hashes"
+                      text="A fingerprint of each input file, of the settings and of the code. Any change gives a different fingerprint, so a repeat can prove it used exactly the same inputs."
+                      technical="SHA-256 content hashes"
+                    />
+                  }
+                >
                   <dl className="kv" aria-label="Hashes">
                     {Object.entries(h).map(([k, v]) => (
                       <div key={k} style={{ display: "contents" }}>
@@ -223,9 +252,9 @@ export default function Provenance({
                       <dd>
                         <CopyValue label="Commit" value={g.commit} />
                         {g.dirty ? (
-                          <Badge tone="warn" title="Uncommitted changes were present when the run started">
-                            dirty
-                          </Badge>
+                          <TipChip tip={term("uncommitted_code").tip}>
+                            <Badge tone="warn">dirty</Badge>
+                          </TipChip>
                         ) : g.dirty === false ? (
                           <Badge>clean</Badge>
                         ) : null}
@@ -260,7 +289,10 @@ export default function Provenance({
           <Config rid={rid} />
           <Section title="Launch snapshot" data={s.launch}>
             {(l) => (
-              <Block title="launch.json">
+              <Block
+                title="launch.json"
+                tip={<InfoTip label="launch.json" text="A copy of the settings taken the moment the run was launched." technical="Launch snapshot" />}
+              >
                 <p className="cap">Resume always rebuilds the config from this snapshot, so later project edits never change what an interrupted run resumes with.</p>
                 <pre className="mono" style={{ maxHeight: 360, overflow: "auto", fontSize: "0.8rem" }}>
                   {JSON.stringify(l, null, 2)}

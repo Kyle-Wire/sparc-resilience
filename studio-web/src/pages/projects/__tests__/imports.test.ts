@@ -1,6 +1,7 @@
 // Feature folders never import each other (SPEC §17.1): the projects pages and their api
 // modules import only foundation modules (api client/sse/binary/resource/types, components,
-// charts, map, layouts, router, stores jobs/ui/selection, theme), their own api modules
+// charts, map, layouts, router, stores jobs/ui/selection, theme, content: the glossary's plain
+// words and the trust grade), their own api modules
 // (api/projects, api/inputs) and their own folder.
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -20,6 +21,7 @@ const ALLOWED: RegExp[] = [
   /^router$/,
   /^stores\/(jobs|ui|selection)$/,
   /^theme\/[A-Za-z]+(\.css)?$/,
+  /^content\/[A-Za-z]+$/,
   /^test\/render$/,
   /^pages\/core\/routes$/,
 ];

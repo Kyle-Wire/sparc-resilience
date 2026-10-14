@@ -4,6 +4,8 @@ import { Axis, axisTitle } from "./Axis";
 import { ChartFrame, markProps, useChart, useChartWidth, type ChartTable, type FrameOptions } from "./ChartFrame";
 import { extent, linearScale, padDomain } from "./scales";
 import { fmtNum } from "../theme/format";
+import { term } from "../content/glossary";
+import { Term } from "../components/ui/Term";
 
 export type ParetoPoint = { x: number; y: number; label?: string };
 
@@ -54,7 +56,7 @@ function Plot(p: ParetoProps) {
           r={q.i === p.selected ? 6 : 3.5}
           style={{ fill: q.i === p.selected ? "var(--surface)" : "var(--s1)", stroke: "var(--s1)" }}
           strokeWidth={q.i === p.selected ? 2.5 : 1}
-          {...markProps(ctx, `${p.curveLabel ?? "Planned (open-loop)"}: ${p.xLabel} ${fmtNum(q.x, d)}${p.xUnit ? " " + p.xUnit : ""}, ${p.yLabel} ${fmtNum(q.y, d)}${p.yUnit ? " " + p.yUnit : ""}${q.label ? ` (${q.label})` : ""}${q.i === p.selected ? ", selected" : ""}`, p.onPointClick ? () => p.onPointClick!(q.i) : undefined)}
+          {...markProps(ctx, `${p.curveLabel ?? term("open_loop").label}: ${p.xLabel} ${fmtNum(q.x, d)}${p.xUnit ? " " + p.xUnit : ""}, ${p.yLabel} ${fmtNum(q.y, d)}${p.yUnit ? " " + p.yUnit : ""}${q.label ? ` (${q.label})` : ""}${q.i === p.selected ? ", selected" : ""}`, p.onPointClick ? () => p.onPointClick!(q.i) : undefined)}
         />
       ))}
       {(p.realised ?? []).map((q, i) => (
@@ -65,7 +67,7 @@ function Plot(p: ParetoProps) {
           width={8}
           height={8}
           style={{ fill: "var(--s2)" }}
-          {...markProps(ctx, `${p.realisedLabel ?? "Realised (closed-loop)"}: ${p.xLabel} ${fmtNum(q.x, d)}, ${p.yLabel} ${fmtNum(q.y, d)}${p.yUnit ? " " + p.yUnit : ""}${q.label ? ` (${q.label})` : ""}`)}
+          {...markProps(ctx, `${p.realisedLabel ?? term("closed_loop").label}: ${p.xLabel} ${fmtNum(q.x, d)}, ${p.yLabel} ${fmtNum(q.y, d)}${p.yUnit ? " " + p.yUnit : ""}${q.label ? ` (${q.label})` : ""}`)}
         />
       ))}
     </svg>
@@ -77,12 +79,12 @@ export function Pareto(props: ParetoProps) {
     <>
       <span>
         <i style={{ background: "var(--s1)" }} />
-        {props.curveLabel ?? "planned (open-loop)"}
+        {props.curveLabel ?? <Term id="open_loop" />}
       </span>
       {props.realised?.length ? (
         <span>
           <i className="box" style={{ background: "var(--s2)" }} />
-          {props.realisedLabel ?? "realised (closed-loop)"}
+          {props.realisedLabel ?? <Term id="closed_loop" />}
         </span>
       ) : null}
     </>

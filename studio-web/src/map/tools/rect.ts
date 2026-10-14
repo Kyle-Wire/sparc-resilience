@@ -1,7 +1,6 @@
 // Rectangle selection: drag a box; produces {kind: "rect"} in lon/lat (or run metres).
-import { fmtInt } from "../../theme/format";
 import type { GridData } from "../grid";
-import { countMask, crsOf, maskWhere, toCrs } from "./shapes";
+import { countMask, crsOf, maskWhere, placesText, toCrs } from "./shapes";
 import type { MapTool, RasterPoint, ToolPreview, ToolResult } from "./types";
 
 export function rectSelection(g: GridData, a: RasterPoint, b: RasterPoint): ToolResult {
@@ -14,7 +13,7 @@ export function rectSelection(g: GridData, a: RasterPoint, b: RasterPoint): Tool
   const max: [number, number] = [Math.max(...corners.map((c) => c[0])), Math.max(...corners.map((c) => c[1]))];
   const mask = maskWhere(g, (px, py) => px >= x0 && px <= x1 && py >= y0 && py <= y1);
   const crs = crsOf(g);
-  return { kind: "selection", spec: { kind: "rect", crs, min, max }, mask, label: `Rectangle · ${fmtInt(countMask(mask))} cells`, portable: crs === "EPSG:4326" };
+  return { kind: "selection", spec: { kind: "rect", crs, min, max }, mask, label: `Box · ${placesText(countMask(mask))}`, portable: crs === "EPSG:4326" };
 }
 
 export function rectTool(g: GridData): MapTool {

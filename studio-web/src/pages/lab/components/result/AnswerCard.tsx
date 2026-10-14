@@ -12,33 +12,47 @@ import { exportPack, useLevers, type Lever, type Result } from "../../../../api/
 import type { Likely } from "../../../../api/types";
 import { Badge } from "../../../../components/ui/Badge";
 import { Button } from "../../../../components/ui/Button";
+import { InfoTip, type InfoTipProps } from "../../../../components/ui/InfoTip";
 import { CONFIDENCE_TEXT, confidenceOf, type Confidence } from "../../../../components/ui/PlainResult";
+import { heatCategory, term } from "../../../../content/glossary";
 import { useJobs } from "../../../../stores/jobs";
 import { toast } from "../../../../stores/ui";
-import { fmtDateTime, fmtInt, fmtRange, fmtSigned, fmtSignedValue, unitLabel } from "../../../../theme/format";
+import { fmtDateTime, fmtInt, fmtNum, fmtTempChange, unitLabel } from "../../../../theme/format";
+import { rangeWords } from "../../../runhub/format";
 import { CAUSAL_QUALIFIER_LINK, answerHeadlineText, buysLines, extrapolationQualifier, isCausalQualifier, plainServerBuys, plainWording, withRange } from "../../model/plain";
 import { costWords } from "../../model/quick";
 import { useTray } from "../../model/tray";
 import { CONFIDENCE_WORDS, LAB_WORDS, leverWords, type ConfidenceTone } from "../../model/words";
+import { Tip } from "../Tip";
 import "./result.css";
 
+/** "Likely range" → "likely range". */
+function lowerFirst(s: string): string {
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
+/** The NWS level the card's heat-risk fact counts from (glossary heat categories). */
+const EC = heatCategory("extreme_caution").label;
+
 /**
- * Plain words of the result (the answer card and the accordion). They live here until phase 4 folds
- * them, with model/words.ts, into the shared glossary.
+ * Plain words of the result (the answer card and the accordion). Repeated concepts (citywide, the
+ * likely range, the heat-risk level, out of date) come from the shared glossary; the card's own
+ * sentences stay here.
  */
 export const RESULT_WORDS = {
-  citywide: "Citywide",
+  citywide: term("citywide").label,
   citywideNote: "averaged over the whole city",
-  residentsOut: "Residents out of Extreme caution",
-  placesOut: "Places out of Extreme caution",
-  residentsIn: "Residents pushed into Extreme caution",
-  placesIn: "Places pushed into Extreme caution",
-  heatNote: "on a hot afternoon today (heat index of 90 °F or more)",
+  residentsOut: `Residents no longer at ${EC} or worse`,
+  placesOut: `Places no longer at ${EC} or worse`,
+  residentsIn: `Residents pushed into ${EC}`,
+  placesIn: `Places pushed into ${EC}`,
+  heatNote: `on a hot afternoon today (${lowerFirst(term("heat_index").label)} of 90 °F or more)`,
   heatCounting: "Counting residents…",
   heatCountingNote: "Working out who moves out of each heat-risk level (a few seconds).",
   heatFailed: "Could not count the residents",
   tryAgain: "Try again",
-  likelyRange: "likely range",
+  /** The strip's label: "likely 0.48–1.58 °F cooler". */
+  likely: (range: string) => `likely ${range}`,
   cost: "Estimated cost",
   costNote: "in your cost model's units",
   costPer: (u: string) => `Cost per ${u || "degree"}`,
@@ -47,7 +61,10 @@ export const RESULT_WORDS = {
   costPerWarmsNote: "this change warms on balance",
   keepInMind: "Keep in mind",
   buys: "What it buys",
-  stale: "The model has changed since this result was worked out. It stays viewable; run the full model again to refresh it.",
+  stale: term("stale").tip,
+  staleBadge: lowerFirst(term("stale").label),
+  /** What the decision pack is (the export button's tooltip). */
+  exportTip: "A self-contained brief with maps, tables and GIS files.",
   revision: (n: number) => `revision ${n}`,
   // the accordion (ResultView)
   where: "Where it cools",
@@ -59,7 +76,7 @@ export const RESULT_WORDS = {
   changed: "What was actually changed",
   changedTeaser: "What you asked for and what fits the space",
   sure: "How sure are we",
-  sureTeaser: "Quick estimate vs full model, ranges and cross-checks",
+  sureTeaser: "Quick estimate vs full model, ranges and the cause-and-effect check",
   tech: "Technical details",
   techTeaser: "For analysts: the statistics behind these numbers",
 } as const;
@@ -129,8 +146,8 @@ export function answerHeadline(r: Pick<Result, "summary" | "city" | "regions">, 
 export function citywideFact(r: Pick<Result, "summary" | "city" | "regions">, unit: string, nCells?: number | null): string | null {
   const s = r.summary;
   if (!s.edited || editsCoverCity(r, nCells)) return null;
-  const city = fmtSignedValue(r.city.estimate, unit, 2);
-  return city === fmtSignedValue(s.edited.estimate, unit, 2) ? null : city;
+  const city = fmtTempChange(r.city.estimate, unit, 2);
+  return city === fmtTempChange(s.edited.estimate, unit, 2) ? null : city;
 }
 
 /** "Keep in mind" lines: the plain qualifiers plus the server's own that say something new. */
@@ -143,11 +160,11 @@ export function answerQualifiers(r: Result, unit: string): string[] {
   const wording = plainWording({ edited: s.edited, city: r.city, unit, fracExtrapolatedEdited: r.extrapolated_edited ?? s.frac_extrapolated_edited, causalDisagrees, causal });
   const known = new Set(wording.qualifiers.map((q) => q.toLowerCase()));
   // the server's own wording of the same points (extrapolation, the causal check, preview only) is left out
-  const extra = r.plain.qualifiers.filter((q) => !known.has(q.toLowerCase()) && !/outside observed conditions|beyond the conditions|causal check|cross-check|preview only|edited cells/i.test(q));
+  const extra = r.plain.qualifiers.filter((q) => !known.has(q.toLowerCase()) && !/outside observed conditions|beyond the conditions|causal check|cause-and-effect check|cross-check|preview only|edited cells/i.test(q));
   return [...wording.qualifiers, ...extra];
 }
 
-/** The today row of the heat-risk impacts: the card's "Residents out of Extreme caution" fact (null without one). */
+/** The today row of the heat-risk impacts: the card's "Residents no longer at Extreme caution or worse" fact (null without one). */
 export function heatFactRow(r: Pick<Result, "impacts">) {
   const heat = r.impacts?.heat ?? null;
   return heat ? (heat.rows.find((x) => x.case === "today") ?? heat.rows[0] ?? null) : null;
@@ -197,10 +214,10 @@ export type RangeStripProps = {
 
 const finite = (v: number | null | undefined): v is number => typeof v === "number" && Number.isFinite(v);
 
-/** Text alternative of the strip: "Likely range −0.80 to −0.44 °F; the whole range is below zero. Confident it cools." */
+/** Text alternative of the strip: "Likely 0.44–0.80 °F cooler; the whole range is below zero. Confident it cools." */
 export function rangeStripText({ estimate, lo, hi, unit, confidence }: RangeStripProps): string {
   const dec = stripDecimals(estimate, lo, hi);
-  const range = finite(lo) && finite(hi) ? `Likely range ${fmtRange(lo, hi, unit, dec)}` : `Estimate ${fmtSignedValue(estimate, unit, dec)}, no likely range`;
+  const range = finite(lo) && finite(hi) ? `Likely ${rangeWords(lo, hi, unit, dec)}` : `Estimate ${fmtTempChange(estimate, unit, dec)}, no likely range`;
   const zero =
     confidence === "confident_cools" ? "the whole range is below zero" : confidence === "confident_warms" ? "the whole range is above zero" : confidence === "could_be_zero" ? "the range crosses zero" : "";
   return `${range}${zero ? `; ${zero}` : ""}. ${CONFIDENCE_TEXT[confidence]}`;
@@ -212,21 +229,24 @@ function stripDecimals(...vals: (number | null)[]): number {
 }
 
 /**
- * The likely range on a zero line (SVG): the bar spans lo–hi under a visible "likely range" label, the
- * dot is the estimate, the vertical rule is zero ("no change", labelled 0 where the end labels leave
- * room). Cool tint left of zero, warm right of it, so a range that might be no real effect visibly
- * straddles the line. Root data: `data-tone` (cool | warm | neutral) and `data-straddles="true"` when
- * lo < 0 < hi; the label is `.answer-strip-label`.
+ * The likely range on a zero line (SVG): the bar spans lo–hi under a visible label in the card's own
+ * words ("likely 0.48–1.58 °F cooler", the same way round as the big number), the dot is the estimate,
+ * the vertical rule is zero ("no change", labelled 0 where the end labels leave room). The ends are
+ * labelled by size only (no minus sign): "← cooler" and "warmer →" over the zero line say which way.
+ * Cool tint left of zero, warm right of it, so a range that might be no real effect visibly straddles
+ * the line. Root data: `data-tone` (cool | warm | neutral) and `data-straddles="true"` when lo < 0 < hi;
+ * the label is `.answer-strip-label`.
  */
 export function RangeStrip(p: RangeStripProps) {
   const titleId = useId();
-  const { estimate, lo, hi, confidence } = p;
+  const { estimate, lo, hi, unit, confidence } = p;
   const W = 320;
   const PAD = 16;
-  const Y = 36; // the bar's centre line (the direction words, then the "likely range" label, above it)
+  const Y = 36; // the bar's centre line (the direction words, then the "likely …" label, above it)
   const H = Y + 28;
-  const LABEL_HALF = 34; // half the width of "likely range" at the strip's type size
   const hasRange = finite(lo) && finite(hi);
+  const label = hasRange ? RESULT_WORDS.likely(rangeWords(lo, hi, unit, stripDecimals(estimate, lo, hi))) : "";
+  const LABEL_HALF = Math.min((W - 2 * PAD) / 2, label.length * 3.05); // half the label's width at the strip's type size
   const vals = [0, estimate, ...(hasRange ? [lo, hi] : [])].filter(finite);
   let min = Math.min(...vals);
   let max = Math.max(...vals);
@@ -245,7 +265,7 @@ export function RangeStrip(p: RangeStripProps) {
     if (hi > 0) bars.push({ side: "warm", a: Math.max(lo, 0), b: hi });
   }
   const tight = hasRange && x(hi) - x(lo) < 64;
-  // "likely range" over the middle of the bar, kept inside the strip (the zero rule stops below it)
+  // the "likely …" label over the middle of the bar, kept inside the strip (the zero rule stops below it)
   const labelX = hasRange ? Math.min(W - PAD - LABEL_HALF, Math.max(PAD + LABEL_HALF, (x(lo) + x(hi)) / 2)) : null;
   return (
     <svg
@@ -272,7 +292,7 @@ export function RangeStrip(p: RangeStripProps) {
       ) : null}
       {labelX !== null ? (
         <text className="answer-strip-label" x={labelX} y={Y - 10} textAnchor="middle">
-          {RESULT_WORDS.likelyRange}
+          {label}
         </text>
       ) : null}
       <line className="answer-strip-axis" x1={PAD} x2={W - PAD} y1={Y} y2={Y} />
@@ -281,26 +301,21 @@ export function RangeStrip(p: RangeStripProps) {
       ))}
       <line className="answer-strip-zero" x1={x0} x2={x0} y1={Y - 9} y2={Y + 12} />
       <circle className="answer-strip-dot" cx={x(estimate)} cy={Y} r={6} />
-      {!hasRange || (Math.abs(x0 - x(lo)) > 34 && Math.abs(x0 - x(hi)) > 34 && !(tight && Math.abs(x0 - (x(lo) + x(hi)) / 2) < 60)) ? (
+      {!hasRange || tight || (Math.abs(x0 - x(lo)) > 34 && Math.abs(x0 - x(hi)) > 34) ? (
         <text x={x0} y={Y + 24} textAnchor="middle">
           0
         </text>
       ) : null}
-      {hasRange ? (
-        tight ? (
-          <text className="answer-strip-end" x={clampX((x(lo) + x(hi)) / 2)} y={Y + 24} textAnchor="middle">
-            {fmtSigned(lo, dec)} to {fmtSigned(hi, dec)}
+      {/* a short bar: its ends would overlap, and the label above already gives both */}
+      {hasRange && !tight ? (
+        <>
+          <text className="answer-strip-end" x={clampX(x(lo))} y={Y + 24} textAnchor="middle">
+            {fmtNum(Math.abs(lo), dec)}
           </text>
-        ) : (
-          <>
-            <text className="answer-strip-end" x={clampX(x(lo))} y={Y + 24} textAnchor="middle">
-              {fmtSigned(lo, dec)}
-            </text>
-            <text className="answer-strip-end" x={clampX(x(hi))} y={Y + 24} textAnchor="middle">
-              {fmtSigned(hi, dec)}
-            </text>
-          </>
-        )
+          <text className="answer-strip-end" x={clampX(x(hi))} y={Y + 24} textAnchor="middle">
+            {fmtNum(Math.abs(hi), dec)}
+          </text>
+        </>
       ) : null}
     </svg>
   );
@@ -349,7 +364,10 @@ export type AnswerCardProps = {
   onOpenSection?: (id: "sure") => void;
 };
 
-type Fact = { id: string; label: string; value: ReactNode; note?: ReactNode };
+type Fact = { id: string; label: string; value: ReactNode; note?: ReactNode; /** The ⓘ after the label. */ tip?: InfoTipProps };
+
+/** The ⓘ of the heat-risk fact: what the level means. */
+const HEAT_FACT_TIP: InfoTipProps = { term: "heat_risk_level", text: `${term("heat_risk_level").tip} ${EC}: ${heatCategory("extreme_caution").tip}` };
 
 export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impacts, nCells, onOpenSection }: AnswerCardProps) {
   const pin = useTray((s) => s.pin);
@@ -367,7 +385,7 @@ export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impa
 
   const facts: Fact[] = [];
   const city = citywideFact(r, unit, nCells);
-  if (city) facts.push({ id: "city", label: RESULT_WORDS.citywide, value: city, note: RESULT_WORDS.citywideNote });
+  if (city) facts.push({ id: "city", label: RESULT_WORDS.citywide, value: city, note: RESULT_WORDS.citywideNote, tip: { term: "citywide" } });
   const heat = r.impacts?.heat ?? null;
   const today = heatFactRow(r);
   if (heat && today) {
@@ -378,6 +396,7 @@ export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impa
       label: into ? (people ? RESULT_WORDS.residentsIn : RESULT_WORDS.placesIn) : people ? RESULT_WORDS.residentsOut : RESULT_WORDS.placesOut,
       value: fmtInt(Math.abs(today.ec_avoided)),
       note: RESULT_WORDS.heatNote,
+      tip: HEAT_FACT_TIP,
     });
   } else if (!r.impacts && impacts && !impacts.noData) {
     // worked out on its own as the result arrives: "Counting residents…" until then; a retry after an error
@@ -417,8 +436,8 @@ export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impa
     if (cpc !== null && Number.isFinite(cpc)) {
       facts.push(
         cpc > 0
-          ? { id: "per", label: RESULT_WORDS.costPer(u), value: costWords(1 / cpc), note: RESULT_WORDS.costPerNote(u) }
-          : { id: "per", label: RESULT_WORDS.costPer(u), value: RESULT_WORDS.costPerWarms, note: RESULT_WORDS.costPerWarmsNote },
+          ? { id: "per", label: RESULT_WORDS.costPer(u), value: costWords(1 / cpc), note: RESULT_WORDS.costPerNote(u), tip: { term: "cost_per_degree" } }
+          : { id: "per", label: RESULT_WORDS.costPer(u), value: RESULT_WORDS.costPerWarms, note: RESULT_WORDS.costPerWarmsNote, tip: { term: "cost_per_degree" } },
       );
     }
   }
@@ -446,7 +465,11 @@ export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impa
           {r.scenario ? <span>{RESULT_WORDS.revision(r.scenario.revision)}</span> : null}
           <span>{fmtDateTime(s.created_utc)}</span>
           {r.demo ? <Badge tone="demo">DEMO</Badge> : null}
-          {r.stale || s.stale ? <Badge tone="warn">stale</Badge> : null}
+          {r.stale || s.stale ? (
+            <Tip tip={RESULT_WORDS.stale} focusable>
+              <Badge tone="warn">{RESULT_WORDS.staleBadge}</Badge>
+            </Tip>
+          ) : null}
         </span>
       </div>
       <div className="vcard-body answer-body plain-result">
@@ -461,12 +484,14 @@ export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impa
         <div className="answer-hero">
           <div className="answer-number">
             <p className="answer-big" data-estimate={main.estimate}>
-              {fmtSignedValue(main.estimate, unit, 2)}
+              {fmtTempChange(main.estimate, unit, 2)}
             </p>
             <span className="answer-where">{s.edited && !editsCoverCity(r, nCells) ? LAB_WORDS.whereChanged : LAB_WORDS.citywide}</span>
-            <span className="pill answer-chip" data-conf={conf.tone} title={conf.tip}>
-              {conf.label}
-            </span>
+            <Tip tip={conf.tip} focusable>
+              <span className="pill answer-chip" data-conf={conf.tone}>
+                {conf.label}
+              </span>
+            </Tip>
           </div>
           <RangeStrip estimate={main.estimate} lo={main.lo} hi={main.hi} unit={unit} confidence={confidence} />
         </div>
@@ -474,7 +499,10 @@ export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impa
           <dl className="answer-facts" aria-label="Key facts">
             {facts.slice(0, 4).map((f) => (
               <div className="answer-fact" key={f.id} data-fact={f.id}>
-                <dt>{f.label}</dt>
+                <dt>
+                  {f.label}
+                  {f.tip ? <InfoTip {...f.tip} label={f.tip.label ?? f.label} /> : null}
+                </dt>
                 <dd className="answer-fact-value">{f.value}</dd>
                 {f.note ? <dd className="answer-fact-note">{f.note}</dd> : null}
               </div>
@@ -518,9 +546,11 @@ export function AnswerCard({ rid, resId, pid, result: r, unit, onShowLayer, impa
           <Button size="small" icon="pin" onClick={() => (pin(rid, { kind: "result", id: resId }, r.scenario?.name ?? resId) ? toast("success", "Pinned to the compare tray") : toast("warning", "The compare tray holds 4 items"))}>
             {LAB_WORDS.pinToCompare}
           </Button>
-          <Button size="small" icon="download" busy={packBusy} disabled={!pid} onClick={() => void exportDecision()} title="A self-contained brief with maps, tables and GIS files">
-            {LAB_WORDS.exportPack}
-          </Button>
+          <Tip tip={RESULT_WORDS.exportTip}>
+            <Button size="small" icon="download" busy={packBusy} disabled={!pid} onClick={() => void exportDecision()}>
+              {LAB_WORDS.exportPack}
+            </Button>
+          </Tip>
           {onShowLayer ? (
             <Button size="small" variant="ghost" icon="layers" onClick={() => showLayer(onShowLayer, `res:${resId}:delta`)}>
               {LAB_WORDS.showOnMap}

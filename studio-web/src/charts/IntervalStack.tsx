@@ -1,6 +1,6 @@
 // Layered intervals per row around one estimate (SPEC §6.4 Uncertainty): estimation,
 // specification, attribution, causal band, envelope… Narrow-to-wide layers get lighter and
-// thinner; a zero line and "excludes 0" badges show which layers rule out no effect.
+// thinner; a zero line and "all cooler" / "2/4 clear of zero" badges show which layers rule out no effect.
 import { Axis, axisTitle } from "./Axis";
 import { ChartFrame, markProps, useChart, useChartWidth, type ChartTable, type FrameOptions } from "./ChartFrame";
 import { bandScale, extent, linearScale, niceDomain } from "./scales";
@@ -23,7 +23,7 @@ export function intervalTable(p: Pick<IntervalStackProps, "rows" | "valueLabel" 
   const rows: ChartTable["rows"] = [];
   for (const r of p.rows) for (const l of r.layers) rows.push([r.label, r.estimate, l.label, l.lo, l.hi, excludesZero(l) ? "yes" : "no"]);
   return {
-    columns: [{ key: "row", label: "Scenario" }, { key: "est", label: p.valueLabel, unit: p.unit }, { key: "layer", label: "Interval" }, { key: "lo", label: "Low", unit: p.unit }, { key: "hi", label: "High", unit: p.unit }, { key: "x0", label: "Excludes 0" }],
+    columns: [{ key: "row", label: "Scenario" }, { key: "est", label: p.valueLabel, unit: p.unit }, { key: "layer", label: "Interval" }, { key: "lo", label: "Low", unit: p.unit }, { key: "hi", label: "High", unit: p.unit }, { key: "x0", label: "Clear of zero" }],
     rows,
   };
 }
@@ -32,7 +32,7 @@ function Plot(p: IntervalStackProps) {
   const ctx = useChart();
   const auto = useChartWidth(640);
   const W = p.width ?? auto;
-  const M = { top: 10, right: 92, bottom: 44, left: 170 };
+  const M = { top: 10, right: 112, bottom: 44, left: 170 }; // right: room for "2/4 clear of zero"
   const H = M.top + M.bottom + p.rows.length * 34;
   const e = extent([0, ...p.rows.flatMap((r) => [r.estimate, ...r.layers.flatMap((l) => [l.lo, l.hi])])]) ?? [-1, 1];
   const sx = linearScale(niceDomain(e[0], e[1]), [M.left, W - M.right]);
@@ -56,7 +56,7 @@ function Plot(p: IntervalStackProps) {
             {layers.map((l, k) => {
               // a row of one interval draws it as a clear bar; stacked ones go narrow-dark-thick to wide-light-thin
               const thick = n === 1 ? 12 : 4 + (k / Math.max(1, n - 1)) * 10;
-              const label = `${r.label}, ${l.label}: ${fmtSigned(l.lo, d)} to ${fmtSigned(l.hi, d)}${p.unit ? " " + p.unit : ""}${excludesZero(l) ? ", excludes zero" : ", includes zero"}`;
+              const label = `${r.label}, ${l.label}: ${fmtSigned(l.lo, d)} to ${fmtSigned(l.hi, d)}${p.unit ? " " + p.unit : ""}${excludesZero(l) ? ", clear of zero" : ", includes zero"}`;
               return (
                 <rect
                   key={l.id}
@@ -73,11 +73,11 @@ function Plot(p: IntervalStackProps) {
             {r.estimate !== null ? <line x1={sx(r.estimate)} x2={sx(r.estimate)} y1={cy - 10} y2={cy + 10} style={{ stroke: "var(--ink)" }} strokeWidth={2} aria-hidden="true" /> : null}
             {outer && excludesZero(outer) ? (
               <text className="t-strong" x={W - M.right + 8} y={cy} dy="0.32em" style={{ fontSize: 10.5 }}>
-                excludes 0
+                {outer.hi! < 0 ? "all cooler" : "all warmer"}
               </text>
             ) : layers.some(excludesZero) ? (
               <text className="t-axis" x={W - M.right + 8} y={cy} dy="0.32em">
-                {layers.filter(excludesZero).length}/{n} exclude 0
+                {`${layers.filter(excludesZero).length}/${n} clear of zero`}
               </text>
             ) : null}
           </g>
@@ -89,7 +89,7 @@ function Plot(p: IntervalStackProps) {
 
 export function IntervalStack(props: IntervalStackProps) {
   const names = [...new Set(props.rows.flatMap((r) => r.layers.map((l) => l.label)))];
-  const legend = props.legend ?? <span>from darkest to lightest: {names.join(" → ")} · tick = estimate · "excludes 0" when the widest interval does</span>;
+  const legend = props.legend ?? <span>darkest to lightest: {names.join(" → ")} · tick = estimate · "exclude 0": how many ranges stay on one side of zero (the direction of the effect is clear)</span>;
   return (
     <ChartFrame {...props} legend={legend} table={intervalTable(props)}>
       <Plot {...props} />

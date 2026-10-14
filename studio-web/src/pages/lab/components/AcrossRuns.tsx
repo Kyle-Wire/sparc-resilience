@@ -4,9 +4,12 @@
 // (its `content_hash`): the caption calls it the shown result's band only when the result is of
 // that content; a check of an earlier version of a draft is labelled as such. A check still
 // running shows its progress; runs that could not evaluate the scenario are listed with the reason.
+// Plain words (phase 4): "the same direction on N% of runs", "this result's range across runs"
+// (the glossary's specification uncertainty, explained in an ⓘ).
 import { useAcrossRunsJobs, type AcrossRunsResult } from "../../../api/lab";
 import { isActiveStatus, type Job } from "../../../api/types";
 import { DotRange } from "../../../charts";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { JobStrip } from "../../../components/ui/JobStrip";
 import { fmtDateTime, fmtNum, fmtPct, unitLabel } from "../../../theme/format";
 
@@ -22,9 +25,9 @@ export function latestAcross(jobs: Job[], sid: string): { done: (Job & { result:
 
 /** What the spread is to the shown result: its specification band only for a check of the result's content. */
 export function bandNote(checked: string | null | undefined, shown: string | null | undefined): string {
-  if (checked && shown && checked === shown) return "the specification band of this result";
-  if (!checked) return "not tied to a version of the scenario, so not this result's specification band";
-  return "from an earlier version of the scenario, not this result's specification band";
+  if (checked && shown && checked === shown) return "this result's range across runs";
+  if (!checked) return "not tied to a version of the scenario, so not this result's range across runs";
+  return "from an earlier version of the scenario, not this result's range across runs";
 }
 
 export function AcrossRunsPanel({ pid, sid, unit, contentHash }: { pid: string | null; sid: string; unit: string; contentHash?: string | null }) {
@@ -37,19 +40,24 @@ export function AcrossRunsPanel({ pid, sid, unit, contentHash }: { pid: string |
   const failed = r ? r.rows.filter((x) => !x.ok) : [];
   return (
     <section className="stack" aria-label="Across runs">
-      <h3>Across runs</h3>
+      <h3>On other runs</h3>
       {active ? <JobStrip jobId={active.id} /> : null}
       {r ? (
         <>
           <DotRange
             title="The same scenario on other runs"
-            units={`${u} city mean (negative = cooler)`}
+            units={`${u} citywide (negative = cooler)`}
             rows={ok.map((x) => ({ id: x.run_id, label: x.run_id, est: x.city!.estimate, lo: x.city!.lo, hi: x.city!.hi }))}
-            valueLabel="City-mean ΔT"
+            valueLabel="Citywide change"
             unit={u}
             signed
             rangeLabel="Likely range"
-            caption={`${ok.length} of ${r.rows.length} runs evaluated (${fmtDateTime(done!.finished_utc)}). Sign stability ${fmtPct(r.sign_stability)}; spread of the run means ${fmtNum(r.spread, 3)} ${u} (${bandNote(r.content_hash, contentHash)}).`}
+            caption={
+              <>
+                {`${ok.length} of ${r.rows.length} runs worked it out (${fmtDateTime(done!.finished_utc)}). Same direction on ${fmtPct(r.sign_stability)} of them; the runs' citywide changes spread over ${fmtNum(r.spread, 3)} ${u} (${bandNote(r.content_hash, contentHash)}).`}
+                <InfoTip term="specification" />
+              </>
+            }
           />
           {failed.length ? (
             <ul className="edit-issues">

@@ -237,7 +237,10 @@ def status_rows(sctx, ctx) -> list[dict]:
             elif kind in service.ATTACHABLE:
                 row["attached"] = False
             row["requirements"] = req
-            row["action"] = {"kind": "run_job", "label": f"Run the {kind} study", "method": "POST",
+            from sparc.studio.runs.statusboard import STUDY_ACTION_LABELS
+
+            row["action"] = {"kind": "run_job", "label": STUDY_ACTION_LABELS.get(kind, f"Run the {kind} study"),
+                             "method": "POST",
                              "path": f"/api/runs/{rid}/studies/{kind}", "body": default_params(kind)}
             est_kind = kind
         elif kind == "literature":
@@ -245,7 +248,7 @@ def status_rows(sctx, ctx) -> list[dict]:
             rows = [r for r in lit.get("rows") or [] if r.get("sparc_C") is not None]
             if rows:
                 within = sum(1 for r in rows if r.get("within_factor_2"))
-                row.update(state="done", headline=f"{within} of {len(rows)} published rates within ×2")
+                row.update(state="done", headline=f"{within} of {len(rows)} published studies found cooling between half and double this run's estimate")
             est_kind = None
         else:                                   # benchmark: the project's newest
             s = db.fetchone("SELECT * FROM studies WHERE project_id = ? AND kind = 'benchmark' "

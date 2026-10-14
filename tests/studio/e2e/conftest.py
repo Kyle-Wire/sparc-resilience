@@ -395,9 +395,9 @@ def lab_advanced(page, open_: bool) -> None:
 
 
 def lab_open_engine(page) -> None:
-    """Load the run's model ("Open engine" lives under Advanced options › Model), then close the disclosure."""
+    """Load the run's model ("Load full model" lives under Advanced options › Model), then close the disclosure."""
     lab_advanced(page, True)
-    page.get_by_role("button", name="Open engine").click()
+    page.get_by_role("button", name="Load full model").click()
     lab_advanced(page, False)
 
 

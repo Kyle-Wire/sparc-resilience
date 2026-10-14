@@ -167,7 +167,8 @@ describe("run-hub routes", () => {
       // the city-mean curve and the curve shapes are What cools'; the technical extras stay
       const titles = charts(body);
       expect(titles.filter((t) => /dose–response$/.test(t))).toEqual([]);
-      expect(titles).not.toContain("Curve shapes across cells");
+      expect(titles).not.toContain("Cooling by amount");
+      expect(titles).not.toContain("How the cooling builds up, place by place");
       expect(titles.some((t) => /requested vs realised dose$/.test(t))).toBe(true);
       expect(titles).toEqual(expect.arrayContaining(["Fold means", "Literature check"]));
     } finally {

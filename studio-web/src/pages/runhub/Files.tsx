@@ -3,7 +3,9 @@
 // (parquet → CSV with lon/lat, JSON → CSV for tabular sections, md → HTML); previews of
 // parquet/CSV (first 200 rows), markdown, JSON and text; the data dictionary; and the
 // checkpoint card with a guarded delete.
-import { useEffect, useMemo, useState } from "react";
+// Plain words (phase 4): the jargon column heads and blocks (catalog id, state, data dictionary,
+// checkpoint) have an ⓘ (InfoTip); the checkpoint reads as the run's saved models (glossary).
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorMessage } from "../../api/client";
 import { invalidate } from "../../api/resource";
 import type { CheckpointInfo, Conversion, DictionaryRow, FileEntry, FileText } from "../../api/runs";
@@ -14,14 +16,17 @@ import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Icon } from "../../components/ui/Icon";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Markdown } from "../../components/ui/Markdown";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table } from "../../components/ui/Table";
+import { useTipOn } from "../../components/ui/useTipOn";
+import { term } from "../../content/glossary";
 import { runIsLive, useRunOutputs } from "../../layouts/resources";
 import { codecs, useUrlState } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtBytes, fmtDateTime, fmtDuration } from "../../theme/format";
-import { Block, LiveBanner, useRid, type DetailPageProps } from "./common";
+import { Block, LiveBanner, TipChip, useRid, type DetailPageProps } from "./common";
 import { OUTPUT_STATE_TEXT, cellText, outputStateStatus, producedByText } from "./format";
 
 const ext = (p: string) => (/\.([a-z0-9]+)$/i.exec(p)?.[1] ?? "").toLowerCase();
@@ -71,7 +76,9 @@ function FileRow({ e, depth, ctx }: { e: FileEntry; depth: number; ctx: Ctx }) {
           {e.in_manifest ? (
             <>
               {" "}
-              <Badge title="Referenced by manifest.json">manifest</Badge>
+              <TipChip tip="Listed in the run's record (manifest.json).">
+                <Badge>manifest</Badge>
+              </TipChip>
             </>
           ) : null}
         </td>
@@ -191,6 +198,28 @@ export function conversionBlocked(c: Conversion, noCrs: boolean): string | null 
   return c === "geojson" && noCrs ? "This run has no CRS, so GeoJSON (lon/lat) is unavailable" : null;
 }
 
+/** A conversion this run cannot offer: shown disabled, focusable, with the reason in a tooltip. */
+function BlockedConversion({ reason, children }: { reason: string; children: ReactNode }) {
+  const t = useTipOn<HTMLSpanElement>(reason);
+  return (
+    <span ref={t.ref} className="btn small ghost" aria-disabled="true" tabIndex={0} {...t.props()}>
+      {children}
+      {t.bubble}
+    </span>
+  );
+}
+
+/** A converted-download link; `tip` says what the converted file holds. */
+function ConversionLink({ href, tip, children }: { href: string; tip: string | null; children: ReactNode }) {
+  const t = useTipOn<HTMLAnchorElement>(tip, { control: true });
+  return (
+    <a ref={t.ref} className="btn small ghost" href={href} download {...t.props()}>
+      {children}
+      {t.bubble}
+    </a>
+  );
+}
+
 function Preview({ rid, path, entry, noCrs }: { rid: string; path: string; entry: OutputEntry | undefined; noCrs: boolean }) {
   const e = ext(path);
   const convs = conversionsFor(path, entry?.formats ?? []);
@@ -205,19 +234,17 @@ function Preview({ rid, path, entry, noCrs }: { rid: string; path: string; entry
           {convs.map((c) => {
             const blocked = conversionBlocked(c, noCrs);
             return blocked ? (
-              <span key={c} className="btn small ghost" aria-disabled="true" title={blocked}>
+              <BlockedConversion key={c} reason={blocked}>
                 {CONV_LABEL[c]}
-              </span>
+              </BlockedConversion>
             ) : (
-              <a
+              <ConversionLink
                 key={c}
-                className="btn small ghost"
                 href={fileRawUrl(rid, path, c)}
-                download
-                title={c === "csv" && e === "parquet" ? (noCrs ? "CSV with the id column (no CRS, so no lon/lat)" : "CSV with id and lon/lat columns") : undefined}
+                tip={c === "csv" && e === "parquet" ? (noCrs ? "CSV with the id column (no CRS, so no lon/lat)" : "CSV with id and lon/lat columns") : null}
               >
                 {CONV_LABEL[c]}
-              </a>
+              </ConversionLink>
             );
           })}
         </>
@@ -287,6 +314,7 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
   return (
     <Block
       title="Checkpoint"
+      tip={<InfoTip term="checkpoint" label="Checkpoint" />}
       id="checkpoint"
       actions={
         cp.present ? (
@@ -304,7 +332,13 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
           <dd>{fmtDateTime(cp.saved_utc)}</dd>
           <dt>Stages done</dt>
           <dd>{cp.done.join(", ") || "—"}</dd>
-          <dt>Matches launch snapshot</dt>
+          <dt>
+            Matches launch snapshot
+            <InfoTip
+              label="Matches launch snapshot"
+              text="Whether the data, code and settings are still the ones the run was launched with. If any changed, resuming would mix old and new."
+            />
+          </dt>
           <dd>{snap ? (mismatched.length ? `no: ${mismatched.join(", ")} changed` : unknown.length ? `cannot tell for ${unknown.join(", ")}` : "yes") : "—"}</dd>
           {cp.changed_sections.length ? (
             <>
@@ -316,7 +350,10 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
           <dd>{cp.resumable ? `reuses ${cp.reuses.join(" + ") || "nothing"}${cp.saves_s ? `, saves ≈${fmtDuration(cp.saves_s)}` : ""}` : (cp.reason ?? "not resumable")}</dd>
         </dl>
       ) : (
-        <p className="cap">No checkpoint: {cp.reason ?? "this run has none"}. Exact scenarios and the emulator need one.</p>
+        <p className="cap">
+          No checkpoint: {cp.reason ?? "this run has none"}. Running scenarios through the {term("exact_engine").label.toLowerCase()} and building the{" "}
+          {term("emulator_preview").label.toLowerCase()} need one.
+        </p>
       )}
       <ConfirmDialog
         open={confirm}
@@ -328,8 +365,8 @@ export function CheckpointCard({ rid, cp }: { rid: string; cp: CheckpointInfo })
         busy={busy}
       >
         <p>
-          The checkpoint holds the fitted models. Without it, exact scenarios and the emulator build will need a refit, and an interrupted run can no longer resume. Outputs already
-          written stay.
+          The checkpoint holds the trained models. Without it, running scenarios through the {term("exact_engine").label.toLowerCase()} and building the{" "}
+          {term("emulator_preview").label.toLowerCase()} will need a refit, and an interrupted run can no longer resume. Outputs already written stay.
         </p>
       </ConfirmDialog>
     </Block>
@@ -368,8 +405,18 @@ export default function Files({ title = "Files", intro }: DetailPageProps = {}) 
                   Size
                 </th>
                 <th scope="col">Modified</th>
-                <th scope="col">Catalog id</th>
-                <th scope="col">State</th>
+                <th scope="col">
+                  Catalog id
+                  <InfoTip label="Catalog id" text="The name SPARC's list of known outputs gives this file. Pages and exports find files by it; files without one are extras." />
+                </th>
+                <th scope="col">
+                  State
+                  <InfoTip
+                    label="State"
+                    text="Present: written. Being written: the run is still writing it. Partly written: some of its files exist. Stale: older than the run's record, maybe left from an earlier attempt. Missing: not written."
+                    technical="Output state"
+                  />
+                </th>
                 <th scope="col">Produced by</th>
               </tr>
             </thead>
@@ -384,7 +431,15 @@ export default function Files({ title = "Files", intro }: DetailPageProps = {}) 
       ) : (
         <p className="cap">Select a file to preview it, download it or convert it.</p>
       )}
-      <Block title="Data dictionary">
+      <Block
+        title="Data dictionary"
+        tip={
+          <InfoTip
+            label="Data dictionary"
+            text="Every column of every output table: its unit, its sign (for a change, negative means cooler) and what it means."
+          />
+        }
+      >
         <Dictionary rid={rid} />
       </Block>
       {detail.data?.checkpoint ? <CheckpointCard rid={rid} cp={detail.data.checkpoint} /> : null}

@@ -222,7 +222,7 @@ describe("Exports page", () => {
     expect(byText(bundle, "label", "Climate")).toBeNull(); // missing outputs are not offered
     expect(byText(bundle, "label", "Checkpoint (")).toBeNull(); // the checkpoint has its own toggle
     click(byText(bundle, "label", "Metrics")!.querySelector("input"));
-    click(byText(bundle, "label", "Include the checkpoint")!.querySelector("input"));
+    click(byText(bundle, "label", "Include the saved models")!.querySelector("input"));
     await flush(2);
     expect(bundle.querySelector('[data-testid="checkpoint-warning"]')!.textContent).toContain(fmtBytes(350 * 1024 * 1024));
     click(byText(bundle, "button", "Build bundle"));

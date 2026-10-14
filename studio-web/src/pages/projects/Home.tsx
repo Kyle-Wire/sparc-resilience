@@ -7,16 +7,20 @@ import { ApiError, errorMessage } from "../../api/client";
 import { createProject, importProject, importRun, useProjectList, useStorageSummary, type CreateProjectResult } from "../../api/projects";
 import { invalidate } from "../../api/resource";
 import type { Project } from "../../api/types";
-import { Badge, DemoBadge } from "../../components/ui/Badge";
+import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { Card } from "../../components/ui/Card";
 import { ConfirmDialog, Dialog } from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { Icon, type IconName } from "../../components/ui/Icon";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { ProgressBar } from "../../components/ui/ProgressBar";
 import { Seg } from "../../components/ui/Seg";
 import { StatusChip } from "../../components/ui/StatusChip";
+import { Term } from "../../components/ui/Term";
+import { term } from "../../content/glossary";
+import { DemoTag } from "../../layouts/tips";
 import { Link, navigate } from "../../router";
 import { activeJobs, useJobs } from "../../stores/jobs";
 import { toast } from "../../stores/ui";
@@ -62,13 +66,13 @@ export function ProjectCard({ p }: { p: Project }) {
           </span>
         </div>
         <div className="row">
-          {p.demo ? <DemoBadge /> : null}
+          {p.demo ? <DemoTag /> : null}
           {p.archived ? <Badge>archived</Badge> : null}
         </div>
       </header>
       <div className="stack" style={{ gap: 4 }}>
         <span className="cap">
-          Readiness {score.done}/{score.total}
+          <Term id="readiness" /> {score.done} of {score.total} checks pass
         </span>
         <ProgressBar value={frac} label={`${p.name} readiness`} tone={frac === 1 ? "good" : undefined} />
       </div>
@@ -83,7 +87,11 @@ export function ProjectCard({ p }: { p: Project }) {
             {p.last_run ? (
               <span className="row" style={{ justifyContent: "flex-end", gap: 6 }}>
                 <StatusChip status={p.last_run.status} />
-                {p.last_run.r2 !== null ? <span className="num">R² {fmtNum(p.last_run.r2, 3)}</span> : null}
+                {p.last_run.r2 !== null ? (
+                  <span className="num">
+                    <Term id="r2" /> {fmtNum(p.last_run.r2, 3)}
+                  </span>
+                ) : null}
                 <span className="cap">{fmtRelative(p.last_run.created_utc)}</span>
               </span>
             ) : (
@@ -275,11 +283,11 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
           {kind === "config" ? (
             <>
               <label className="field">
-                <span className="field-label">Config file (absolute path to a core YAML)</span>
+                <span className="field-label">Settings file (full path to a core YAML config)</span>
                 <input value={configPath} onChange={(e) => setConfigPath(e.target.value)} placeholder="/home/me/city/configs/core_city.yml" aria-label="Config path" />
               </label>
               <label className="field">
-                <span className="field-label">Project name (default: from the config)</span>
+                <span className="field-label">Project name (default: from the settings file)</span>
                 <input value={name} onChange={(e) => setName(e.target.value)} aria-label="Project name" />
               </label>
               <label className="row">
@@ -290,7 +298,7 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
                 <textarea rows={2} value={runDirs} onChange={(e) => setRunDirs(e.target.value)} aria-label="Run folders" />
               </label>
               <label className="field">
-                <span className="field-label">Study folders (placebo, simcheck, multiverse; one per line, optional)</span>
+                <span className="field-label">Study folders (fake-change tests, simulation checks, stability checks; one per line, optional)</span>
                 <textarea rows={2} value={studyDirs} onChange={(e) => setStudyDirs(e.target.value)} aria-label="Study folders" />
               </label>
             </>
@@ -301,15 +309,16 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
                 <input value={runDir} onChange={(e) => setRunDir(e.target.value)} placeholder="/home/me/output/core/city" aria-label="Run folder" />
               </label>
               <label className="field">
-                <span className="field-label">Config it was made with (only when the run has no provenance)</span>
+                <span className="field-label">Settings file it was made with (only when the run has no record of its settings)</span>
                 <input value={configPath} onChange={(e) => setConfigPath(e.target.value)} aria-label="Config path" />
               </label>
             </>
           )}
           <label className="row trust-pickles">
-            <input type="checkbox" checked={trust} onChange={(e) => setTrust(e.target.checked)} /> Trust the checkpoint files (needed for the Scenario Lab and studies)
+            <input type="checkbox" checked={trust} onChange={(e) => setTrust(e.target.checked)} /> Trust the saved model files (needed for the Scenario Lab and independent checks)
+            <InfoTip term="checkpoint" />
           </label>
-          <p className="cap">{PICKLE_RISK} Without trust, the runs' outputs are browsable but their checkpoints are never loaded.</p>
+          <p className="cap">{PICKLE_RISK} Without trust, you can still browse the runs' results, but their saved models are never loaded.</p>
           {error ? (
             <div className="callout" data-tone="crit" role="alert">
               {error}
@@ -332,7 +341,7 @@ function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void })
         <p>
           <b>{PICKLE_RISK}</b>
         </p>
-        <p>A checkpoint is a Python pickle. Loading one from someone else can run arbitrary code on this computer.</p>
+        <p>A checkpoint (the saved models) is a Python pickle file. Loading one from someone else can run any code on this computer.</p>
       </ConfirmDialog>
     </>
   );
@@ -368,15 +377,15 @@ function Quickstarts({ projects }: { projects: Project[] }) {
   };
   return (
     <section className="quickstarts" aria-label="Quickstarts">
-      <Quickstart icon="bolt" title="Try a synthetic city" body="A DEMO city with planted effects, people layers and climate factors, ready to launch in under a minute.">
+      <Quickstart icon="bolt" title="Try a synthetic city" body="A made-up city with known cooling effects built in, plus population and future-climate data. Ready to run in under a minute.">
         <Button variant="primary" busy={busy} onClick={() => void synthetic()}>
           Try a synthetic city
         </Button>
       </Quickstart>
-      <Quickstart icon="layers" title="Open Providence example" body="The Providence heat study: 54,701 cells, forcing, CMIP6 table and layers; optionally its existing runs.">
+      <Quickstart icon="layers" title="Open Providence example" body="The Providence heat study: 54,701 places on the map, the weather on the measurement day, future-climate data and map layers. Its earlier runs can come too.">
         <Button onClick={() => setDialog("providence")}>Open Providence example</Button>
       </Quickstart>
-      <Quickstart icon="folder" title="Import a config / run folder" body="Bring an existing core YAML, run folders and studies in place.">
+      <Quickstart icon="folder" title="Import a config / run folder" body="Bring in an existing settings file (a core YAML config), run folders and studies, without moving them.">
         <Button onClick={() => setDialog("import")}>Import…</Button>
       </Quickstart>
       <Quickstart icon="plus" title="New blank project" body="Start from your own CSV of street-level temperatures.">
@@ -399,7 +408,7 @@ function Quickstarts({ projects }: { projects: Project[] }) {
         <label className="row">
           <input type="checkbox" checked={importRuns} onChange={(e) => setImportRuns(e.target.checked)} /> Import the existing Providence runs and studies in place (from a repo checkout)
         </label>
-        <p className="cap">Copies brown4.csv, the 2020-07-29 forcing, the CMIP6 table and the layers into the project.</p>
+        <p className="cap">Copies the temperature readings (brown4.csv), the weather on 29 July 2020, the future-climate table (CMIP6) and the map layers into the project.</p>
       </NameDialog>
       <NameDialog
         key={`blank:${dialog === "blank"}`}
@@ -428,10 +437,11 @@ function SystemStrip() {
   return (
     <section className="system-strip" aria-label="Disk and engine">
       <span className="row">
-        <Icon name="folder" /> Workspace {s ? fmtBytes(s.workspace_bytes) : "—"} · {s ? `${fmtBytes(s.free_bytes)} free` : "disk unknown"}
+        <Icon name="folder" /> Workspace uses {s ? fmtBytes(s.workspace_bytes) : "—"} · {s ? `${fmtBytes(s.free_bytes)} free on disk` : "disk space unknown"}
       </span>
       <span className="row">
-        <Icon name="bolt" /> Scenario engine <StatusChip status={engine} />
+        <Icon name="bolt" /> {term("exact_engine").label}
+        <InfoTip term="exact_engine" /> <StatusChip status={engine} />
       </span>
       <Link to="/settings" className="btn small ghost">
         Settings

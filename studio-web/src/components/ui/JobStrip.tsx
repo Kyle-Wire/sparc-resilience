@@ -1,13 +1,32 @@
+import { isTermId, term, type TermId } from "../../content/glossary";
 import { Link } from "../../router";
 import { jobsForRun, useJobs } from "../../stores/jobs";
 import { fmtEta, fmtPct } from "../../theme/format";
 import { ProgressBar } from "./ProgressBar";
 import { StatusChip } from "./StatusChip";
+import { Term } from "./Term";
+
+/**
+ * The glossary term of a pipeline stage id ("S2_S3" → stage_s2_s3, "cv_curve" → stage_cv_curve),
+ * or null for a stage without plain words.
+ */
+export function stageTermId(stage: string | null | undefined): TermId | null {
+  if (!stage) return null;
+  const id = `stage_${stage.toLowerCase()}`;
+  return isTermId(id) ? id : null;
+}
+
+/** A stage in plain words ("S2_S3" → "Train the models"); unknown stages come back as given. */
+export function stagePlain(stage: string): string {
+  const id = stageTermId(stage);
+  return id ? term(id).label : stage;
+}
 
 /**
  * Compact progress of one job from stores/jobs (fed by the global `job.progress` events):
- * status, label linking to Mission Control, stage, ETA range and a bar. Give `jobId`, or
- * `runId` to show that run's most important active job. Renders nothing when idle.
+ * status, label linking to Mission Control, stage (in plain words, the stage code in its
+ * tooltip), ETA range and a bar. Give `jobId`, or `runId` to show that run's most important
+ * active job. Renders nothing when idle.
  */
 export function JobStrip({ jobId, runId }: { jobId?: string; runId?: string }) {
   const jobs = useJobs((s) => s.jobs);
@@ -17,6 +36,7 @@ export function JobStrip({ jobId, runId }: { jobId?: string; runId?: string }) {
   const p = progress[job.id];
   const frac = p?.frac ?? job.progress;
   const stage = p?.stage ?? job.stage;
+  const stageTerm = stageTermId(stage);
   const path = p?.path_tail?.length ? p.path_tail.join(" › ") : job.current_path?.slice(-2).join(" › ");
   return (
     <section className="jobstrip" aria-label={`Job ${job.label}`}>
@@ -26,7 +46,8 @@ export function JobStrip({ jobId, runId }: { jobId?: string; runId?: string }) {
           {job.label || job.kind}
         </Link>
         <span className="cap">
-          {stage ? ` · ${stage}` : ""}
+          {stage ? " · " : ""}
+          {stageTerm ? <Term id={stageTerm} /> : stage ?? ""}
           {path ? ` · ${path}` : ""}
         </span>
       </div>

@@ -8,15 +8,20 @@ import type { ReactNode } from "react";
 import type { Job, StageId } from "../../../api/types";
 import { Bars, Forest, LineBand, SmallMultiples } from "../../../charts";
 import { Card } from "../../../components/ui/Card";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { Kpi, KpiRow } from "../../../components/ui/Kpi";
 import { Pill } from "../../../components/ui/Pill";
 import { StatusChip } from "../../../components/ui/StatusChip";
+import { term } from "../../../content/glossary";
+import { TipSpan } from "../../../layouts/tips";
 import { Link, runHref } from "../../../router";
 import type { TrackerState } from "../../../stores/tracker";
 import { fmtBytes, fmtInt, fmtNum, fmtPct, fmtRange, fmtSigned, fmtTempChange, fmtValue } from "../../../theme/format";
 import {
   CAUSAL_STEPS,
   STAGE_LABELS,
+  STAGE_PLAIN,
+  STAGE_TERM,
   baselineRows,
   budgetTotals,
   causalChecklist,
@@ -76,10 +81,12 @@ function S0Panel({ state, runId }: { state: TrackerState; runId: string | null }
       <div className="row" aria-label="QA flags">
         {flags.length ? (
           flags.map((f) => (
-            <Pill key={f.code + f.message} tone="warn" icon="alert" title={f.message}>
-              {f.code.replace(/^qa\./, "")}
-              {f.count > 1 ? ` ×${f.count}` : ""}
-            </Pill>
+            <TipSpan key={f.code + f.message} tip={f.message} technical={f.code}>
+              <Pill tone="warn" icon="alert">
+                {f.code.replace(/^qa\./, "")}
+                {f.count > 1 ? ` ×${f.count}` : ""}
+              </Pill>
+            </TipSpan>
           ))
         ) : (
           <span className="mc-note">No QA flags.</span>
@@ -110,7 +117,11 @@ function S1Panel({ state }: { state: TrackerState }) {
               <tr key={r.predictor}>
                 <td>{r.predictor}</td>
                 <td className="num r">{fmtNum(r.range_m, 0)}</td>
-                <td>{r.anisotropy !== null ? <Pill tone={r.anisotropy < 0.5 ? "warn" : "neutral"} title="Minor / major axis ratio of the directional range (1 = isotropic)">{`ratio ${fmtNum(r.anisotropy, 2)}`}</Pill> : "—"}</td>
+                <td>{r.anisotropy !== null ? (
+                    <TipSpan tip={term("anisotropy").tip} technical={term("anisotropy").technical}>
+                      <Pill tone={r.anisotropy < 0.5 ? "warn" : "neutral"}>{`ratio ${fmtNum(r.anisotropy, 2)}`}</Pill>
+                    </TipSpan>
+                  ) : "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -238,8 +249,8 @@ function S5Panel({ state, tickerOnly }: { state: TrackerState; tickerOnly?: bool
             {rows.map((r) => (
               <tr key={r.name}>
                 <td>{r.name}</td>
-                <td className="num r" title={fmtTempChange(r.mean_delta)}>
-                  {fmtSigned(r.mean_delta, 2)}
+                <td className="num r">
+                  <TipSpan tip={fmtTempChange(r.mean_delta)}>{fmtSigned(r.mean_delta, 2)}</TipSpan>
                 </td>
                 <td className="num r">{r.mean_delta !== null && r.se !== null ? fmtRange(r.mean_delta - 1.96 * r.se, r.mean_delta + 1.96 * r.se) : "—"}</td>
                 <td className="num r">{fmtPct(r.frac_extrapolated)}</td>
@@ -306,7 +317,11 @@ function S6Panel({ state }: { state: TrackerState }) {
                   {r.verdicts.length ? (
                     r.verdicts.map((v, i) => {
                       const vs = verdictStatus(v.verdict);
-                      return <StatusChip key={i} status={vs.status} text={vs.text} title={v.check} />;
+                      return (
+                        <TipSpan key={i} tip={`${vs.text}: ${v.check}`}>
+                          <StatusChip status={vs.status} text={vs.text} />
+                        </TipSpan>
+                      );
                     })
                   ) : r.steps.audit?.status === "ok" ? (
                     <StatusChip status="done" text="consistent" />
@@ -458,10 +473,11 @@ export function StagePanel({
   }
   return (
     <Card
-      title={STAGE_LABELS[stage]}
-      eyebrow={stage}
+      title={STAGE_PLAIN[stage]}
+      tip={<InfoTip label={STAGE_PLAIN[stage]} text={term(STAGE_TERM[stage]).tip} technical={`${stage} · ${STAGE_LABELS[stage]}`} />}
+      eyebrow={`${stage} · ${STAGE_LABELS[stage]}`}
       actions={<StatusChip status={st?.state ?? "planned"} meta={st?.reason ? reasonText(st.reason) : undefined} />}
-      aria-label={`${STAGE_LABELS[stage]} live panel`}
+      aria-label={`${STAGE_PLAIN[stage]} live panel`}
     >
       {body}
     </Card>

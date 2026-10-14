@@ -11,6 +11,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from sparc.core.glossary import label as gl
+from sparc.core.glossary import section as gl_section
 from sparc.studio.projects.config_schema import ROLE_NAMES
 from sparc.studio.projects.config_service import effective_config
 from sparc.studio.projects.files import is_csv_name
@@ -18,14 +20,22 @@ from sparc.studio.projects.validate import validate_deep
 
 __all__ = ["readiness", "readiness_score", "LABELS"]
 
-LABELS = {"data": "Data file", "columns": "Columns mapped", "levers": "Levers", "roles": "Physics roles",
-          "forcing": "Campaign forcing", "climate_table": "Climate table", "people_layers": "People & land cover",
-          "config_valid": "Config valid", "runs": "Runs", "emulator": "Emulator", "studies": "Studies"}
+LABELS = {"data": "Data file", "columns": "Columns chosen", "levers": "Levers", "roles": "Physics model inputs",
+          "forcing": "Weather on the measurement day", "climate_table": "Climate change data",
+          "people_layers": "People & land cover", "config_valid": "Settings check", "runs": "Runs",
+          "emulator": gl("emulator_preview"), "studies": gl("independent_checks")}
 STUDY_KINDS = ("baselines", "placebo", "multiverse", "simcheck", "uncertainty")
 #: post-run outputs a run folder holds once that action ran (baselines and uncertainty are not study folders)
 RUN_FILE_STUDIES = {"baselines": "baselines.json", "uncertainty": "uncertainty.json", "placebo": "placebo.json"}
+#: the independent checks in plain words (glossary labels, lower case for a list in a sentence)
+STUDY_WORDS = {"baselines": "simple-model check", "placebo": "fake-change test", "multiverse": "stability across choices",
+               "simcheck": "simulation check", "uncertainty": "uncertainty report"}
+#: run modes in plain words
+_MODE_WORDS = {"fast": "quick (fast)"}
 #: study statuses that do not count as done
 _NOT_DONE = ("queued", "blocked", "starting", "running", "cancelling", "failed", "cancelled", "interrupted")
+#: run statuses still in progress (checkpoint.pkl may come later)
+_LIVE_RUN = ("queued", "running", "external_live")
 
 
 def _row(key: str, state: str, detail: str, action: dict | None = None) -> dict:
@@ -97,8 +107,8 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
         out.append(_row("columns", "missing", what, _open("Map columns", f"{setup}/data")))
     else:
         out.append(_row("columns", "ok" if d.get("id") else "warn",
-                        f"target {d.get('target')}, x/y {d.get('x')}/{d.get('y')}, {len(preds)} predictors"
-                        + ("" if d.get("id") else ", no id column"),
+                        f"temperature column '{d.get('target')}', {len(preds)} map layer{'s' if len(preds) != 1 else ''}"
+                        + ("" if d.get("id") else ", no place ID column"),
                         None if d.get("id") else _open("Set the id column", f"{setup}/data")))
 
     # levers
@@ -112,7 +122,7 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
     elif lever_errors:
         out.append(_row("levers", "missing", lever_errors[0]["message"], _open("Fix levers", f"{setup}/levers")))
     else:
-        out.append(_row("levers", "ok", f"{len(act)} lever{'s' if len(act) != 1 else ''}: {', '.join(map(str, act))}"))
+        out.append(_row("levers", "ok", "can change: " + ", ".join(_lever_words(eff, act))))
 
     # roles
     phys = _sec(eff.get("physics"))
@@ -123,15 +133,15 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
     if role_errors:
         out.append(_row("roles", "missing", role_errors[0]["message"], _open("Fix roles", f"{setup}/physics")))
     elif k == len(ROLE_NAMES):
-        out.append(_row("roles", "ok", f"{k}/{len(ROLE_NAMES)} roles mapped"))
+        out.append(_row("roles", "ok", f"all {k} physics inputs matched"))
     elif k == 0:
-        out.append(_row("roles", "missing", f"0/{len(ROLE_NAMES)} roles: the physics model is skipped",
+        out.append(_row("roles", "missing", "no physics inputs matched: the physics model is skipped",
                         _open("Map roles", f"{setup}/physics")))
     else:
         miss = [r for r in ROLE_NAMES if r not in mapped]
-        warn = "; placebo, simcheck, planner and emulator need canopy and impervious" \
-            if {"canopy", "impervious"} & set(miss) else ""
-        out.append(_row("roles", "warn", f"{k}/{len(ROLE_NAMES)} roles mapped (missing {', '.join(miss)}){warn}",
+        warn = ("; fake-change tests, simulation checks, the planner pack and quick estimates need canopy and "
+                "impervious") if {"canopy", "impervious"} & set(miss) else ""
+        out.append(_row("roles", "warn", f"{k} of {len(ROLE_NAMES)} physics inputs matched (missing {', '.join(miss)}){warn}",
                         _open("Map roles", f"{setup}/physics")))
 
     crs = d.get("crs") or d.get("reproject_to")
@@ -150,8 +160,8 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
             out.append(_row("forcing", "ok", f"{fp.name}{when}: SW↓ {phys.get('sw_down')} W/m², "
                                              f"LW net {phys.get('lw_net')} W/m²"))
     else:
-        out.append(_row("forcing", "warn", "generic radiation (800 W/m²) and no wind: fetch the campaign day",
-                        _open("Fetch campaign forcing", f"{setup}/inputs")))
+        out.append(_row("forcing", "warn", "typical weather assumed: fetch the measurement day's weather",
+                        _open("Fetch the day's weather", f"{setup}/inputs")))
 
     # climate table
     clim = _sec(eff.get("climate"))
@@ -193,7 +203,7 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
     # runs
     from sparc.studio.projects.service import OWN_RUNS_SQL
 
-    runs = db.fetchall(f"SELECT id, mode, status, has_emulator, created_utc FROM runs WHERE project_id = ? AND "
+    runs = db.fetchall(f"SELECT id, mode, status, has_emulator, run_dir, created_utc FROM runs WHERE project_id = ? AND "
                        f"{OWN_RUNS_SQL} ORDER BY created_utc DESC", (pid,))   # a study's children are not counted
     good = [r for r in runs if r["status"] in ("complete", "imported", "partial")]
     if not runs:
@@ -201,11 +211,13 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
     else:
         modes = sorted({("coarse" if str(r.get("mode") or "").startswith("coarse") else str(r.get("mode") or "custom"))
                         for r in good})
-        detail = f"{len(runs)} run{'s' if len(runs) != 1 else ''}" + (f": {', '.join(modes)}" if modes else "")
+        runs_word = "run" if len(runs) == 1 else "runs"
+        detail = f"{len(runs)} {runs_word}" + (f": {', '.join(_MODE_WORDS.get(m, m) for m in modes)}" if modes else "")
         if not good:
             out.append(_row("runs", "warn", detail + " (none finished)", _open("Launch", f"/p/{pid}/launch")))
         elif modes == ["fast"]:
-            out.append(_row("runs", "warn", detail + " (fast only)", _open("Launch a full run", f"/p/{pid}/launch")))
+            out.append(_row("runs", "warn", f"{len(runs)} {_MODE_WORDS['fast']} {runs_word}; launch a full run for "
+                                            "decisions", _open("Launch a full run", f"/p/{pid}/launch")))
         else:
             out.append(_row("runs", "ok", detail))
 
@@ -215,10 +227,16 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
     if arow is None:
         out.append(_row("emulator", "n/a", "no finished run"))
     elif arow.get("has_emulator"):
-        out.append(_row("emulator", "ok", f"built for {arow['id']}"))
+        out.append(_row("emulator", "ok", "built for the latest run"))
+    elif str(arow.get("status")) not in _LIVE_RUN and not (
+            arow.get("run_dir") and (Path(str(arow["run_dir"])) / "checkpoint.pkl").is_file()):
+        # the build unpickles checkpoint.pkl (jobs.manager preflight: fatal no_checkpoint), so a run that did
+        # not save its trained models cannot get a quick estimate: a new run is the way in
+        out.append(_row("emulator", "n/a", "needs a run that saved its trained models: launch a new run",
+                        _open("Launch a run", f"/p/{pid}/launch")))
     else:
-        out.append(_row("emulator", "warn", f"none for {arow['id']}: Lab previews need it",
-                        {"kind": "build_emulator", "label": "Build emulator", "method": "POST",
+        out.append(_row("emulator", "warn", "not built yet for the latest run: the Lab's quick estimates need it",
+                        {"kind": "build_emulator", "label": "Build the quick estimate", "method": "POST",
                          "path": f"/api/runs/{arow['id']}/actions/emulator", "body": {}}))
 
     # studies: study folders of the project (placebo, multiverse, simcheck) plus the post-run outputs in the
@@ -234,12 +252,26 @@ def readiness(db, project: dict, raw: dict, *, issues: list[dict] | None = None)
         if run_dir:
             kinds |= {k for k, f in RUN_FILE_STUDIES.items() if (Path(run_dir) / f).is_file()}
         done = [k for k in STUDY_KINDS if k in kinds]
+        words = lambda ks: ", ".join(STUDY_WORDS[k] for k in ks)  # noqa: E731
         if len(done) == len(STUDY_KINDS):
-            out.append(_row("studies", "ok", ", ".join(done)))
+            out.append(_row("studies", "ok", words(done)))
         else:
             missing = [k for k in STUDY_KINDS if k not in kinds]
-            out.append(_row("studies", "warn", (f"done: {', '.join(done)}; " if done else "") +
-                            f"not run: {', '.join(missing)}", _open("See the checks", f"/r/{rid}/trust")))
+            out.append(_row("studies", "warn", (f"done: {words(done)}; " if done else "") +
+                            f"not run: {words(missing)}", _open("See the checks", f"/r/{rid}/trust")))
+    return out
+
+
+def _lever_words(eff: dict, act: dict) -> list[str]:
+    """The levers in plain words: the glossary's measure of the lever's physics role ("tree canopy",
+    "paving", "surface reflectivity"), else its catalogue label, else its column name."""
+    plain = gl_section("levers")
+    role_of = {v: k for k, v in _sec(_sec(eff.get("physics")).get("roles")).items()}
+    out = []
+    for var, spec in act.items():
+        key = str(role_of.get(var) or var).lower()
+        g = plain.get(key) or {}
+        out.append(g.get("measure") or str(g.get("name") or "").lower() or str(_sec(spec).get("label") or var))
     return out
 
 

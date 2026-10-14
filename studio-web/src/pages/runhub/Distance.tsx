@@ -5,9 +5,13 @@
 // The page is Model details › Reach; How much to trust this reads `skillAcross` for its check.
 // Under Model details (`detailsOnly`) the baseline verdict and the skipped-curve notice (with its
 // re-run) are left to How much to trust this, linked in one line each.
+// Plain words (phase 4): Model details keeps the technical names (CV block size, stack,
+// baselines, ΔMSE); each chart and the verdict carry an ⓘ or a glossary <Term> explaining them.
 import type { ReactNode } from "react";
 import type { DistanceSections } from "../../api/runs";
 import { Bars, Forest, LineBand, type LineSeries, type RefLine } from "../../charts";
+import { InfoTip } from "../../components/ui/InfoTip";
+import { Term } from "../../components/ui/Term";
 import { Link, runHref } from "../../router";
 import { fmtNum, fmtPct, unitLabel } from "../../theme/format";
 import { Section, ViewPage, useRid, useSkippedStage, useUnits, type DetailPageProps } from "./common";
@@ -76,6 +80,12 @@ export function SkillCurve({
   return (
     <LineBand
       title={title ?? `${metric} vs CV block size`}
+      note={
+        <>
+          How the <Term id={c.metric === "r2" ? "r2" : "rmse"}>{metric}</Term> changes as the test areas (CV blocks) grow and test places lie farther from any reading.
+          <InfoTip term="distance_skill" label="Skill vs block size" />
+        </>
+      }
       units={c.metric === "r2" ? "R² (held out)" : u}
       series={series}
       xLabel="Block size"
@@ -103,12 +113,17 @@ function OnTrust({ rid, anchor, children }: { rid: string; anchor: string; child
 
 export default function Distance({
   title = "Distance & baselines",
-  intro = "How skill holds up further from the training data, and whether the stack beats simple baselines on the same blocks.",
+  intro = (
+    <>
+      How <Term id="distance_skill">skill holds up further from the training data</Term>, and whether the stack beats simple <Term id="baselines">baselines</Term> on the same
+      blocks.
+    </>
+  ),
   level,
   detailsOnly,
 }: DetailPageProps = {}) {
   const rid = useRid();
-  const noCurve = useSkippedStage(rid, "cv_curve", "The skill-vs-distance stage");
+  const noCurve = useSkippedStage(rid, "cv_curve", "The distance test");
   const noBaselines = useSkippedStage(rid, "baselines", "The baselines stage");
   return (
     <ViewPage view="distance" title={title} intro={intro} level={level}>
@@ -126,7 +141,8 @@ export default function Distance({
             <Section title="Verdict" data={s.verdict} absent={noBaselines}>
               {(v) => (
                 <div className="callout" data-tone={v.stack_wins === false ? undefined : "info"} role="status">
-                  <strong>Verdict:</strong> {v.text}
+                  <strong>Verdict:</strong>
+                  <InfoTip term="baselines" label="Baselines" /> {v.text}
                   {v.best_baseline ? <span className="cap"> (strongest baseline: {v.best_baseline})</span> : null}
                 </div>
               )}
@@ -146,6 +162,11 @@ export default function Distance({
               {(b) => (
                 <Forest
                   title="Stack vs baselines"
+                  note={
+                    <>
+                      Does the full model (the stack) beat <Term id="baselines">simpler models</Term> on the same test areas? Positive: the stack is better.
+                    </>
+                  }
                   units={`ΔMSE (baseline − stack), ${u ? `${u}²` : "target units²"}`}
                   rows={b.map((r) => ({ id: r.id, label: r.label, est: r.delta_mse, se: r.delta_mse_se }))}
                   z={2}
@@ -161,6 +182,12 @@ export default function Distance({
               {(w) => (
                 <Bars
                   title="Share of blocks the stack wins"
+                  note={
+                    <>
+                      In how many test areas the full model has the smaller error.
+                      <InfoTip term="held_out_fold" label="CV block" />
+                    </>
+                  }
                   categories={w.map((r) => r.label)}
                   orientation="h"
                   series={[{ id: "frac", label: "Blocks won", values: w.map((r) => (r.frac === null ? null : r.frac * 100)) }]}

@@ -9,6 +9,7 @@ import type { SelectionSpec } from "../../../api/types";
 import { Button } from "../../../components/ui/Button";
 import { IconButton } from "../../../components/ui/IconButton";
 import { NumberField } from "../../../components/ui/NumberField";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import type { GridData } from "../../../map/grid";
 import { toast } from "../../../stores/ui";
 import { fmtInt, unitLabel } from "../../../theme/format";
@@ -292,14 +293,17 @@ export function ScenarioEditor(p: ScenarioEditorProps) {
         <label className="row">
           <input type="checkbox" checked={doc.options?.clip_to_support ?? true} onChange={(e) => change((d) => ({ ...d, options: { ...(d.options ?? {}), clip_to_support: e.target.checked } }))} />
           Clip to the observed support (never push a cell further outside its bounds)
+          <InfoTip term="realistic_limits" />
         </label>
         <label className="row">
           <input type="checkbox" checked={doc.options?.mediators ?? true} onChange={(e) => change((d) => ({ ...d, options: { ...(d.options ?? {}), mediators: e.target.checked } }))} />
           Let mediators follow (e.g. NDVI follows canopy)
+          <InfoTip term="mediators" />
         </label>
         <label className="row">
           <input type="checkbox" checked={expert} onChange={(e) => change((d) => ({ ...d, options: { ...(d.options ?? {}), expert: e.target.checked } }))} />
           Expert mode (edit non-actionable predictors and mediators)
+          <InfoTip term="expert_mode" />
         </label>
       </details>
 

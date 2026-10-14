@@ -2,7 +2,7 @@
 // conversions, dictionary, guarded checkpoint delete), Provenance (environment diff picker,
 // Reproduce) and the Breakdown / Relationships / Correlogram tools.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ReactElement } from "react";
+import { act, type ReactElement } from "react";
 import { clearResources } from "../../../api/resource";
 import type { DocEntry, FileEntry } from "../../../api/runs";
 import type { Job, RunOutputs } from "../../../api/types";
@@ -290,7 +290,7 @@ describe("Files", () => {
     await flush(2);
     expect(deleted).toBe(0);
     const dialog = document.body.querySelector('[role="dialog"]')!;
-    expect(dialog.textContent).toContain("exact scenarios and the emulator build will need a refit");
+    expect(dialog.textContent).toContain("running scenarios through the full model and building the quick estimate will need a refit");
     click(byText(dialog as HTMLElement, "button", "Delete 1.2 MB"));
     await flush(4);
     expect(deleted).toBe(1);
@@ -351,7 +351,11 @@ describe("Files previews", () => {
     // no CRS: GeoJSON is offered but disabled with the reason; CSV stays a download
     click(byText(container.querySelector('tr[data-path="predictions.parquet"]')!, "button", "predictions.parquet"));
     await waitFor(() => byText(container, '[aria-disabled="true"]', "GeoJSON"), 3000, "disabled GeoJSON");
-    expect(byText(container, '[aria-disabled="true"]', "GeoJSON")!.getAttribute("title")).toContain("no CRS");
+    const geo = byText(container, '[aria-disabled="true"]', "GeoJSON") as HTMLElement;
+    expect(geo.hasAttribute("title")).toBe(false);
+    act(() => geo.focus());
+    expect(document.querySelector('[role="tooltip"]')!.textContent).toContain("no CRS");
+    act(() => geo.blur());
     expect([...container.querySelectorAll("a[download]")].map((a) => a.getAttribute("href"))).toContain(`/api/runs/${rid}/files/raw?path=predictions.parquet&as=csv`);
     expect([...container.querySelectorAll("a[download]")].some((a) => a.getAttribute("href")!.includes("as=geojson"))).toBe(false);
     m.restore();
@@ -452,7 +456,7 @@ describe("analysis tools", () => {
     await waitFor(() => container.querySelector('[data-tool="relationships"] figure.chart-frame'), 3000, "hexbin");
     expect(bodies.hexbin).toEqual({ x: "dist_train_m", y: "obs", bins: 60 });
     expect(container.querySelector('[data-tool="relationships"]')!.textContent).toContain("Spearman ρ = 0.93");
-    click(byText(container, '[role="tab"]', "Correlogram"));
+    click(byText(container, '[role="tab"]', "Clustering by distance")); // the correlogram, in plain words
     await waitFor(() => container.querySelector('[data-tool="correlogram"] figure.chart-frame'), 3000, "correlogram");
     expect(bodies.acf).toEqual({ layer: "obs", n_perm: 19 });
     expect(container.querySelector('[data-tool="correlogram"] figcaption')!.textContent).toContain("60 m");

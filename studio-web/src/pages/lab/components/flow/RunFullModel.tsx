@@ -7,6 +7,7 @@
 // figure itself shows only on the answer card. Wording: model/quick.ts and model/words.ts.
 import { useCallback, useSyncExternalStore } from "react";
 import { Button } from "../../../../components/ui/Button";
+import { InfoTip } from "../../../../components/ui/InfoTip";
 import { JobStrip } from "../../../../components/ui/JobStrip";
 import { isDirty } from "../../model/draft";
 import { engineTone, fullModelUpToDate, runDisabledReason, runLabel, unfinishedNote } from "../../model/quick";
@@ -82,7 +83,6 @@ export function RunFullModel({ model }: RunFullModelProps) {
           busy={model.running}
           disabled={disabled}
           onClick={() => void model.runExact()}
-          title={model.runReason ?? undefined}
           aria-describedby={why ? whyId : undefined}
         >
           {runLabel(model.compile?.est_exact_s)}
@@ -91,6 +91,7 @@ export function RunFullModel({ model }: RunFullModelProps) {
       <p className="cap qe-engine" data-engine={model.engineState ?? "unknown"} data-tone={engineTone(model.engineState)}>
         <span className="qe-engine-dot" aria-hidden="true" />
         {engineLine(model.engineState, model.engine.progress, { noEmulator: model.noEmulator })}
+        <InfoTip term="exact_engine" />
       </p>
       {model.result && (upToDate || !(model.running || model.activeJob)) ? (
         <p className="cap qe-result" data-full-result={upToDate ? "current" : "outdated"}>

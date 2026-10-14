@@ -9,6 +9,8 @@
 //   dose map, Verify / Verify frontier (exact engine), planned vs realised with the spillover
 //   label, Plan → scenario, the field kit (ranked cells, logger sites, before/after pairs;
 //   CSV and GeoJSON rendered in the browser) and the plan pack export.
+// Plain words (phase 4): places, amounts, "planned benefit" (open loop) and "checked benefit"
+// (closed loop, the full model) from the glossary, each technical term with an ⓘ; no native titles.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { errorMessage } from "../../api/client";
 import { base64ToBytes, viewOf } from "../../api/binary";
@@ -38,6 +40,7 @@ import { Pareto } from "../../charts";
 import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip, type InfoTipProps } from "../../components/ui/InfoTip";
 import { JobStrip } from "../../components/ui/JobStrip";
 import { Kpi, KpiRow } from "../../components/ui/Kpi";
 import { NumberField } from "../../components/ui/NumberField";
@@ -45,6 +48,7 @@ import { Seg } from "../../components/ui/Seg";
 import { Slider } from "../../components/ui/Slider";
 import { Table } from "../../components/ui/Table";
 import { downloadText } from "../../components/ui/download";
+import { term } from "../../content/glossary";
 import { useRunDetail } from "../../layouts/resources";
 import { MapView } from "../../map/MapView";
 import { useRunGrid, useRunLayers, type LayerValues } from "../../map/data";
@@ -56,11 +60,79 @@ import { fmtDateTime, fmtInt, fmtNum, fmtPct, unitLabel } from "../../theme/form
 import { RunBudgetPlan } from "../runhub/Budget";
 import { ConfirmDialog } from "./components/Dialogs";
 import { LabFrame, labHref } from "./components/LabFrame";
+import { Tip } from "./components/Tip";
 import { columnOptions } from "./components/SelectionBuilder";
 import { syntheticMeta } from "./model/layers";
 import { fieldKitCsv, fieldKitGeoJson, parseNumberList } from "./model/library";
 import { rateLimit } from "./model/timing";
 import { useTray } from "./model/tray";
+import { leverUnitWord, leverWords } from "./model/words";
+
+/** Plain names of the plan's two benefits: the quick sum (open loop) and the full model's check (closed loop). */
+const PLANNED = term("open_loop").label;
+const CHECKED = term("closed_loop").label;
+/** "°F·places": cooling added up over places (glossary total_cooling). */
+const placeDegrees = (u: string) => `${u}·places`;
+/** The unit of a cooling total on a tile, with the glossary's total_cooling ⓘ. */
+function PlaceDegrees({ u }: { u: string }) {
+  return (
+    <>
+      {placeDegrees(u)}
+      <InfoTip term="total_cooling" label={placeDegrees(u)} />
+    </>
+  );
+}
+/** The unit of a cost on a tile, with its ⓘ (glossary cost_units). */
+const COST_UNITS = term("cost_units").label.toLowerCase();
+
+/** Why the checked cooling is above or below the plan, in a few words (the checked/planned ratio; "" within 5%). */
+function gapWhy(ratio: number): string {
+  return ratio > 1.05 ? "cooling spreads to nearby places" : ratio < 0.95 ? "neighbouring changes overlap" : "";
+}
+
+/**
+ * The plan's check in a sentence, the right way round: the full model can find more cooling than the
+ * plan (it also counts cooling that spreads to nearby places) or less (neighbouring changes overlap).
+ */
+export function checkedVsPlanned(planned: number, checked: number): string {
+  const engine = term("exact_engine").label.toLowerCase();
+  const ratio = checked / (planned || NaN);
+  if (ratio > 1.05) return `Higher than planned: the plan adds up each place's cooling on its own, while the ${engine} also counts cooling that spreads to nearby places.`;
+  if (ratio < 0.95) return `Lower than planned: the plan adds up each place's cooling on its own, while in the ${engine} neighbouring changes overlap, so their cooling does not simply add up.`;
+  return `About as planned: the ${engine} counts cooling that spreads to and overlaps with neighbouring places, and the two roughly cancel out.`;
+}
+function CostUnits() {
+  return (
+    <>
+      {COST_UNITS}
+      <InfoTip term="cost_units" />
+    </>
+  );
+}
+/** The scale of the unevenness tiles. */
+const UNEVEN_SCALE = "0 = shared evenly, 1 = one place gets it all";
+
+/**
+ * How unevenly the plan spreads its amounts. The server's Gini is of the doses (the amounts placed),
+ * not of the cooling, so the label says amounts; the ⓘ keeps the glossary's technical name.
+ */
+const UNEVEN = "Unevenness of the amounts";
+const UNEVEN_TIP: InfoTipProps = {
+  term: "gini",
+  label: UNEVEN.toLowerCase(),
+  text: "How unevenly the plan spreads its amounts over the places it treats. 0 means every treated place gets the same; near 1 means a few places get almost all of it.",
+  technical: `${term("gini").technical} of the doses`,
+};
+
+/** A KPI label with its ⓘ. */
+function TipLabel({ label, tip }: { label: string; tip: InfoTipProps }) {
+  return (
+    <>
+      {label}
+      <InfoTip {...tip} label={tip.label ?? label} />
+    </>
+  );
+}
 
 export const PLAN_PREVIEW_MS = 150;
 
@@ -126,11 +198,12 @@ export function usePlanPreview(rid: string, params: PlanParams | null) {
   return state;
 }
 
-function DoseMap({ grid, dose, extra, title }: { grid: GridData; dose: Float32Array | null; extra?: { meta: LayerMeta; load: () => Promise<Float32Array> }[]; title: string }) {
+function DoseMap({ grid, dose, extra, title, unit }: { grid: GridData; dose: Float32Array | null; extra?: { meta: LayerMeta; load: () => Promise<Float32Array> }[]; title: string; unit: string }) {
   const unitless = useMemo<LayerGroup[]>(() => {
-    const layers = [syntheticMeta({ key: "plan:dose", label: "Planned dose", unit: "", scale: "seq", zero_blank: true, desc: "Dose per treated cell; untreated cells are blank." }, dose)];
+    // the amount in the lever's plain unit word ("pts" for percentage points), as the rest of the Lab writes it
+    const layers = [syntheticMeta({ key: "plan:dose", label: "Planned amount", unit, scale: "seq", zero_blank: true, desc: "Amount of change per treated place; untreated places are blank." }, dose)];
     return [{ id: "plan", label: "Plan", layers: [...layers, ...(extra ?? []).map((e) => e.meta)] }];
-  }, [dose, extra]);
+  }, [dose, extra, unit]);
   const load = useCallback(
     async (meta: LayerMeta): Promise<LayerValues> => {
       if (meta.key === "plan:dose") return dose ?? new Float32Array(grid.n);
@@ -154,11 +227,12 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
   const live = usePlanPreview(rid, params);
   const dose = useMemo(() => (live.preview ? decodeDose(live.preview.dose) : null), [live.preview]);
   const columns = useMemo(() => columnOptions(layers.data ?? []), [layers.data]);
-  if (!params) return <EmptyState title="No levers" body="This run has no actionable levers with responses (S4), so there is nothing to plan." />;
+  if (!params) return <EmptyState title="No levers" body="This run has no levers with a measured cooling response, so there is nothing to plan." />;
   const lever = levers.find((l) => l.var === params.lever);
   const [bLo, bHi] = budgetRange(lever, grid.n);
   const set = (patch: Partial<PlanParams>) => setParams((p) => (p ? { ...p, ...patch } : p));
-  const u = unitLabel(lever?.unit ?? "");
+  // the lever's plain unit word ("pts" for percentage points), as the Lab, What cools and the Library write it
+  const u = leverUnitWord(lever);
   const pv = live.preview;
   const save = async () => {
     setSaving(true);
@@ -177,7 +251,10 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
   return (
     <div className="lab-split">
       <section className="card stack" aria-label="Plan parameters">
-        <h3>Plan</h3>
+        <h3 className="lab-tip-head">
+          Plan
+          <InfoTip term="budget_plan" />
+        </h3>
         <datalist id="plan-columns">
           {columns.map((c) => (
             <option key={c.value} value={c.value}>
@@ -186,18 +263,21 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
           ))}
         </datalist>
         <label className="field">
-          <span className="field-label">Lever</span>
+          <span className="field-label">What to change</span>
           <select value={params.lever} onChange={(e) => setParams(defaultParams(levers.find((l) => l.var === e.target.value) ?? levers[0], grid.n))}>
             {usable.map((l) => (
               <option key={l.var} value={l.var}>
-                {l.label}
+                {leverWords(l).name}
               </option>
             ))}
           </select>
         </label>
-        <Slider label={`Budget (${u ? u + "·" : ""}cells)`} value={params.budget} min={bLo} max={bHi} log onChange={(v) => set({ budget: v })} format={(v) => fmtInt(Math.round(v))} />
+        <Slider label={`Budget (${COST_UNITS})`} value={params.budget} min={bLo} max={bHi} log onChange={(v) => set({ budget: v })} format={(v) => fmtInt(Math.round(v))} />
         <div className="field">
-          <span className="field-label">Cost</span>
+          <span className="field-label">
+            Cost
+            <InfoTip term="cost_units" />
+          </span>
           <Seg<"scalar" | "column">
             label="Cost source"
             size="small"
@@ -218,22 +298,27 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
           )}
         </div>
         <fieldset className="stack" style={{ gap: 4, border: 0, padding: 0 }}>
-          <legend className="field-label">Cap</legend>
+          <legend className="field-label">Limits</legend>
           <label className="row">
             <input type="checkbox" checked={params.cap.plantable} disabled={!(lever?.role === "canopy" && lever.headroom_available)} onChange={(e) => set({ cap: { ...params.cap, plantable: e.target.checked } })} />
-            Plantable headroom{lever?.role === "canopy" && lever.headroom_available ? "" : " (canopy with planner layers only)"}
+            Only {term("headroom").label.toLowerCase()}
+            {lever?.role === "canopy" && lever.headroom_available ? "" : " (trees & canopy only, with the planting-space layers)"}
+            <InfoTip term="headroom" />
           </label>
           {params.cap.plantable ? (
             <label className="field">
-              <span className="field-label">Paved share</span>
+              <span className="field-label">
+                Plantable share of paved ground
+                <InfoTip label="plantable share of paved ground" text="The share of paved and built ground counted as space that could take trees (0 to 1). Empty uses the project's setting." technical="cap.paved_share" />
+              </span>
               <NumberField
-                label="Paved share"
+                label="Plantable share of paved ground"
                 value={params.cap.paved_share ?? null}
                 min={0}
                 max={1}
                 step={0.05}
                 nullable
-                placeholder="config default"
+                placeholder="project default"
                 style={{ width: "11em" }}
                 onChange={(v) => set({ cap: { ...params.cap, paved_share: v ?? undefined } })}
               />
@@ -253,8 +338,8 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
           </select>
         </fieldset>
         <label className="field">
-          <span className="field-label">Minimum dose per treated cell</span>
-          <NumberField label="Minimum dose per treated cell" unit={lever?.unit} value={params.min_dose ?? null} min={0} nullable placeholder="none" onChange={(v) => set({ min_dose: v ?? undefined })} />
+          <span className="field-label">Smallest amount per treated place</span>
+          <NumberField label="Smallest amount per treated place" unit={u || undefined} value={params.min_dose ?? null} min={0} nullable placeholder="none" onChange={(v) => set({ min_dose: v ?? undefined })} />
         </label>
         <div className="field">
           <span className="field-label">Objective</span>
@@ -270,25 +355,31 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
           />
         </div>
         <div className="field">
-          <span className="field-label">Equity</span>
+          <span className="field-label">
+            Who to favour
+            <InfoTip label="who to favour" text="Gives extra weight to places where more vulnerable people live, so the plan leans towards them. How strongly sets the weight (0 = not at all)." technical="Equity weighting (source, focus)" />
+          </span>
           <select
-            aria-label="Equity source"
+            aria-label="Who to favour"
             value={params.equity?.source ?? ""}
             onChange={(e) => set({ equity: e.target.value ? { source: e.target.value as EquitySource, focus: params.equity?.focus ?? 0.3, column: e.target.value === "column" ? columns[0]?.value : undefined } : undefined })}
           >
-            <option value="">No equity weighting</option>
-            <option value="share_60_plus">Share aged 60+</option>
-            <option value="share_under_5">Share under 5</option>
-            <option value="density">Population density rank</option>
-            <option value="column">A column…</option>
+            <option value="">No one in particular</option>
+            <option value="share_60_plus">Places with more people aged 60+</option>
+            <option value="share_under_5">Places with more children under 5</option>
+            <option value="density">The most densely populated places</option>
+            <option value="column">By a map layer…</option>
           </select>
           {params.equity?.source === "column" ? (
-            <input list="plan-columns" aria-label="Equity column" placeholder="layer:… or csv:<path>:<column>" value={params.equity.column ?? ""} onChange={(e) => set({ equity: { ...params.equity!, column: e.target.value } })} />
+            <input list="plan-columns" aria-label="Map layer to favour by" placeholder="layer:… or csv:<path>:<column>" value={params.equity.column ?? ""} onChange={(e) => set({ equity: { ...params.equity!, column: e.target.value } })} />
           ) : null}
-          {params.equity ? <Slider label="Equity focus" value={params.equity.focus} min={0} max={1} step={0.05} onChange={(v) => set({ equity: { ...params.equity!, focus: v } })} format={(v) => fmtNum(v, 2)} /> : null}
+          {params.equity ? <Slider label="How strongly" value={params.equity.focus} min={0} max={1} step={0.05} onChange={(v) => set({ equity: { ...params.equity!, focus: v } })} format={(v) => fmtNum(v, 2)} /> : null}
         </div>
         <label className="field">
-          <span className="field-label">Pareto multipliers of the budget</span>
+          <span className="field-label">
+            Other budgets to compare (multiples of this one)
+            <InfoTip term="pareto" />
+          </span>
           <input
             value={mult}
             onChange={(e) => setMult(e.target.value)}
@@ -304,7 +395,8 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
           <input value={name} placeholder={`${lever?.label ?? params.lever} budget ${fmtInt(params.budget)}`} onChange={(e) => setName(e.target.value)} />
         </label>
         <label className="row">
-          <input type="checkbox" checked={verify} onChange={(e) => setVerify(e.target.checked)} /> Verify exactly after saving (closed loop, needs the engine)
+          <input type="checkbox" checked={verify} onChange={(e) => setVerify(e.target.checked)} /> Check the plan with the {term("exact_engine").label.toLowerCase()} after saving
+          <InfoTip term="closed_loop" />
         </label>
         <Button variant="primary" busy={saving} onClick={() => void save()} disabled={!pv}>
           Save plan
@@ -313,32 +405,38 @@ export function PlanForm({ rid, grid, levers, onSaved }: { rid: string; grid: Gr
       <section className="stack" aria-label="Planned allocation">
         {live.error ? <p className="callout" data-tone="crit">{live.error}</p> : null}
         <KpiRow label="Planned allocation">
-          <Kpi label="Planned benefit" value={pv ? fmtNum(pv.planned_total, 1) : "—"} unit={`${unitLabel(grid.meta.units.target)}·cells`} note="open loop (sum of per-cell responses)" />
-          <Kpi label="Cells treated" value={pv ? fmtInt(pv.n_cells_treated) : "—"} note={pv ? `mean dose ${fmtNum(pv.mean_dose_treated, 2)} ${u}` : undefined} />
-          <Kpi label="Cost" value={pv ? fmtNum(pv.total_cost, 0) : "—"} note={pv && pv.min_dose_dropped_cost > 0 ? `${fmtNum(pv.min_dose_dropped_cost, 0)} freed by the minimum dose (not re-spent)` : undefined} />
-          <Kpi label="Gini of doses" value={pv ? fmtNum(pv.gini, 2) : "—"} />
+          <Kpi label={<TipLabel label={PLANNED} tip={{ term: "open_loop" }} />} value={pv ? fmtNum(pv.planned_total, 1) : "—"} unit={<PlaceDegrees u={unitLabel(grid.meta.units.target)} />} note="each place's cooling added up, not yet checked" />
+          <Kpi label="Places treated" value={pv ? fmtInt(pv.n_cells_treated) : "—"} note={pv ? `average amount ${fmtNum(pv.mean_dose_treated, 1)}${u ? ` ${u}` : ""}` : undefined} />
+          <Kpi label="Cost" value={pv ? fmtNum(pv.total_cost, 0) : "—"} unit={pv ? <CostUnits /> : undefined} note={pv && pv.min_dose_dropped_cost > 0 ? `${fmtNum(pv.min_dose_dropped_cost, 0)} left unspent by the smallest-amount rule` : undefined} />
+          <Kpi label={<TipLabel label={UNEVEN} tip={UNEVEN_TIP} />} value={pv ? fmtNum(pv.gini, 2) : "—"} note={UNEVEN_SCALE} />
         </KpiRow>
         {pv ? <p className="cap">{pv.caption}</p> : <p className="cap">{live.loading ? "Planning…" : "Adjust the parameters to plan."}</p>}
         {pv ? (
           <Pareto
-            title="Benefit vs budget"
-            points={pv.pareto.map((r) => ({ x: r.budget, y: r.benefit, label: `${fmtInt(r.n_cells)} cells` }))}
+            title="Cooling for each budget"
+            points={pv.pareto.map((r) => ({ x: r.budget, y: r.benefit, label: `${fmtInt(r.n_cells)} places` }))}
             selected={pv.pareto.reduce((best, r, i) => (Math.abs(r.budget - params.budget) < Math.abs(pv.pareto[best].budget - params.budget) ? i : best), 0)}
             xLabel="Budget"
-            yLabel="Planned benefit"
-            yUnit={`${unitLabel(grid.meta.units.target)}·cells`}
-            curveLabel="Planned (open loop)"
+            xUnit={COST_UNITS}
+            yLabel={PLANNED}
+            yUnit={placeDegrees(unitLabel(grid.meta.units.target))}
+            curveLabel={PLANNED}
             onPointClick={(i) => set({ budget: pv.pareto[i].budget })}
-            caption={`${pv.objective}; ${pv.constraint}. Select a point to use its budget.`}
+            caption={
+              <>
+                Goal: {pv.objective}. Limit: {pv.constraint}. Select a point to use its budget.
+                <InfoTip term="pareto" />
+              </>
+            }
           />
         ) : null}
-        <DoseMap grid={grid} dose={dose} title="Planned dose" />
+        <DoseMap grid={grid} dose={dose} title="Planned amount" unit={u} />
       </section>
     </div>
   );
 }
 
-function FieldKitBlock({ plid, name, unit }: { plid: string; name: string; unit: string }) {
+function FieldKitBlock({ plid, name, unit, amountUnit }: { plid: string; name: string; unit: string; amountUnit: string }) {
   const [kit, setKit] = useState<FieldKit | null>(null);
   const [busy, setBusy] = useState(false);
   const load = async () => {
@@ -356,7 +454,7 @@ function FieldKitBlock({ plid, name, unit }: { plid: string; name: string; unit:
     return (
       <section className="card">
         <h3>Field kit</h3>
-        <p className="cap">A ranked list of cells to treat with lon/lat, logger sites and before/after pairs for evaluation.</p>
+        <p className="cap">A ranked list of places to treat, with their coordinates, plus sites for temperature loggers and before/after pairs to measure the effect.</p>
         <Button busy={busy} onClick={() => void load()}>
           Build field kit
         </Button>
@@ -374,7 +472,7 @@ function FieldKitBlock({ plid, name, unit }: { plid: string; name: string; unit:
         <h3>Field kit</h3>
         <span className="spacer" />
         <Button size="small" icon="download" onClick={() => downloadText(fieldKitCsv(kit, "cells"), `${slug}-field-list.csv`, "text/csv;charset=utf-8")}>
-          Cells CSV
+          Places CSV
         </Button>
         <Button size="small" icon="download" onClick={() => downloadText(fieldKitCsv(kit, "sites"), `${slug}-logger-sites.csv`, "text/csv;charset=utf-8")}>
           Sites CSV
@@ -392,21 +490,21 @@ function FieldKitBlock({ plid, name, unit }: { plid: string; name: string; unit:
         rowKey={(c) => String(c.id)}
         columns={[
           { key: "rank", label: "Rank", align: "right", value: (c) => c.rank },
-          { key: "id", label: "Cell id", value: (c) => c.id },
+          { key: "id", label: "Place id", value: (c) => c.id },
           { key: "lon", label: "Lon", align: "right", value: (c) => c.lon, render: (c) => fmtNum(c.lon, 5) },
           { key: "lat", label: "Lat", align: "right", value: (c) => c.lat, render: (c) => fmtNum(c.lat, 5) },
           { key: "zone", label: "Zone", value: (c) => c.zone },
-          { key: "dose", label: "Dose", align: "right", value: (c) => c.dose, render: (c) => fmtNum(c.dose, 2) },
+          { key: "dose", label: "Amount", unit: amountUnit || undefined, align: "right", value: (c) => c.dose, render: (c) => fmtNum(c.dose, 2) },
           // the cell's footprint cooling: what its dose cools around it, summed (target·cells), not ΔT at the cell
-          { key: "pb", label: "Planned benefit (footprint)", unit: `${unitLabel(unit)}·cells`, align: "right", value: (c) => c.planned_benefit, render: (c) => fmtNum(c.planned_benefit, 3) },
-          { key: "cl", label: "Closed-loop ΔT", align: "right", value: (c) => c.closed_loop_delta, render: (c) => fmtNum(c.closed_loop_delta, 3) },
+          { key: "pb", label: `${PLANNED} (here and nearby)`, unit: placeDegrees(unitLabel(unit)), align: "right", value: (c) => c.planned_benefit, render: (c) => fmtNum(c.planned_benefit, 3) },
+          { key: "cl", label: `Change here (${CHECKED.toLowerCase()})`, unit: unitLabel(unit), align: "right", value: (c) => c.closed_loop_delta, render: (c) => fmtNum(c.closed_loop_delta, 3) },
           { key: "people", label: "People", align: "right", value: (c) => c.people, render: (c) => fmtInt(c.people) },
-          { key: "pp", label: "Plantable headroom", align: "right", value: (c) => c.plantable_pp, render: (c) => fmtNum(c.plantable_pp, 1) },
+          { key: "pp", label: term("headroom").label, align: "right", value: (c) => c.plantable_pp, render: (c) => fmtNum(c.plantable_pp, 1) },
         ]}
         rows={kit.cells}
       />
       <p className="cap">
-        {fmtInt(kit.sites.length)} logger sites and {fmtInt(kit.pairs.length)} before/after pairs (treated = dose at or above the median positive dose).
+        {fmtInt(kit.sites.length)} logger sites and {fmtInt(kit.pairs.length)} before/after pairs (a treated place gets at least the median amount of the places the plan treats).
       </p>
     </section>
   );
@@ -414,6 +512,9 @@ function FieldKitBlock({ plid, name, unit }: { plid: string; name: string; unit:
 
 function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid: GridData; pid: string | null }) {
   const plan = usePlan(plid, rid);
+  const levers = useLevers(rid);
+  // the plan's amounts in its lever's plain unit word ("pts" for percentage points)
+  const amountUnit = leverUnitWord(levers.data?.find((l) => l.var === plan.data?.params.lever));
   const [busy, setBusy] = useState<string | null>(null);
   const [job, setJob] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -425,9 +526,9 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
     const unit = grid.meta.units.target;
     const list = [
       // a footprint total on each treated cell (target·cells: the cooling its dose brings to its neighbourhood)
-      { meta: syntheticMeta({ key: "plan:planned_benefit", label: "Planned benefit (footprint total on the treated cell)", unit: `${unit}·cells`, scale: "seq" }, null), load: () => getPlanLayer(plid, "planned_benefit") },
+      { meta: syntheticMeta({ key: "plan:planned_benefit", label: `${PLANNED} (here and nearby, on the treated place)`, unit: placeDegrees(unit), scale: "seq" }, null), load: () => getPlanLayer(plid, "planned_benefit") },
     ];
-    if (plan.data?.realised) list.push({ meta: syntheticMeta({ key: "plan:closed_loop_delta", label: "Closed-loop ΔT (exact)", unit, sign_note: "negative = cooler" }, null), load: () => getPlanLayer(plid, "closed_loop_delta") });
+    if (plan.data?.realised) list.push({ meta: syntheticMeta({ key: "plan:closed_loop_delta", label: `Temperature change (${CHECKED.toLowerCase()})`, unit, sign_note: "negative = cooler" }, null), load: () => getPlanLayer(plid, "closed_loop_delta") });
     return list;
   }, [plid, plan.data?.realised, grid.meta.units.target]);
   const [dose, setDose] = useState<Float32Array | null>(null);
@@ -465,11 +566,13 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
         <Link to={labHref(rid, "plans")}>All plans</Link>
         <span className="spacer" />
         <Button size="small" busy={busy === "verify"} onClick={() => void verifyNow(false)}>
-          {p.realised ? "Verify again" : "Verify exactly"}
+          {p.realised ? "Check again" : `Check with the ${term("exact_engine").label.toLowerCase()}`}
         </Button>
-        <Button size="small" busy={busy === "frontier"} onClick={() => void verifyNow(true)}>
-          Verify frontier
-        </Button>
+        <Tip tip={`Check every budget on the curve with the ${term("exact_engine").label.toLowerCase()}, not only this one.`}>
+          <Button size="small" busy={busy === "frontier"} onClick={() => void verifyNow(true)}>
+            Check every budget
+          </Button>
+        </Tip>
         <Button
           size="small"
           busy={busy === "scenario"}
@@ -480,7 +583,7 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
             })
           }
         >
-          Plan → scenario
+          Make a scenario from it
         </Button>
         <Button
           size="small"
@@ -516,68 +619,77 @@ function PlanDetail({ rid, plid, grid, pid }: { rid: string; plid: string; grid:
           }}
         >
           <p>
-            <strong>{p.name}</strong> and its stored allocation will be deleted. Scenarios made from it with Plan → scenario lose their per-cell source.
+            <strong>{p.name}</strong> and its stored allocation will be deleted. Scenarios made from it lose the place-by-place amounts they came from.
           </p>
         </ConfirmDialog>
       ) : null}
       {shownJob ? <JobStrip jobId={shownJob} /> : null}
       <KpiRow label="Plan">
-        <Kpi label="Planned benefit" value={fmtNum(p.planned.planned_total, 1)} unit={`${u}·cells`} note="open loop" />
+        <Kpi label={<TipLabel label={PLANNED} tip={{ term: "open_loop" }} />} value={fmtNum(p.planned.planned_total, 1)} unit={<PlaceDegrees u={u} />} note="each place's cooling added up" />
         <Kpi
-          label="Realised (exact)"
+          label={<TipLabel label={CHECKED} tip={{ term: "closed_loop" }} />}
           value={p.realised ? fmtNum(p.realised.total, 1) : "—"}
-          unit={p.realised ? `${u}·cells` : undefined}
-          note={p.realised && gap !== null ? `${fmtPct(gap)} of planned · spillover non-additivity` : "not verified yet"}
+          unit={p.realised ? <PlaceDegrees u={u} /> : undefined}
+          note={p.realised && gap !== null ? `${fmtPct(gap)} of planned${gapWhy(gap) ? ` · ${gapWhy(gap)}` : ""}` : "not checked yet"}
           tone={p.realised ? "good" : undefined}
         />
-        <Kpi label="Cells treated" value={fmtInt(p.planned.n_cells_treated)} note={`mean dose ${fmtNum(p.planned.mean_dose_treated, 2)}`} />
-        <Kpi label="Cost" value={fmtNum(p.planned.total_cost, 0)} note={p.planned.min_dose_dropped_cost > 0 ? `${fmtNum(p.planned.min_dose_dropped_cost, 0)} freed by the minimum dose` : undefined} />
+        <Kpi label="Places treated" value={fmtInt(p.planned.n_cells_treated)} note={`average amount ${fmtNum(p.planned.mean_dose_treated, 1)}${amountUnit ? ` ${amountUnit}` : ""}`} />
+        <Kpi label="Cost" value={fmtNum(p.planned.total_cost, 0)} unit={<CostUnits />} note={p.planned.min_dose_dropped_cost > 0 ? `${fmtNum(p.planned.min_dose_dropped_cost, 0)} left unspent by the smallest-amount rule` : undefined} />
       </KpiRow>
       {p.realised ? (
         <p className="cap" data-spillover="true">
-          Planned {fmtNum(p.planned.planned_total, 0)} vs realised {fmtNum(p.realised.total, 0)} {u}·cells: the plan adds up per-cell responses, while the exact closed loop lets neighbouring treatments overlap (spillover non-additivity).
+          Planned {fmtNum(p.planned.planned_total, 0)} vs checked {fmtNum(p.realised.total, 0)} {placeDegrees(u)}. {checkedVsPlanned(p.planned.planned_total, p.realised.total)}
+          <InfoTip term="closed_loop" />
         </p>
       ) : null}
       <div className="grid2">
         <Pareto
-          title="Benefit vs budget"
-          points={p.planned.pareto.map((r) => ({ x: r.budget, y: r.benefit, label: `${fmtInt(r.n_cells)} cells` }))}
-          realised={(p.frontier ?? []).map((f) => ({ x: f.budget, y: Math.abs(f.realised), label: "closed loop" }))}
+          title="Cooling for each budget"
+          points={p.planned.pareto.map((r) => ({ x: r.budget, y: r.benefit, label: `${fmtInt(r.n_cells)} places` }))}
+          realised={(p.frontier ?? []).map((f) => ({ x: f.budget, y: Math.abs(f.realised), label: CHECKED.toLowerCase() }))}
           selected={p.planned.pareto.findIndex((r) => r.budget === p.params.budget)}
           xLabel="Budget"
-          yLabel="Benefit"
-          yUnit={`${u}·cells`}
-          curveLabel="Planned (open loop)"
-          realisedLabel="Realised (exact closed loop)"
-          caption={p.frontier?.length ? "The closed-loop frontier comes from exact runs at each multiplier." : "Verify the frontier to add the exact closed-loop points."}
+          xUnit={COST_UNITS}
+          yLabel={term("total_cooling").label}
+          yUnit={placeDegrees(u)}
+          curveLabel={PLANNED}
+          realisedLabel={CHECKED}
+          caption={
+            <>
+              {p.frontier?.length
+                ? `The ${CHECKED.toLowerCase()} points come from ${term("exact_engine").label.toLowerCase()} runs at each budget.`
+                : `Check every budget to add the ${term("exact_engine").label.toLowerCase()}'s points.`}
+              <InfoTip term="pareto" />
+            </>
+          }
         />
         <section className="card">
           <h3>Parameters</h3>
           <dl className="kv">
-            <dt>Lever</dt>
+            <dt>What to change</dt>
             <dd>{p.params.lever}</dd>
             <dt>Budget</dt>
             <dd className="num">{fmtInt(p.params.budget)}</dd>
             <dt>Cost</dt>
             <dd>{"scalar" in p.params.cost ? `${fmtNum(p.params.cost.scalar, 2)} per unit` : p.params.cost.column}</dd>
-            <dt>Cap</dt>
-            <dd>{[p.params.cap.plantable ? "plantable headroom" : null, p.params.cap.region ? "region" : null].filter(Boolean).join(" + ") || "none"}</dd>
+            <dt>Limits</dt>
+            <dd>{[p.params.cap.plantable ? term("headroom").label.toLowerCase() : null, p.params.cap.region ? "one area" : null].filter(Boolean).join(" + ") || "none"}</dd>
             <dt>Objective</dt>
             <dd>{p.params.objective}</dd>
-            <dt>Equity</dt>
+            <dt>Who to favour</dt>
             <dd>{p.params.equity ? `${p.params.equity.source}${p.params.equity.column ? ` (${p.params.equity.column})` : ""}, focus ${fmtNum(p.params.equity.focus, 2)}` : "none"}</dd>
             <dt>Created</dt>
             <dd>{fmtDateTime(p.created_utc)}</dd>
           </dl>
           {p.realised ? (
             <p className="cap">
-              Exact result <span className="mono">{p.realised.result_id}</span> · mean ΔT in treated cells {fmtNum(p.realised.mean_treated, 3)} {u}
+              {term("exact_engine").label} result <span className="mono">{p.realised.result_id}</span> · average change in the treated places {fmtNum(p.realised.mean_treated, 3)} {u}
             </p>
           ) : null}
         </section>
       </div>
-      <DoseMap grid={grid} dose={dose} extra={extra} title={p.name} />
-      <FieldKitBlock plid={plid} name={p.name} unit={grid.meta.units.target} />
+      <DoseMap grid={grid} dose={dose} extra={extra} title={p.name} unit={amountUnit} />
+      <FieldKitBlock plid={plid} name={p.name} unit={grid.meta.units.target} amountUnit={amountUnit} />
     </div>
   );
 }
@@ -592,10 +704,10 @@ function PlanList({ rid }: { rid: string }) {
       rowKey={(p) => p.id}
       columns={[
         { key: "name", label: "Plan", value: (p) => p.name, render: (p) => <Link to={labHref(rid, `plans/${encodeURIComponent(p.id)}`)}>{p.name}</Link> },
-        { key: "lever", label: "Lever", value: (p) => p.params.lever },
+        { key: "lever", label: "What to change", value: (p) => p.params.lever },
         { key: "budget", label: "Budget", align: "right", value: (p) => p.params.budget, render: (p) => fmtInt(p.params.budget) },
-        { key: "planned", label: "Planned", align: "right", value: (p) => p.planned.planned_total, render: (p) => fmtNum(p.planned.planned_total, 1) },
-        { key: "realised", label: "Realised", align: "right", value: (p) => p.realised?.total ?? null, render: (p) => (p.realised ? fmtNum(p.realised.total, 1) : <Badge>not verified</Badge>) },
+        { key: "planned", label: PLANNED, align: "right", value: (p) => p.planned.planned_total, render: (p) => fmtNum(p.planned.planned_total, 1) },
+        { key: "realised", label: CHECKED, align: "right", value: (p) => p.realised?.total ?? null, render: (p) => (p.realised ? fmtNum(p.realised.total, 1) : <Badge>not checked</Badge>) },
         { key: "created", label: "Created", value: (p) => p.created_utc, render: (p) => fmtDateTime(p.created_utc) },
       ]}
       rows={plans.data ?? []}
@@ -625,7 +737,7 @@ export default function Plans() {
           <section className="composer-section" data-plan="run">
             <RunBudgetPlan
               title="Plan from this run"
-              intro="The run's own budget allocation (S7): where a fixed amount of the lever buys the most cooling. Read-only: make a new plan below to change it."
+              intro={`The run's own ${term("budget_plan").label.toLowerCase()}: ${term("budget_plan").tip.charAt(0).toLowerCase()}${term("budget_plan").tip.slice(1)} Read-only: make a new plan below to change it.`}
               actions={<Badge>read-only</Badge>}
             />
           </section>

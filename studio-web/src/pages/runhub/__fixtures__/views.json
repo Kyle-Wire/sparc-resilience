@@ -72,7 +72,7 @@
           "state": "missing",
           "produced_by": "stage:cv_curve",
           "view": "distance",
-          "action": { "kind": "run_job", "label": "Re-run with the CV curve", "method": "POST", "path": "/api/runs/r_fx/rerun", "body": {} }
+          "action": { "kind": "run_job", "label": "Re-run with the distance test", "method": "POST", "path": "/api/runs/r_fx/rerun", "body": {} }
         },
         { "id": "response_curves", "label": "Response curves", "group": "effects", "state": "present", "produced_by": "stage:S4", "view": "response", "action": null },
         { "id": "scenarios", "label": "Configured scenarios", "group": "decisions", "state": "present", "produced_by": "stage:S5", "view": "scenarios", "action": null },
@@ -1116,7 +1116,7 @@
         {
           "id": "how_hot",
           "title": "How hot it felt",
-          "text": "With a dewpoint of 16.7 °C (measured at PROVIDENCE, RI US during the campaign hours), the heat index on the campaign afternoon reached 94 °F in the hottest cell; the typical resident felt 89 °F.",
+          "text": "With a dew point of 62 °F (measured at PROVIDENCE, RI US during the campaign hours), the heat index on the campaign afternoon reached 94 °F in the hottest cell; the typical resident felt 89 °F.",
           "tone": "neutral"
         },
         {
@@ -1153,10 +1153,10 @@
         "needs_input": false,
         "rh_range": [35.4, 52.6],
         "presets": [
-          { "label": "Dry (10 °C)", "dewpoint_C": 10.0 },
-          { "label": "Typical summer (16 °C)", "dewpoint_C": 16.0 },
-          { "label": "Humid (21 °C)", "dewpoint_C": 21.0 },
-          { "label": "Oppressive (24 °C)", "dewpoint_C": 24.0 }
+          { "label": "Dry (dew point 50 °F)", "dewpoint_C": 10.0 },
+          { "label": "Typical summer (dew point 61 °F)", "dewpoint_C": 16.0 },
+          { "label": "Humid (dew point 70 °F)", "dewpoint_C": 21.0 },
+          { "label": "Oppressive (dew point 75 °F)", "dewpoint_C": 24.0 }
         ],
         "assumptions": {
           "constant_dewpoint": "moisture unchanged as it warms, so relative humidity falls (lower bound)",

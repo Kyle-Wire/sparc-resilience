@@ -9,26 +9,33 @@
 //   words (words.plainAdvice).
 // - The run button's label "Run full model (≈ 2 min)", why it cannot run yet, and whether the shown
 //   full-model result is up to date (then there is nothing new to run).
-// Words that are new here live in QUICK_WORDS until phase 4 folds them into the shared glossary.
+// The pane's own words live in QUICK_WORDS; repeated concepts (the hatch key, the heat-risk level, the
+// quick estimate and the full model's names) come from the shared glossary.
 import type { CompileResult, CompileWarning, EngineState, Lever, PreviewSummary, Result, ScenarioDoc } from "../../../api/lab";
+import { GLOSSARY, heatCategory, term } from "../../../content/glossary";
 import type { HeatShift } from "../../../theme/heat";
 import { fmtInt, fmtNum, fmtPct, fmtSignedValue, unitLabel } from "../../../theme/format";
 import type { ExactAdvice } from "../components/CompilePanel";
 import { LAB_WORDS, PREVIEW_TRUST_LINE, plainAdvice } from "./words";
 
-/** Words of the quick-estimate pane, the run block and the map's hatch key (phase 4: glossary). */
+/** The NWS level the heat-risk lines count from ("Extreme caution", glossary heat categories). */
+const EC = heatCategory("extreme_caution").label;
+
+/** Words of the quick-estimate pane and the run block. */
 export const QUICK_WORDS = {
   area: "Area changed",
   cost: "Estimated cost",
   costTip: "In the cost units set for this run (per unit of change in each place). Set them in Advanced options.",
   heat: "Heat risk",
+  /** Tooltip of the heat-risk line: what the level means. */
+  heatTip: `Residents (or places, without resident data) at ${EC} or worse on a hot afternoon today: a feels-like temperature of 90 °F or more.`,
   heatUnproven: "unproven",
   noChangeYet: "No places changed yet",
   noChangeYetHint: "None of the places you chose can take this change. Try another place or amount.",
   noNoticeable: "No noticeable change",
   wholeCity: "the whole city",
-  unavailable: "The quick estimate is not available right now.",
-  building: "Building the quick estimate…",
+  unavailable: `The ${term("emulator_preview").label.toLowerCase()} is not available right now.`,
+  building: `Building the ${term("emulator_preview").label.toLowerCase()}…`,
   needsChange: "Make a change first — pick what to change on the left.",
   unfinished: (n: number) => (n === 1 ? "1 change is not finished yet, so it is left out." : `${fmtInt(n)} changes are not finished yet, so they are left out.`),
   blocked: (changes: number[]) =>
@@ -37,11 +44,8 @@ export const QUICK_WORDS = {
       : `Some changes cannot run as set — see ${LAB_WORDS.advanced} for why.`,
 } as const;
 
-/** The map's hatch key: what the hatched places mean on the quick estimate and on a full-model layer. */
-export const HATCH_KEY = {
-  preview: { label: "Rough estimate here", note: "The quick estimate is less reliable in the hatched places. Run the full model for a firm answer." },
-  result: { label: "Less certain here", note: "Conditions in the hatched places go beyond anything measured in the city." },
-} as const;
+/** The map's hatch key: what the hatched places mean on the quick estimate and on a full-model layer (glossary). */
+export const HATCH_KEY: Readonly<Record<"preview" | "result", { label: string; note: string }>> = GLOSSARY.hatch;
 
 /** "a, b and c". */
 function listAnd(xs: string[]): string {
@@ -183,9 +187,9 @@ export function heatLine(shift: Pick<HeatShift, "ecBefore" | "ecAfter" | "measur
   const who = shift.measure === "people" ? "residents" : "places";
   const moved = Math.round(shift.ecBefore - shift.ecAfter);
   const n = (v: number) => fmtInt(v >= 1000 ? roundSig(v, 3) : v);
-  if (moved > 0) return `Moves about ${n(moved)} ${who} out of Extreme caution or worse`;
-  if (moved < 0) return `Puts about ${n(-moved)} more ${who} at Extreme caution or worse`;
-  return `No change in ${who} at Extreme caution or worse`;
+  if (moved > 0) return `Moves about ${n(moved)} ${who} out of ${EC} or worse`;
+  if (moved < 0) return `Puts about ${n(-moved)} more ${who} at ${EC} or worse`;
+  return `No change in ${who} at ${EC} or worse`;
 }
 
 // ---------------------------------------------------------------- trust

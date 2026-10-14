@@ -5,6 +5,8 @@ import { Axis, axisTitle } from "./Axis";
 import { ChartFrame, markProps, useChart, useChartWidth, type ChartTable, type FrameOptions } from "./ChartFrame";
 import { bandScale, extent, linearScale, niceDomain } from "./scales";
 import { fmtNum, fmtSigned } from "../theme/format";
+import { term } from "../content/glossary";
+import { Term } from "../components/ui/Term";
 
 export type DotRangeRow = {
   id: string;
@@ -52,14 +54,20 @@ export function dotRangeTable(p: Pick<DotRangeProps, "rows" | "valueLabel" | "un
   };
 }
 
+/** The longest row label shown in full; longer ones end in "…" (the full label is in the mark's readout). */
+const LABEL_CHARS = 40;
+
 function Plot(p: DotRangeProps) {
   const ctx = useChart();
   const auto = useChartWidth(640);
   const W = p.width ?? auto;
-  // Row labels get the room they need (≈ 6.5 px a character), up to 170 px, so narrow small-multiple
-  // panels with a short label keep a usable plot width.
+  // Row labels get the room they need (≈ 6.5 px a character): up to 40 characters on a wide chart
+  // (so "Cool roofs & surfaces +0.05 reflectivity" keeps the amount that tells two scenarios apart),
+  // up to 170 px on a narrow one, so small-multiple panels with a short label keep a usable plot width.
   const longest = Math.max(0, ...p.rows.map((r) => r.label.length));
-  const M = { top: 8, right: 20, bottom: 44, left: Math.min(170, Math.max(56, Math.round(longest * 6.5) + 16)) };
+  const maxLeft = Math.max(170, Math.min(LABEL_CHARS * 6.5 + 16, Math.round(W * 0.45)));
+  const M = { top: 8, right: 20, bottom: 44, left: Math.min(maxLeft, Math.max(56, Math.round(longest * 6.5) + 16)) };
+  const cut = Math.min(LABEL_CHARS, Math.max(26, Math.floor((M.left - 16) / 6.5)));
   const H = M.top + M.bottom + p.rows.length * 28;
   const vals = p.rows.flatMap((r) => [r.est, r.lo, r.hi, r.lo2, r.hi2, r.check?.est, r.check?.lo, r.check?.hi, ...(r.strip ?? [])]);
   const e = extent(vals) ?? [0, 1];
@@ -73,14 +81,14 @@ function Plot(p: DotRangeProps) {
       <Axis scale={sx} orient="bottom" at={H - M.bottom} grid={H - M.top - M.bottom} title={axisTitle(p.valueLabel, p.unit)} signed={p.signed} />
       {p.rows.map((r) => (
         <text key={`t${r.id}`} className="t-label" x={M.left - 8} y={band(r.id) + band.bandwidth / 2} dy="0.32em" textAnchor="end" aria-hidden="true">
-          {r.label.length > 26 ? r.label.slice(0, 25) + "…" : r.label}
+          {r.label.length > cut ? r.label.slice(0, cut - 1) + "…" : r.label}
         </text>
       ))}
       {dom[0] < 0 && dom[1] > 0 ? <line className="zero" x1={sx(0)} x2={sx(0)} y1={M.top} y2={H - M.bottom} /> : null}
       {p.rows.map((r) => {
         const cy = band(r.id) + band.bandwidth / 2;
         const color = r.muted ? "var(--gray-mark)" : "var(--s1)";
-        const label = `${r.label}: ${f(r.est)}${p.unit ? " " + p.unit : ""}${r.lo !== undefined && r.lo !== null && r.hi !== undefined && r.hi !== null ? `, ${p.rangeLabel ?? "likely range"} ${f(r.lo)} to ${f(r.hi)}` : ""}${r.hollow ? ", extrapolated" : ""}${r.check ? `, independent check ${f(r.check.est)}` : ""}`;
+        const label = `${r.label}: ${f(r.est)}${p.unit ? " " + p.unit : ""}${r.lo !== undefined && r.lo !== null && r.hi !== undefined && r.hi !== null ? `, ${p.rangeLabel ?? "likely range"} ${f(r.lo)} to ${f(r.hi)}` : ""}${r.hollow ? `, ${term("extrapolated").label.toLowerCase()} (extrapolated)` : ""}${r.check ? `, ${term("causal_band").label.toLowerCase()} ${f(r.check.est)}` : ""}`;
         return (
           <g key={r.id}>
             {(r.strip ?? []).map((v, i) => (
@@ -122,7 +130,7 @@ export function DotRange(props: DotRangeProps) {
     <>
       <span>
         <i style={{ background: "var(--s1)", height: 4 }} />
-        {props.rangeLabel ?? "Likely range"}
+        {props.rangeLabel ?? <Term id="interval_95" />}
       </span>
       {props.rows.some((r) => r.lo2 !== undefined && r.lo2 !== null) ? (
         <span>
@@ -130,11 +138,15 @@ export function DotRange(props: DotRangeProps) {
           {props.outerLabel ?? "Outer range"}
         </span>
       ) : null}
-      {props.rows.some((r) => r.hollow) ? <span>○ hollow = more than 20% of cells extrapolated</span> : null}
+      {props.rows.some((r) => r.hollow) ? (
+        <span>
+          ○ hollow = more than 20% of places <Term id="extrapolated">{term("extrapolated").label.toLowerCase()}</Term>
+        </span>
+      ) : null}
       {props.rows.some((r) => r.check) ? (
         <span>
           <i className="box" style={{ background: "var(--s2)", transform: "rotate(45deg)" }} />
-          independent causal check
+          <Term id="causal_band" />
         </span>
       ) : null}
     </>

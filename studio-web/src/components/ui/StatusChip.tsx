@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
+import { useTipOn } from "./useTipOn";
 
 /** Status token families (CSS --st-*). */
 export type StatusTone = "queued" | "running" | "done" | "cached" | "skipped" | "failed" | "cancelled" | "interrupted" | "stale" | "blocked" | "missing";
@@ -43,15 +44,15 @@ export const STATUS: Record<string, StatusInfo> = {
   missing: { tone: "missing", icon: "minus", text: "missing" },
   stale: { tone: "stale", icon: "alert", text: "stale" },
   not_run: { tone: "missing", icon: "minus", text: "not run" },
-  // engine
-  no_checkpoint: { tone: "missing", icon: "ban", text: "no checkpoint" },
-  cold: { tone: "queued", icon: "dot", text: "cold" },
+  // engine (plain words: a "checkpoint" is the run's saved models, a "cold" engine is not loaded yet)
+  no_checkpoint: { tone: "missing", icon: "ban", text: "no saved models" },
+  cold: { tone: "queued", icon: "dot", text: "not loaded" },
   loading: { tone: "running", icon: "hourglass", text: "loading", pulse: true },
   busy: { tone: "running", icon: "bolt", text: "busy", pulse: true },
-  incompatible: { tone: "failed", icon: "alert", text: "incompatible" },
+  incompatible: { tone: "failed", icon: "alert", text: "not available" },
   error: { tone: "failed", icon: "x", text: "error" },
-  absent: { tone: "queued", icon: "dot", text: "not started" },
-  recycling: { tone: "running", icon: "refresh", text: "recycling", pulse: true },
+  absent: { tone: "queued", icon: "dot", text: "starts when needed" },
+  recycling: { tone: "running", icon: "refresh", text: "restarting", pulse: true },
 };
 
 export function statusInfo(status: string | null | undefined): StatusInfo {
@@ -65,19 +66,29 @@ export type StatusChipProps = {
   text?: ReactNode;
   /** Extra detail after the text: duration, percentage, reason. */
   meta?: ReactNode;
+  /**
+   * What the status means here, in a tooltip (hover, keyboard focus or tap): the chip becomes
+   * focusable. Never a native title.
+   */
+  tip?: ReactNode;
+  /** @deprecated Use `tip`: the same tooltip (no longer a native title). */
   title?: string;
 };
 
 /** Icon + text status chip coloured by the --st-* tokens. Pulses only without reduced motion. */
-export function StatusChip({ status, text, meta, title }: StatusChipProps) {
+export function StatusChip({ status, text, meta, tip, title }: StatusChipProps) {
   const info = statusInfo(status);
   const reduced = prefersReducedMotion();
+  const t = useTipOn<HTMLSpanElement>(tip ?? title);
   return (
-    <span className="status" data-st={info.tone} data-pulse={info.pulse && !reduced ? "true" : undefined} title={title}>
-      <Icon name={info.icon} />
-      <span>{text ?? info.text}</span>
-      {meta !== undefined && meta !== null && meta !== "" ? <span className="meta">{meta}</span> : null}
-    </span>
+    <>
+      <span ref={t.ref} className="status" data-st={info.tone} data-pulse={info.pulse && !reduced ? "true" : undefined} tabIndex={t.on ? 0 : undefined} {...t.props()}>
+        <Icon name={info.icon} />
+        <span>{text ?? info.text}</span>
+        {meta !== undefined && meta !== null && meta !== "" ? <span className="meta">{meta}</span> : null}
+      </span>
+      {t.bubble}
+    </>
   );
 }
 

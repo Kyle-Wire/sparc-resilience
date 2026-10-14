@@ -1,4 +1,5 @@
-import { useId, useMemo, useRef, type KeyboardEvent } from "react";
+import { useId, useMemo, useRef, type KeyboardEvent, type ReactNode } from "react";
+import { useTipOn } from "./useTipOn";
 
 export type LineIssue = { line: number; level: "error" | "warn" | "info"; message: string };
 
@@ -17,6 +18,20 @@ export type CodeAreaProps = {
  * Monospace editor (a textarea) with line numbers and an issue gutter. Tab inserts two
  * spaces; Escape then Tab leaves the field (keyboard users are never trapped).
  */
+/**
+ * A gutter line number; a line with issues shows them in a tooltip on hover or tap (the gutter is
+ * hidden from screen readers, which read the issue list below the editor instead).
+ */
+function GutterLine({ level, tip, children }: { level: string | undefined; tip: string | null; children: ReactNode }) {
+  const t = useTipOn<HTMLDivElement>(tip, { describe: false });
+  return (
+    <div ref={t.ref} data-level={level} {...t.props()}>
+      {children}
+      {t.bubble}
+    </div>
+  );
+}
+
 export function CodeArea({ value, onChange, label, issues = [], readOnly, rows = 24, spellCheck = false }: CodeAreaProps) {
   const id = useId();
   const gutter = useRef<HTMLDivElement>(null);
@@ -50,10 +65,10 @@ export function CodeArea({ value, onChange, label, issues = [], readOnly, rows =
           const iss = byLine.get(i + 1);
           const lvl = iss?.some((x) => x.level === "error") ? "error" : iss?.some((x) => x.level === "warn") ? "warn" : iss ? "info" : undefined;
           return (
-            <div key={i} data-level={lvl} title={iss?.map((x) => x.message).join("\n")}>
+            <GutterLine key={i} level={lvl} tip={iss?.map((x) => x.message).join("\n") ?? null}>
               {lvl === "error" ? "✕" : lvl === "warn" ? "!" : ""}
               {i + 1}
-            </div>
+            </GutterLine>
           );
         })}
       </div>

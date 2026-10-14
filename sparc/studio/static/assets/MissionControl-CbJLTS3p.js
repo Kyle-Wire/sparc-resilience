@@ -1,0 +1,1 @@
+import{E as e,v as t}from"./router-DHKqHTn4.js";import{t as n}from"./JobTracker-CXGRCJUU.js";var r=e();function i(){let{params:e}=t();return e.jid?(0,r.jsx)(n,{jid:e.jid},e.jid):null}export{i as default};

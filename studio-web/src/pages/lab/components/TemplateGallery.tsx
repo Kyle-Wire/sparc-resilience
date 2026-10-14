@@ -19,6 +19,7 @@ import { toast } from "../../../stores/ui";
 import { fmtInt } from "../../../theme/format";
 import { parseSites } from "../model/library";
 import { LAB_WORDS } from "../model/words";
+import { Tip } from "./Tip";
 
 /** What each requirement means for a planner (the data the example needs). */
 export const REQ_TEXT: Record<string, string> = {
@@ -216,9 +217,9 @@ function TemplateCard({ t, pid, rid, levers, context, onCreated }: { t: Scenario
       <header className="template-head">
         <h3>{templateTitle(t)}</h3>
         {/* one line on the compact card (the whole sentence in its tooltip); in full once opened */}
-        <p className="cap template-desc" title={open ? undefined : desc}>
-          {desc}
-        </p>
+        <Tip tip={open ? null : desc} className="template-desc-tip">
+          <p className="cap template-desc">{desc}</p>
+        </Tip>
       </header>
       {lacking.length ? (
         <p className={missing ? "callout" : "cap"} data-tone={missing ? "crit" : undefined} data-unavailable="true">
@@ -241,17 +242,11 @@ function TemplateCard({ t, pid, rid, levers, context, onCreated }: { t: Scenario
           </div>
         </div>
       ) : (
-        <Button
-          size="small"
-          variant="ghost"
-          className="template-start"
-          onClick={() => setOpen(true)}
-          disabled={!pid}
-          title={pid ? undefined : "Open the run from its project to create scenarios"}
-          aria-label={`Start from this: ${templateTitle(t)}`}
-        >
-          Start from this
-        </Button>
+        <Tip tip={pid ? null : "Open the run from its project to create scenarios"} className="template-start-tip">
+          <Button size="small" variant="ghost" className="template-start" onClick={() => setOpen(true)} disabled={!pid} aria-label={`Start from this: ${templateTitle(t)}`}>
+            Start from this
+          </Button>
+        </Tip>
       )}
     </article>
   );

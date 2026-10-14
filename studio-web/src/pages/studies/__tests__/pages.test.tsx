@@ -130,6 +130,13 @@ describe("Validation tab", () => {
     // uncertainty layered intervals, benchmark shares
     expect(card("uncertainty").textContent).toContain("Layered intervals per scenario");
     expect(card("benchmark").textContent).toContain("Stacked share: Standard 0.72, Spatial+ (MGWR) 0.78");
+    // plain words (phase 4): no native titles; each card's intro ends with the check's glossary ⓘ,
+    // and the technical result views explain their jargon headings
+    for (const c of cards) expect(c.querySelector("[title]"), c.getAttribute("data-kind") ?? "").toBeNull();
+    expect(card("placebo").querySelector<HTMLElement>("p.cap button.infotip")!.dataset.term).toBe("placebo");
+    expect(card("simcheck").querySelector<HTMLElement>('[aria-label="Bias correction"] button.infotip')!.dataset.term).toBe("bias_correction");
+    expect(card("simcheck").querySelector<HTMLElement>('[aria-label="False positives"] button.infotip')!.dataset.term).toBe("false_positive");
+    expect([...card("multiverse").querySelectorAll<HTMLElement>("button.infotip")].map((b) => b.dataset.term)).toEqual(expect.arrayContaining(["kendall_tau", "multiverse"]));
     // planner: requirements missing → launch disabled with the server's item
     const planner = card("planner");
     expect((planner.querySelector('[data-launch="planner"]') as HTMLButtonElement).disabled).toBe(true);
@@ -233,7 +240,9 @@ describe("Studies hub", () => {
     await waitFor(() => container.querySelector('[aria-label="Project studies"]'), 3000, "list");
     const list = container.querySelector('[aria-label="Project studies"]')!;
     expect([...list.querySelectorAll("tbody tr")].map((r) => r.getAttribute("data-study"))).toEqual(["st_p", "st_b", "st_old"]);
-    expect(list.textContent).toContain("stale vs 1 run");
+    expect(list.textContent).toContain("out of date for 1 run");
+    // tooltips in place of native titles (a cell's reason, a study's start time)
+    expect(container.querySelector("[title]")).toBeNull();
     expect(container.textContent).toContain("Last run:");
     const bench = container.querySelector('[aria-label="Effect benchmark"]')!;
     await waitFor(() => bench.querySelector('[aria-label="Estimated cost"]'), 3000, "estimate");

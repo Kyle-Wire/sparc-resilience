@@ -51,14 +51,22 @@ __all__ = ["LayerDef", "layer_defs", "layer_array", "layer_catalog", "layer_meta
 
 LAYER_CACHE = LRU(256 * 1024 ** 2)
 GROUP_LABELS = OrderedDict([
-    ("temperature", "Temperature"), ("inputs", "Inputs"), ("cv", "CV design"), ("effects", "Effects"),
-    ("causal", "Causal"), ("scenarios", "Scenarios (configured)"), ("budget", "Budget"),
-    ("planner", "Planner & people"), ("heat", "Heat stress"), ("studio_results", "Studio results"), ("studio_plans", "Budget plans"),
+    ("temperature", "Temperature"), ("inputs", "Inputs"), ("cv", "Test areas"), ("effects", "Effects"),
+    ("causal", "Cause-and-effect check"), ("scenarios", "Scenarios set up with this run"), ("budget", "Budget"),
+    ("planner", "Planner & people"), ("heat", "Heat risk"), ("studio_results", "Studio results"), ("studio_plans", "Budget plans"),
     ("studio_compare", "Comparisons"),
 ])
-CLS_LABELS = ["censored or too little headroom", "saturating", "linear", "S-shaped"]
+# Plain words of the curve shapes, matching the glossary `shapes` and the What cools tab (code order:
+# 0 censored, 1 saturating, 2 linear, 3 sigmoid).
+CLS_LABELS = ["Hit the limit", "Diminishing returns", "Steady returns", "Slow start, then strong"]
 _COOLER = "negative = cooler"
 _BENEFIT = "positive = cooler"
+
+
+def plain_unit(unit: str) -> str:
+    """A lever unit as planner pages write it: percentage points ("pp") are "pts" (glossary lever unitWord), so
+    the Lab, What cools, the plans and the map legends name one unit one way."""
+    return "pts" if unit == "pp" else unit
 
 
 @dataclass
@@ -82,6 +90,18 @@ class LayerDef:
     palette: str | None = None                                 # cat colour set ("heat")
 
 
+def _lever_name(var: str, levers: dict[str, dict]) -> str:
+    """The plain name of lever ``var`` from the glossary ("Trees & canopy"), else its catalogue label."""
+    from sparc.core.glossary import section
+
+    plain = section("levers")
+    info = levers.get(var) or {}
+    for k in (info.get("role"), var):
+        if k and str(k).lower() in plain:
+            return plain[str(k).lower()]["name"]
+    return info.get("label") or var.replace("_", " ")
+
+
 def lever_info(ctx) -> dict[str, dict]:
     """``{var: {unit, label, direction, albedo_like, role}}`` of the actionable levers."""
     from sparc.core.catalog import unit_label
@@ -98,6 +118,36 @@ def lever_info(ctx) -> dict[str, dict]:
         out[var] = {"unit": unit or "units", "label": spec.get("label") or var.replace("_", " "),
                     "direction": str(spec.get("direction", "increase")), "albedo_like": bool(albedo_like),
                     "role": roles.get(var)}
+    return out
+
+
+def scenario_labels(ctx) -> dict[str, str]:
+    """Plain display labels of the configured ladder scenarios, by their config name: the lever's plain name and
+    the signed amount in its unit word ("Canopy Increase +5" → "Trees & canopy +5 pts", "Impervious Decrease −10"
+    → "Less paving −10 pts", "Albedo Increase +0.1" → "Cool roofs & surfaces +0.1 reflectivity"), so the Library, Compare and
+    the climate adaptations never bring back "impervious" or "albedo". Joint scenarios keep their configured
+    names (they are not in the map); names and slugs are unchanged."""
+    from sparc.core.scenarios import specs_from_config
+
+    try:
+        specs = specs_from_config(ctx.cfg) if ctx.cfg is not None else []
+    except Exception:  # noqa: BLE001 - a config the reader cannot parse leaves the names as they are
+        return {}
+    levers = lever_info(ctx)
+    out: dict[str, str] = {}
+    for s in specs:
+        if s.variable is None or s.dose is None or len(s.interventions) != 1:
+            continue
+        info = levers.get(s.variable) or {}
+        unit = str(info.get("unit") or "")
+        # a 0–1 reflectivity names what the amount is ("Cool roofs & surfaces +0.1 reflectivity", so +0.05 and +0.1
+        # read as amounts of something); a lever without a unit reads as a bare number
+        word = ("reflectivity" if info.get("albedo_like") or unit == "albedo"
+                else "" if unit in ("", "units", "1") else plain_unit(unit))
+        amt = float(s.interventions[0].amount)
+        sign = "+" if amt > 0 else "−" if amt < 0 else ""
+        num = f"{sign}{abs(amt):g}"
+        out[s.name] = f"{_lever_name(s.variable, levers)} {num}{'%' if word == '%' else f' {word}' if word else ''}"
     return out
 
 
@@ -152,35 +202,37 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
         if "target" in cols:
             add(LayerDef("obs", "temperature", "Observed temperature", tu, "div", col("target"),
                          {"file": "predictions.parquet", "column": "target"}, center="median", decimals=1,
-                         desc="The measured temperature of each cell.", sources=("predictions.parquet",)))
+                         desc="The measured temperature in each place.", sources=("predictions.parquet",)))
         if "pred" in cols:
-            add(LayerDef("pred", "temperature", "Predicted temperature (held out)", tu, "div", col("pred"),
+            add(LayerDef("pred", "temperature", "Predicted temperature (tested on unseen places)", tu, "div", col("pred"),
                          {"file": "predictions.parquet", "column": "pred"}, center="median_obs", decimals=1,
-                         desc="Out-of-fold stacked prediction: each cell predicted by a model that never saw its block.",
+                         desc="Each place predicted by a model trained without its test area, so it never saw that place.",
                          sources=("predictions.parquet",)))
         if {"target", "pred"} <= cols:
-            add(LayerDef("resid", "temperature", "Residual (observed − predicted)", tu, "div",
+            add(LayerDef("resid", "temperature", "Prediction miss (measured − predicted)", tu, "div",
                          lambda: _f32(ctx.predictions["target"].to_numpy(float) - ctx.predictions["pred"].to_numpy(float)),
                          {"file": "predictions.parquet", "column": "target-pred"}, center=0.0,
-                         desc="Held-out error of the stack.", sign_note="positive = warmer than predicted",
+                         desc="How far the measured temperature is from the prediction, in places the model never saw.",
+                         sign_note="positive = warmer than predicted",
                          sources=("predictions.parquet",)))
         if {"pi_hi", "pred"} <= cols:
-            add(LayerDef("halfwidth", "temperature", "Interval half-width", tu, "seq",
+            add(LayerDef("halfwidth", "temperature", "Likely range: ± how much", tu, "seq",
                          lambda: _f32(ctx.predictions["pi_hi"].to_numpy(float) - ctx.predictions["pred"].to_numpy(float)),
                          {"file": "predictions.parquet", "column": "pi_hi-pred"},
-                         desc="Half-width of the conformal prediction interval (global).",
+                         desc="How far either side of the prediction the real temperature probably lies (the same everywhere).",
                          sources=("predictions.parquet",)))
         if {"pi_hi_adaptive", "pred"} <= cols:
-            add(LayerDef("halfwidth_adaptive", "temperature", "Interval half-width (distance-adaptive)", tu, "seq",
+            add(LayerDef("halfwidth_adaptive", "temperature", "Likely range: ± how much, wider far from readings", tu, "seq",
                          lambda: _f32(ctx.predictions["pi_hi_adaptive"].to_numpy(float)
                                       - ctx.predictions["pred"].to_numpy(float)),
                          {"file": "predictions.parquet", "column": "pi_hi_adaptive-pred"},
-                         desc="Half-width of the interval that widens away from training data.",
+                         desc="How far either side of the prediction the real temperature probably lies; wider far from the readings.",
                          sources=("predictions.parquet",)))
         if "dist_train_m" in cols:
-            add(LayerDef("dist_train_m", "temperature", "Distance to training data", "m", "seq",
+            add(LayerDef("dist_train_m", "temperature", "Distance to the nearest reading", "m", "seq",
                          col("dist_train_m"), {"file": "predictions.parquet", "column": "dist_train_m"}, decimals=0,
-                         desc="Distance from each cell to the nearest training point of its fold.",
+                         desc="How far each place is from the nearest reading the model learned from. Farther means "
+                              "less certain.",
                          sources=("predictions.parquet",)))
         for c in sorted(c for c in cols if c.startswith("oof_")):
             m = c[4:]
@@ -208,7 +260,7 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
                 [c for c in cols if c not in levers and c not in role_of]
         for c in order:
             lab = levers.get(c, {}).get("label") or c.replace("_", " ")
-            unit = levers.get(c, {}).get("unit") or ("pp" if role_of.get(c) in ("canopy", "impervious") else "")
+            unit = plain_unit(levers.get(c, {}).get("unit") or ("pp" if role_of.get(c) in ("canopy", "impervious") else ""))
             if c in cats:
                 vals = data.frame[c].to_numpy()
                 levels = [str(v) for v in sorted(set(vals.tolist()), key=str)]
@@ -235,14 +287,14 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
     # ---------------------------------------------------------------- CV design
     if pred is not None and "fold" in pred.columns:
         k = int(np.nanmax(pred["fold"].to_numpy())) + 1 if len(pred) else 0
-        add(LayerDef("fold", "cv", "CV fold", "", "cat",
+        add(LayerDef("fold", "cv", "Test area", "", "cat",
                      lambda: np.asarray(ctx.predictions["fold"].to_numpy(), dtype=np.int64).clip(0, 255).astype(np.uint8),
                      {"file": "predictions.parquet", "column": "fold"}, labels=[f"Fold {i + 1}" for i in range(k)],
-                     dtype="uint8", decimals=0, desc="Spatial CV fold that holds each cell out.",
+                     dtype="uint8", decimals=0, desc="The test area each place belongs to: the model is trained without it and tested on it.",
                      sources=("predictions.parquet",)))
     elif ctx.folds is not None:
         k = ctx.folds.n_folds
-        add(LayerDef("fold", "cv", "CV fold", "", "cat", lambda: ctx.folds.fold_id.astype(np.uint8), None,
+        add(LayerDef("fold", "cv", "Test area", "", "cat", lambda: ctx.folds.fold_id.astype(np.uint8), None,
                      labels=[f"Fold {i + 1}" for i in range(k)], dtype="uint8", decimals=0))
 
     # ---------------------------------------------------------------- effects per lever
@@ -261,13 +313,13 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
             return lambda: _f32(ctx.parquet(rel)[c].to_numpy(float))
 
         spec = [
-            (f"fp_{var}", "footprint_effect_per_unit", f"Cooling footprint: {info['label']}", f"{tu}·cells {per}", "div",
+            (f"fp_{var}", "footprint_effect_per_unit", f"Cooling footprint: {info['label']}", f"{tu}·places {per}", "div",
              0.0, mult, "Total ΔT across the neighbourhood when this cell's lever rises by one unit.", _COOLER),
             (f"own_{var}", "own_effect_per_unit", f"Own-cell effect: {info['label']}", f"{tu} {per}", "div", 0.0, mult,
              "ΔT of the cell itself per unit of its own lever.", _COOLER),
             (f"own_sd_{var}", "own_effect_sd", f"Own-cell effect SD: {info['label']}", f"{tu} {per}", "seq", None, mult,
              "Fold-to-fold spread of the own-cell effect.", None),
-            (f"fp_sd_{var}", "footprint_effect_sd", f"Footprint SD: {info['label']}", f"{tu}·cells {per}", "seq", None,
+            (f"fp_sd_{var}", "footprint_effect_sd", f"Footprint SD: {info['label']}", f"{tu}·places {per}", "seq", None,
              mult, "Fold-to-fold spread of the footprint effect.", None),
             (f"marg_{var}", "marginal_benefit_per_unit", f"Marginal cooling: {info['label']}", f"{tu} {per}", "seq",
              None, mult, "Cooling per extra unit at today's level (neighbourhood adoption).", _BENEFIT),
@@ -289,10 +341,10 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
                 add(LayerDef(key, "effects", label, unit, scale, rc(c), {"file": rel, "column": c}, center=center,
                              mult=m, desc=desc, sign_note=sign, decimals=3 if scale == "div" else 2, sources=(rel,)))
         if "curve_model" in cols:
-            add(LayerDef(f"cls_{var}", "effects", f"Curve shape: {info['label']}", "", "cat",
+            add(LayerDef(f"cls_{var}", "effects", f"How cooling builds up: {info['label']}", "", "cat",
                          (lambda rel=rel: _curve_class(ctx.parquet(rel))), {"file": rel, "column": "curve_model"},
                          labels=list(CLS_LABELS), dtype="uint8", decimals=0, sources=(rel,),
-                         desc="Fitted dose-response shape per cell (grey: censored or too little headroom)."))
+                         desc="How each place's cooling builds up as more is added (grey: hit the limit, still cooling at the most the space allows)."))
 
     # ---------------------------------------------------------------- causal
     cc = ctx.parquet("causal_cells.parquet")
@@ -327,36 +379,37 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
             add(LayerDef(f"sc:{slug}", "scenarios", nm, tu, "div",
                          (lambda nm=nm: _f32(ctx.parquet("scenario_deltas.parquet")[nm].to_numpy(float))),
                          {"file": "scenario_deltas.parquet", "column": nm}, center=0.0, decimals=2,
-                         desc=f"ΔT of the configured scenario “{nm}”.", sign_note=_COOLER,
+                         desc=f"The temperature change of the scenario “{nm}” in each place.", sign_note=_COOLER,
                          sources=("scenario_deltas.parquet",)))
             if detail and nm in detail["sd"]:
-                add(LayerDef(f"sc_sd:{slug}", "scenarios", f"{nm}: fold SD", tu, "seq",
+                add(LayerDef(f"sc_sd:{slug}", "scenarios", f"{nm}: spread between test areas", tu, "seq",
                              (lambda nm=nm: _f32(ctx.scenario_detail()["sd"][nm])),
                              {"file": "scenario_detail.npz", "column": f"sd ({nm})"}, decimals=3,
-                             desc="Fold-to-fold spread of ΔT.", sources=("scenario_detail.npz",)))
+                             desc="How much the temperature change moves between the models trained on different test areas.",
+                             sources=("scenario_detail.npz",)))
             if detail and nm in detail["ex"]:
-                add(LayerDef(f"sc_ex:{slug}", "scenarios", f"{nm}: extrapolation", "1", "seq",
+                add(LayerDef(f"sc_ex:{slug}", "scenarios", f"{nm}: beyond measured conditions", "1", "seq",
                              (lambda nm=nm: _f32(ctx.scenario_detail()["ex"][nm])),
                              {"file": "scenario_detail.npz", "column": f"ex ({nm})"}, decimals=2,
-                             desc="Extrapolation score (> 1 = outside observed conditions).",
+                             desc="How far the scenario pushes each place past what was measured in the city (above 1 = beyond).",
                              sources=("scenario_detail.npz",)))
 
     # ---------------------------------------------------------------- budget
     al = ctx.parquet("allocation.parquet")
     if al is not None:
         var = (ctx.cfg_raw.get("optimize") or {}).get("variable")
-        lu = (levers.get(var) or {}).get("unit", "units")
+        lu = plain_unit((levers.get(var) or {}).get("unit", "units"))
         if "dose" in al.columns:
-            add(LayerDef("alloc_dose", "budget", f"Planned dose{': ' + var if var else ''}", lu, "seq",
+            add(LayerDef("alloc_dose", "budget", f"Planned amount{': ' + _lever_name(var, levers) if var else ''}", lu, "seq",
                          lambda: _f32(ctx.parquet("allocation.parquet")["dose"].to_numpy(float)),
                          {"file": "allocation.parquet", "column": "dose"}, zero_blank=True, decimals=1,
-                         desc="Budget allocation of S7 (cells without a dose are blank).",
+                         desc="How much the budget plan adds in each place (blank = nothing added).",
                          sources=("allocation.parquet",)))
         if "closed_loop_delta" in al.columns:
-            add(LayerDef("alloc_delta", "budget", "Allocation ΔT (closed loop)", tu, "div",
+            add(LayerDef("alloc_delta", "budget", "Checked cooling of the plan (full model)", tu, "div",
                          lambda: _f32(ctx.parquet("allocation.parquet")["closed_loop_delta"].to_numpy(float)),
                          {"file": "allocation.parquet", "column": "closed_loop_delta"}, center=0.0,
-                         desc="ΔT of the whole allocation run through the model.", sign_note=_COOLER,
+                         desc="The temperature change when the whole plan is run through the full model.", sign_note=_COOLER,
                          sources=("allocation.parquet",)))
 
     # ---------------------------------------------------------------- planner & people
@@ -406,8 +459,8 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
         add(LayerDef("heat_index", "heat", "Heat index (NWS), campaign afternoon", "°F", "seq",
                      lambda: _f32(heatv.today_heat_index(ctx)),
                      {"file": "predictions.parquet", "column": "target"}, decimals=1, sources=hsrc,
-                     desc=f"Apparent temperature from each cell's air temperature and the campaign dewpoint "
-                          f"({td:.1f} °C, {td_src}): the US National Weather Service heat index."))
+                     desc=f"Feels-like temperature from each place's air temperature and the campaign dew point "
+                          f"({td * 9 / 5 + 32:.0f} °F, {td_src}): the US National Weather Service heat index."))
         add(LayerDef("heat_cat", "heat", "Heat-risk category (NWS)", "", "cat",
                      lambda: category_codes(heatv.today_heat_index(ctx)).astype(np.uint8),
                      {"file": "predictions.parquet", "column": "target"}, labels=[c[1] for c in CATEGORIES],
@@ -421,8 +474,8 @@ def _build_defs(ctx) -> "OrderedDict[str, LayerDef]":
                          lambda: _f32(heatv.adapted_heat_index(ctx)),
                          {"file": "scenario_deltas.parquet", "column": pkg}, decimals=1,
                          sources=hsrc + ("scenario_deltas.parquet",),
-                         desc="The campaign afternoon's heat index after the adaptation package's modelled cooling, "
-                              "same dewpoint."))
+                         desc="The campaign afternoon's heat index after the cooling package's modelled cooling, "
+                              "same humidity."))
             add(LayerDef("heat_cat_pkg", "heat", f"Heat-risk category with {pkg}", "", "cat",
                          lambda: category_codes(heatv.adapted_heat_index(ctx)).astype(np.uint8),
                          {"file": "scenario_deltas.parquet", "column": pkg}, labels=[c[1] for c in CATEGORIES],
@@ -575,7 +628,7 @@ def _studio_layer_defs(ctx) -> list[LayerDef]:
                 elif not (pdir / f"{field_}.npy").exists():
                     continue
                 out.append(LayerDef(f"plan:{plid}:{field_}", "studio_plans", f"{name}: {label}",
-                                    "" if field_ == "dose" else f"{tu}·cells" if field_ == "planned_benefit" else tu,
+                                    "" if field_ == "dose" else f"{tu}·places" if field_ == "planned_benefit" else tu,
                                     scale,
                                     (lambda k=f"plan:{plid}:{field_}": resolve_layer(ctx, k)),
                                     {"file": f"studio/plans/{plid}", "column": field_},

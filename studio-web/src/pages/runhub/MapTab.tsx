@@ -13,6 +13,7 @@ import { isFinishedRun, type LayerGroup, type LayerMeta } from "../../api/types"
 import { Chips } from "../../components/ui/Chips";
 import { Drawer } from "../../components/ui/Drawer";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Seg } from "../../components/ui/Seg";
 import { Tabs } from "../../components/ui/Tabs";
 import { Inspector, type CellInfo } from "../../map/Inspector";
@@ -20,9 +21,10 @@ import { MapView, type CompareMode, type MapSelectionEvent } from "../../map/Map
 import type { OverlayFeature } from "../../map/Overlay";
 import type { PickMode } from "../../map/tools/pick";
 import type { ToolId } from "../../map/tools/types";
-import { runLayerLoader, useRunGrid, useRunLayers, type LayerValues } from "../../map/data";
+import { runLayerLoader, useRunGrid, useRunLayers, withoutPerModelLayers, type LayerValues } from "../../map/data";
 import { rowAt, type GridData } from "../../map/grid";
 import { runIsLive } from "../../layouts/resources";
+import { TipSpan } from "../../layouts/tips";
 import { codecs, useUrlState } from "../../router";
 import { useRunSelection, type RunSelection } from "../../stores/selection";
 import { fmtInt, unitLabel } from "../../theme/format";
@@ -37,7 +39,16 @@ import { selectMask, selectionText, type ToolProps } from "./tools/shared";
 const MODES: readonly CompareMode[] = ["none", "swipe", "side", "diff"];
 const TOOLS = ["region", "breakdown", "relationships", "correlogram"] as const;
 type ToolTab = (typeof TOOLS)[number];
-const TOOL_LABEL: Record<ToolTab, string> = { region: "Region stats", breakdown: "Breakdown", relationships: "Relationships", correlogram: "Correlogram" };
+/** The analysis tools in plain words (tab labels); what each does is in TOOL_TIP. */
+const TOOL_LABEL: Record<ToolTab, string> = { region: "Area summary", breakdown: "Breakdown by group", relationships: "Relationships", correlogram: "Clustering by distance" };
+
+/** What each analysis tool shows, with its technical name (the ⓘ beside the tabs). */
+const TOOL_TIP: Record<ToolTab, { text: string; technical: string }> = {
+  region: { text: "Averages and counts for the places you selected, next to the rest of the city.", technical: "Region stats" },
+  breakdown: { text: "How a layer's values spread within groups of places, such as zones or fifths of population density.", technical: "Breakdown (box plots by group)" },
+  relationships: { text: "How two layers move together across places, with a brush to select places by their values.", technical: "Relationships (hexbin scatter, Spearman ρ)" },
+  correlogram: { text: "How alike places are at growing distances apart: whether hot or cool spots cluster, and over how far.", technical: "Correlogram (spatial autocorrelation)" },
+};
 const OVERLAYS = ["zones", "cv", "sites", "pairs", "influence"] as const;
 type OverlayId = (typeof OVERLAYS)[number];
 const MAP_TOOLS: ToolId[] = ["pan", "rect", "circle", "polygon", "pick"];
@@ -109,8 +120,8 @@ function SavedRegions({ rid, sel }: { rid: string; sel: RunSelection }) {
       >
         <option value="">none</option>
         {list.map((r) => (
-          <option key={r.id} value={r.id} title={r.portable === false ? "Drawn in run coordinates (no CRS): it may not resolve on other runs" : undefined}>
-            {r.name} ({fmtInt(r.n_cells)} cells{r.portable === false ? ", not portable" : ""})
+          <option key={r.id} value={r.id}>
+            {r.name} ({fmtInt(r.n_cells)} cells{r.portable === false ? ", this run only" : ""})
           </option>
         ))}
       </select>
@@ -157,7 +168,9 @@ export default function MapTab() {
   const g = grid.data ?? null;
   const resolving = useSelectionMask(rid, sel, g ? g.n : null);
 
-  const groups: LayerGroup[] = layers.data ?? [];
+  // A planner's catalogue: the per-model layers (each base model's held-out prediction and miss)
+  // stay in Model details, unless a `?layer=` link names one.
+  const groups: LayerGroup[] = useMemo(() => withoutPerModelLayers(layers.data ?? [], layerKey ?? null), [layers.data, layerKey]);
   const all = useMemo(() => groups.flatMap((x) => x.layers), [groups]);
   const cur = layerKey && all.some((l) => l.key === layerKey) ? layerKey : (all[0]?.key ?? null);
   const curMeta = all.find((l) => l.key === cur) ?? null;
@@ -238,9 +251,11 @@ export default function MapTab() {
         {label}
       </a>
     ) : (
-      <span className="btn small ghost" aria-disabled="true" title="This run has no CRS, so GIS formats are unavailable">
-        {label}
-      </span>
+      <TipSpan tip="This run's map has no projection (CRS), so it cannot be saved in mapping-software formats." technical="No CRS">
+        <span className="btn small ghost" aria-disabled="true">
+          {label}
+        </span>
+      </TipSpan>
     );
 
   return (
@@ -251,17 +266,18 @@ export default function MapTab() {
         </h2>
         <div className="row">
           <Seg<0 | 250 | 500>
-            label="Hex mode"
+            label="Show as"
             size="small"
             value={hex}
             onChange={(v) => setHex(v)}
             options={[
-              { value: 0, label: "Cells" },
-              { value: 250, label: "Hex 250 m" },
-              { value: 500, label: "Hex 500 m" },
+              { value: 0, label: "Grid squares" },
+              { value: 250, label: "250 m hexagons" },
+              { value: 500, label: "500 m hexagons" },
             ]}
           />
-          <span className="cap">Export layer:</span>
+          <InfoTip label="hexagons" text="Hexagons average the grid squares inside them, for a calmer map at city scale. The analysis tools always use the squares' own values." technical="Hex mode (hexagon means)" />
+          <span className="cap">Save this layer as:</span>
           {exportLink("tif", "GeoTIFF")}
           {exportLink("csv", "CSV")}
           {exportLink("geojson", "GeoJSON")}
@@ -275,14 +291,19 @@ export default function MapTab() {
           label="Overlays"
           items={OVERLAYS.filter((o) => o !== "zones" || g.meta.zones.length > 0).map((o) => ({
             value: o,
-            label: { zones: "Zone outlines", cv: "CV blocks", sites: "Logger sites", pairs: "Before/after pairs", influence: "Influence circle" }[o],
+            label: { zones: "Zone outlines", cv: "Test areas", sites: "Measurement sites", pairs: "Before/after pairs", influence: "Reach of a layer" }[o],
           }))}
           selected={ov}
           onToggle={(v, on) => setOv(on ? [...ov, v] : ov.filter((x) => x !== v))}
         />
+        <InfoTip
+          label="the overlays"
+          text="Test areas: the blocks the city is split into to test the model. Measurement sites: where the readings were taken. Reach of a layer: how far a layer such as tree cover still affects the temperature around a place."
+          technical="CV blocks · logger sites · influence range"
+        />
         {ov.includes("influence") && ranges.length ? (
           <label className="row cap">
-            Influence of
+            Reach of
             <select value={inflKey ?? ""} onChange={(e) => setInfl(e.target.value)} aria-label="Influence circle predictor">
               {ranges.map((r) => (
                 <option key={r.predictor} value={r.predictor}>
@@ -290,7 +311,7 @@ export default function MapTab() {
                 </option>
               ))}
             </select>
-            {pinned === null ? "(centred on the map; pin a cell to move it)" : "(around the pinned cell)"}
+            {pinned === null ? "(centred on the map; pin a place to move it)" : "(around the pinned place)"}
           </label>
         ) : null}
       </div>
@@ -331,6 +352,9 @@ export default function MapTab() {
         title={detail.data?.header.name ?? rid}
       />
       <Drawer open={!!tool} onClose={() => setTool(null)} title="Analysis tools" mode="inline">
+        <p className="cap">
+          {TOOL_TIP[tool ?? "region"].text} <InfoTip label={TOOL_LABEL[tool ?? "region"]} text={TOOL_TIP[tool ?? "region"].text} technical={TOOL_TIP[tool ?? "region"].technical} />
+        </p>
         <Tabs<ToolTab> label="Analysis tool" items={TOOLS.map((t) => ({ id: t, label: TOOL_LABEL[t] }))} value={tool ?? "region"} onChange={(t) => setTool(t)}>
           {tool === "region" ? <RegionStatsTool {...toolProps} /> : null}
           {tool === "breakdown" ? <BreakdownTool {...toolProps} /> : null}
@@ -340,8 +364,7 @@ export default function MapTab() {
       </Drawer>
       {curMeta ? (
         <p className="cap">
-          {curMeta.label}: {fmtInt(curMeta.stats.n)} cells with values{curMeta.sign_note ? ` · ${curMeta.sign_note}` : ""}
-          {curMeta.source ? ` · from ${curMeta.source.file}${curMeta.source.column ? ` (${curMeta.source.column})` : ""}` : ""}
+          {curMeta.label}: {fmtInt(curMeta.stats.n)} places with values{curMeta.sign_note ? ` · ${curMeta.sign_note}` : ""}
         </p>
       ) : null}
     </section>

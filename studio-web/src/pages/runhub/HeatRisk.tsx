@@ -1,6 +1,6 @@
 // Heat risk run tab (`/r/:rid/heat/:section?`, phase 2), one URL per section (default Today):
 // - Today: the Heat view's baseline (NWS categories, residents by category, the heat-index
-//   histogram and map, the dewpoint control). The canonical home of the heat-risk baseline.
+//   histogram and map, the humidity assumption). The canonical home of the heat-risk baseline.
 // - Who is exposed: the Planner pack's exposure, person-mean temperature, hot days and equity.
 // - Future climate: the Climate view (warming by SSP × period, exposure, future map; embedded, so
 //   without its offset gauges), the Heat view's residents per category in each future, then "Can
@@ -10,6 +10,7 @@
 // section links carry it. How sure each scenario is lives on Trust; the planner pack's "where to
 // act" parts on What cools; its GIS files on Reports.
 import { lazy, Suspense } from "react";
+import { Term } from "../../components/ui/Term";
 import { SectionLoading, SectionNav } from "../../layouts/SectionNav";
 import { codecs, HEAT_SECTIONS, runHref, useRoute, useUrlState, type HeatSection } from "../../router";
 
@@ -54,7 +55,11 @@ function FutureClimate({ rid }: { rid: string }) {
         <h2 id="heat-adapt" className="composer-heading">
           Can adaptation keep up?
         </h2>
-        <p className="cap prose">Test scenarios against each climate projection: how much of its warming they offset, and how many cells and residents stay above each threshold.</p>
+        <p className="cap prose">
+          Try scenarios against each future climate: how much of the expected warming each one{" "}
+          <Term id="climate_offset">cancels out</Term>
+          , and how many places and residents stay at or above each temperature.
+        </p>
         <Suspense fallback={<SectionLoading />}>
           <ClimateAdaptation rid={rid} embedded />
         </Suspense>

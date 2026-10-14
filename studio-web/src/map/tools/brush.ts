@@ -4,6 +4,7 @@
 // same cells never accumulates. Erase sets the touched cells back to 0.
 import { fmtInt } from "../../theme/format";
 import { rowsInRadius, type GridData } from "../grid";
+import { placesText } from "./shapes";
 import type { MapTool, RasterPoint, ToolPreview, ToolResult } from "./types";
 
 export const BRUSH_RADII_M = [60, 120, 250, 500] as const;
@@ -96,7 +97,7 @@ export function brushTool(g: GridData, edit: Float32Array, settings: () => Brush
       last = null;
       const rows = [...touched];
       const s = settings();
-      return { kind: "edit", rows, label: `${s.mode === "erase" ? "Erased" : "Painted"} ${fmtInt(rows.length)} cells · ${fmtInt(editedRows(edit))} edited` };
+      return { kind: "edit", rows, label: `${s.mode === "erase" ? "Erased" : "Painted"} ${placesText(rows.length)} · ${fmtInt(editedRows(edit))} changed so far` };
     },
     finish: () => null,
     cancel() {

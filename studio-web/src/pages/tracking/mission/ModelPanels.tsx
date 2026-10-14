@@ -7,6 +7,8 @@
 // "How much to trust this" tab, the home of the run's accuracy.
 import { useState } from "react";
 import { Card } from "../../../components/ui/Card";
+import { term } from "../../../content/glossary";
+import { TipCell, TipSpan } from "../../../layouts/tips";
 import { Badge } from "../../../components/ui/Badge";
 import { Button } from "../../../components/ui/Button";
 import { Kpi, KpiRow } from "../../../components/ui/Kpi";
@@ -78,13 +80,12 @@ export function FoldModelHeatmap({ grid, title }: { grid: FoldGrid; title: strin
                         ? `${f}, ${m}: fitting now`
                         : `${f}, ${m}: ${c.status === "ok" ? "fitted" : c.status} in ${fmtDuration(c.seconds)}${c.rmse !== null ? `, held-out RMSE ${fmtNum(c.rmse, 3)}` : ""}${c.r2 !== null ? `, R² ${fmtNum(c.r2, 2)}` : ""}`;
                   return (
-                    <td
+                    <TipCell
                       key={m}
                       data-status={c.status}
                       data-pulse={c.status === "running" && !reduced ? "true" : undefined}
                       style={fill ? { background: fill, color: ink(fill) } : undefined}
-                      aria-label={label}
-                      title={label}
+                      tip={label}
                     >
                       {c.status === "pending" ? (
                         <span aria-hidden="true">·</span>
@@ -96,7 +97,7 @@ export function FoldModelHeatmap({ grid, title }: { grid: FoldGrid; title: strin
                           {c.rmse !== null ? <small>{fmtNum(c.rmse, 3)}</small> : null}
                         </>
                       )}
-                    </td>
+                    </TipCell>
                   );
                 })}
               </tr>
@@ -149,9 +150,9 @@ export function StackerLeaderboard({ state, stage = "S2_S3" }: { state: TrackerS
               <td>
                 {candidateLabel(r.candidate)}{" "}
                 {r.winner ? (
-                  <Badge tone="accent" title="Chosen stacker">
-                    winner
-                  </Badge>
+                  <TipSpan tip={`The blend chosen for the final prediction. ${term("stacker").tip}`} technical={term("stacker").technical}>
+                    <Badge tone="accent">winner</Badge>
+                  </TipSpan>
                 ) : null}
               </td>
               <td className="num r">{fmtNum(r.rmse, 4)}</td>
@@ -177,9 +178,11 @@ function AdvectionChip({ state }: { state: TrackerState }) {
   if (a.state === "checking") return <Pill icon="hourglass">checking advection {a.total ? `${a.done}/${a.total}` : `${a.done} refits`}</Pill>;
   const text = `advection ${a.kept ? "kept" : "dropped"}: ΔRMSE ${fmtSigned(a.mean, 4)} ± ${fmtNum(a.se, 4)} (${a.folds} folds)`;
   return (
-    <Pill tone={a.kept ? "good" : "neutral"} icon={a.kept ? "check" : "x"} title="Kept only if refits without advection are worse by more than one standard error">
-      {text}
-    </Pill>
+    <TipSpan tip={`${term("advection").tip} It is kept only if the models do clearly worse without it (by more than one standard error).`} technical={term("advection").technical}>
+      <Pill tone={a.kept ? "good" : "neutral"} icon={a.kept ? "check" : "x"}>
+        {text}
+      </Pill>
+    </TipSpan>
   );
 }
 

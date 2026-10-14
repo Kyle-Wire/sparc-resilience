@@ -1,11 +1,17 @@
-// Plain words of the Scenario Lab Design flow (phase 3), for a city planner rather than a modeller.
-// Every planner-facing label in the Lab step flow, preview pane, run button and answer card comes
-// from here, so phase 4 can fold it into the shared glossary (src/content/glossary.ts) in one move.
-// Precise meanings stay in the tooltips (`tip`); the technical terms stay in Advanced options and
-// Model details.
+// Plain words of the Scenario Lab Design flow, for a city planner rather than a modeller. Every
+// planner-facing label in the Lab step flow, preview pane, run button and answer card comes from
+// here. Repeated concepts (levers, modes, engine lines, quick-estimate trust, confidence, emissions
+// futures and periods, the plain names of terms) read the shared glossary (src/content/glossary.ts →
+// sparc/core/glossary.json), so the Lab, the run pages and the results page say the same thing;
+// the Lab's own one-off sentences stay here. Precise meanings stay in the tooltips (`tip`, InfoTip);
+// the technical terms stay in Advanced options and Model details.
 import type { EditMode, EmulatorTrust, EngineState, Lever } from "../../../api/lab";
 import type { Likely } from "../../../api/types";
+import { GLOSSARY, confidence, lever as glossaryLever, mode as glossaryMode, periodLabel, ssp, term, type LeverEntry, type LeverIcon as GlossaryLeverIcon } from "../../../content/glossary";
 import { fmtPct } from "../../../theme/format";
+
+const lower = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+const cap = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 // ---------------------------------------------------------------- the flow's own words
 
@@ -17,26 +23,32 @@ export const LAB_WORDS = {
   editChange: "Edit",
   removeChange: "Remove",
   advanced: "Advanced options",
-  quickEstimate: "Quick estimate",
-  quickEstimateKicker: "QUICK ESTIMATE",
-  whereChanged: "where you made changes",
-  citywide: "citywide",
-  runFullModel: "Run full model",
+  quickEstimate: term("emulator_preview").label,
+  quickEstimateKicker: term("emulator_preview").label.toUpperCase(),
+  whereChanged: lower(term("where_changed").label),
+  citywide: lower(term("citywide").label),
+  runFullModel: term("run_exact").label,
   fullModelKicker: "FULL MODEL RESULT",
   buildQuickEstimate: "Build quick estimate",
   noQuickEstimateTitle: "No quick estimate yet",
   /** The body under "No quick estimate yet" when the full model can run (the build button gives the time). */
   noQuickEstimate: "Build it once to see the effect of each change as you make it. The full model works either way.",
-  /** …when the run has no usable full model either (no checkpoint, incompatible): the estimate is the way in. */
-  noQuickEstimateNoModel: "Build it once to try changes on this run.",
+  /** …when the run saved no trained models (no checkpoint): the estimate cannot be built either, a new run is the way in. */
+  noQuickEstimateNoModel: "Launch a new run (Fast takes a few minutes) to try changes.",
+  /** …when the full model cannot load (incompatible) but the estimate can still be built: it is the way in. */
+  noQuickEstimateBuildOnly: "Build it once to try changes on this run.",
+  /** The link replacing the build button on a run without saved models (to /p/{pid}/launch). */
+  launchRun: "Launch a run",
   /** …while the model's state is unknown or it failed to load (no promise about the full model). */
   noQuickEstimatePlain: "Build it once to see the effect of each change as you make it.",
   startFromExample: "Start from an example",
   moreExamples: (n: number) => `More examples (${n})`,
   fewerExamples: "Fewer examples",
   emptyChanges: "Pick what to change to start. The quick estimate updates as you go.",
-  /** The intro with no quick estimate and no usable full model: the estimate is the first step. */
-  emptyChangesBuildFirst: "First build the quick estimate (right), then pick what to change.",
+  /** The intro on a run that saved no trained models (no checkpoint) and has no quick estimate: a new run is the way in. */
+  emptyChangesBuildFirst: "This run did not save its trained models, so changes can't be tried on it. Launch a new run to design scenarios.",
+  /** The intro with no quick estimate while the full model cannot load (incompatible): the estimate is the first step. */
+  emptyChangesEstimateFirst: "First build the quick estimate (right), then pick what to change.",
   /** The intro with no quick estimate while the full model can run (or its state is not known yet). */
   emptyChangesNoEstimate: "Pick what to change to start. Build the quick estimate (right) to see the effect as you go.",
   previewIdle: "Make a change to see the quick estimate.",
@@ -51,38 +63,43 @@ export const LAB_WORDS = {
   /** A result exists but is out of date (the model changed, or the changes are not saved yet). */
   fullModelOutdated: "The full model result below is out of date — run it again to refresh it.",
   /** The quick-estimate kicker once the full model has the firm answer. */
-  quickEstimateBefore: "Quick estimate (before the full model)",
+  quickEstimateBefore: `${term("emulator_preview").label} (before the ${lower(term("exact_engine").label)})`,
 } as const;
 
 /**
  * The body of the "No quick estimate yet" box, by the engine state (so it never contradicts the
- * engine line under Run full model): without a usable model the estimate is the way in.
+ * engine line under Run full model): a run that saved no trained models cannot get an estimate
+ * either (the build unpickles checkpoint.pkl), so a new run is the way in; a model that cannot load
+ * still leaves the estimate.
  */
 export function noQuickEstimateText(state: EngineState | null): string {
-  if (state === "no_checkpoint" || state === "incompatible") return LAB_WORDS.noQuickEstimateNoModel;
+  if (state === "no_checkpoint") return LAB_WORDS.noQuickEstimateNoModel;
+  if (state === "incompatible") return LAB_WORDS.noQuickEstimateBuildOnly;
   if (state === null || state === "error") return LAB_WORDS.noQuickEstimatePlain;
   return LAB_WORDS.noQuickEstimate;
 }
 
 /**
  * The steps rail's intro before the first change. Without a quick estimate it never promises one:
- * with no usable full model either, building the estimate (right pane) comes first.
+ * a run that saved no trained models sends to a new run; with a model that cannot load, building
+ * the estimate (right pane) comes first.
  */
 export function emptyChangesText(noEmulator: boolean, state: EngineState | null): string {
   if (!noEmulator) return LAB_WORDS.emptyChanges;
-  if (state === "no_checkpoint" || state === "incompatible") return LAB_WORDS.emptyChangesBuildFirst;
+  if (state === "no_checkpoint") return LAB_WORDS.emptyChangesBuildFirst;
+  if (state === "incompatible") return LAB_WORDS.emptyChangesEstimateFirst;
   return LAB_WORDS.emptyChangesNoEstimate;
 }
 
 /** Advanced options (one disclosure under step 3). */
 export const ADVANCED_WORDS = {
-  clip: "Keep changes within realistic limits",
-  clipTip: "Never push a place beyond the range seen anywhere in the city today (the model is only trustworthy inside it).",
-  mediators: "Include knock-on effects",
-  mediatorsTip: "Let related measures follow the change, e.g. greenness follows tree cover.",
-  expert: "Expert mode",
-  expertTip: "Edit any model input, not only the planning levers.",
-  portable: "Reusable in other runs",
+  clip: term("realistic_limits").label,
+  clipTip: term("realistic_limits").tip,
+  mediators: `Include ${lower(term("mediators").label)}`,
+  mediatorsTip: term("mediators").tip,
+  expert: term("expert_mode").label,
+  expertTip: term("expert_mode").tip,
+  portable: term("portable").label,
   portableYes: "Yes — the places are drawn on the map, so other runs can use this scenario.",
   portableNo: "This run only — the places come from this run's own grid.",
   details: "Change details",
@@ -98,23 +115,16 @@ export const ADVANCED_WORDS = {
 // ---------------------------------------------------------------- levers ("What to change")
 
 /** Icon key of a lever card (the card component maps it to a glyph). */
-export type LeverIcon = "trees" | "paving" | "roofs" | "lever";
+export type LeverIcon = GlossaryLeverIcon;
 
-export type LeverWords = {
-  /** Plain name: "Trees & canopy". */
-  name: string;
-  /** One-line effect: what the change does on the ground. */
-  oneLine: string;
-  icon: LeverIcon;
-  /** Plain unit word for sentences ("pts" for percentage points), when the lever's unit is not plain already. */
-  unitWord?: string;
-};
+/** A lever's plain words (the glossary's lever entry: name, one line, icon, unit word, measure). */
+export type LeverWords = LeverEntry;
 
-/** Plain words by lever role (Lever.role). */
+/** Plain words by lever role (Lever.role), from the glossary. */
 export const LEVER_WORDS: Record<"canopy" | "impervious" | "albedo", LeverWords> = {
-  canopy: { name: "Trees & canopy", oneLine: "More tree cover shades streets and cools the air around it.", icon: "trees", unitWord: "pts" },
-  impervious: { name: "Less paving", oneLine: "Swapping pavement for soil and plants keeps the ground cooler.", icon: "paving", unitWord: "pts" },
-  albedo: { name: "Cool roofs & surfaces", oneLine: "Lighter roofs and pavements reflect sunlight instead of soaking it up.", icon: "roofs" },
+  canopy: glossaryLever("canopy")!,
+  impervious: glossaryLever("impervious")!,
+  albedo: glossaryLever("albedo")!,
 };
 
 /** "pct_canopy" / "Canopy cover" → "Canopy Cover" (the fallback name of an unknown lever). */
@@ -157,20 +167,22 @@ export type ModeWords = {
   planner: boolean;
 };
 
+/** A mode's words from the glossary (its `help` is the hint under the control). */
+function modeWords(m: EditMode): ModeWords {
+  const g = glossaryMode(m);
+  return { label: g.label, hint: g.help, verb: g.verb, planner: g.planner };
+}
+
+/** Plain words of every edit mode, from the glossary. */
 export const MODE_WORDS: Record<EditMode, ModeWords> = {
-  add: { label: "Add", hint: "Adds this much everywhere you chose.", verb: "Add", planner: true },
-  floor: { label: "Bring up to at least", hint: "Raises places below this level up to it; places already above stay as they are.", verb: "Bring up to at least", planner: true },
-  fill_headroom: {
-    label: "Use available planting space",
-    hint: "Plants trees on this share of the open ground that can take them (not buildings or roads).",
-    verb: "Plant",
-    planner: true,
-  },
-  set: { label: "Set to exactly", hint: "Every chosen place gets exactly this value.", verb: "Set to", planner: false },
-  scale: { label: "Multiply by", hint: "Multiplies today's value in every chosen place.", verb: "Multiply by", planner: false },
-  ceiling: { label: "Cap at", hint: "Lowers places above this level down to it; places below stay as they are.", verb: "Cap at", planner: false },
-  to_percentile: { label: "Bring up to a citywide level", hint: "Brings each chosen place up to the level that this share of the city already reaches.", verb: "Bring up to the city's", planner: false },
-  per_cell: { label: "Place by place (plan, brush or file)", hint: "A different change for each place, from a saved plan, brush strokes or an imported file.", verb: "Apply", planner: false },
+  add: modeWords("add"),
+  floor: modeWords("floor"),
+  fill_headroom: modeWords("fill_headroom"),
+  set: modeWords("set"),
+  scale: modeWords("scale"),
+  ceiling: modeWords("ceiling"),
+  to_percentile: modeWords("to_percentile"),
+  per_cell: modeWords("per_cell"),
 };
 
 /** The three planner modes, in order. */
@@ -201,59 +213,38 @@ export const WHERE_PRESET_ORDER: readonly WherePreset[] = ["city", "neighbourhoo
 
 // ---------------------------------------------------------------- engine (full model)
 
-/** One muted line under "Run full model". `{pct}` is replaced by the loading progress. */
-export const ENGINE_WORDS: Record<EngineState, string> = {
-  no_checkpoint: "Model not available for this run — quick estimate only",
-  cold: "Model loads when you run it",
-  queued: "Model waiting to load…",
-  loading: "Loading model… {pct}",
-  ready: "Model ready",
-  busy: "Model busy — your run will wait its turn",
-  incompatible: "Model not available for this run — quick estimate only",
-  error: "Model could not load — see Advanced options",
-};
+/** One muted line under "Run full model" (glossary engine states). `{pct}` is replaced by the loading progress. */
+export const ENGINE_WORDS: Record<EngineState, string> = GLOSSARY.engine.states;
 
 /** The engine line when the run has neither a full model nor a quick estimate yet (no dead end: build the estimate). */
-export const ENGINE_NO_MODEL_NO_ESTIMATE = "Full model not available for this run — build the quick estimate above to explore changes";
+export const ENGINE_NO_MODEL_NO_ESTIMATE = GLOSSARY.engine.noModelNoEstimate;
+
+/** The engine line when the run saved no trained models and has no quick estimate (the estimate cannot be built either). */
+export const ENGINE_NO_CHECKPOINT = GLOSSARY.engine.noCheckpoint;
 
 /**
  * The engine line with the loading share filled in ("Loading model… 40%"). With `noEmulator` (no quick
- * estimate yet either), a run without a usable model says to build the quick estimate instead of
- * "quick estimate only".
+ * estimate yet either), a run whose model cannot load says to build the quick estimate instead of
+ * "quick estimate only", and a run that saved no trained models says so (no estimate to build).
  */
 export function engineLine(state: EngineState | null, progress: number | null, opts: { noEmulator?: boolean } = {}): string {
-  if (!state) return "Checking the model…";
-  if (opts.noEmulator && (state === "no_checkpoint" || state === "incompatible")) return ENGINE_NO_MODEL_NO_ESTIMATE;
+  if (!state) return GLOSSARY.engine.checking;
+  if (opts.noEmulator && state === "no_checkpoint") return ENGINE_NO_CHECKPOINT;
+  if (opts.noEmulator && state === "incompatible") return ENGINE_NO_MODEL_NO_ESTIMATE;
   const text = ENGINE_WORDS[state];
   return text.replace("{pct}", progress !== null && Number.isFinite(progress) ? fmtPct(progress) : "").trimEnd();
 }
 
 // ---------------------------------------------------------------- future climates
 
-/** Emissions pathways in plain words, by normalised code ("ssp245", "rcp45"). */
-const EMISSIONS: Record<string, string> = {
-  ssp119: "very low emissions",
-  ssp126: "low emissions",
-  ssp245: "moderate emissions",
-  ssp370: "high emissions",
-  ssp434: "moderate emissions",
-  ssp460: "moderate-high emissions",
-  ssp534: "high, then falling emissions",
-  ssp585: "very high emissions",
-  rcp26: "low emissions",
-  rcp45: "moderate emissions",
-  rcp60: "moderate-high emissions",
-  rcp85: "very high emissions",
-};
-
 /** "SSP2-4.5" / "ssp245" / "RCP 4.5" → "ssp245" / "rcp45" (lower case, letters and digits only). */
 export function pathwayCode(experiment: string): string {
   return experiment.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
-/** The emissions pathway in plain words ("moderate emissions"); null when it is not a known one. */
+/** The emissions pathway in plain words ("moderate emissions", from the glossary); null when it is not a known one. */
 export function emissionsWord(experiment: string): string | null {
-  return EMISSIONS[pathwayCode(experiment)] ?? null;
+  return ssp(experiment)?.label ?? null;
 }
 
 /** "2041-2060" → "2041–2060" (an en dash between the years). */
@@ -261,23 +252,17 @@ export function periodWord(period: string): string {
   return period.trim().replace(/^(\d{4})\s*[-–]\s*(\d{4})$/, "$1–$2");
 }
 
-/** The era of a period by its first year: near-term (to 2040), mid-century (to 2070), end of century. */
-function eraWord(period: string): string | null {
-  const y = Number(/(\d{4})/.exec(period)?.[1]);
-  if (!Number.isFinite(y) || y <= 0) return null;
-  return y <= 2040 ? "Near-term" : y <= 2070 ? "Mid-century" : "End of century";
-}
-
 /**
- * A future climate in plain words: ("ssp245", "2041-2060") → "Mid-century, moderate emissions
- * (2041–2060)". The pathway code (SSP2-4.5…) stays out of the label: callers put it in a tooltip or
- * in Technical details. An unknown pathway keeps its code, upper case.
+ * A future climate in plain words, as the run pages word it (glossary emissions and periods):
+ * ("ssp245", "2041-2060") → "Moderate emissions, mid-century (2041–2060)"; a period the glossary
+ * does not name keeps its years ("Moderate emissions, 2061–2080"). The pathway code (SSP2-4.5…)
+ * stays out of the label: callers put it in a tooltip or in Technical details. An unknown pathway
+ * keeps its code, upper case.
  */
 export function futureLabel(experiment: string, period: string): string {
-  const era = eraWord(period);
   const emissions = emissionsWord(experiment) ?? experiment.toUpperCase();
-  const years = periodWord(period);
-  return `${era ? `${era}, ` : ""}${emissions}${years ? ` (${years})` : ""}`;
+  const when = periodLabel(periodWord(period));
+  return `${cap(emissions)}${when ? `, ${when}` : ""}`;
 }
 
 /**
@@ -310,33 +295,31 @@ export function humiditySourceWord(source: string | null | undefined): string {
 
 // ---------------------------------------------------------------- trust (quick estimate)
 
-/** The trust dot of a lever card. */
+/** The trust dot of a lever card (glossary quick-estimate trust). */
 export const TRUST_WORDS: Record<EmulatorTrust, { label: string; tone: "good" | "warn" | "neutral" }> = {
-  good: { label: "Quick estimate reliable", tone: "good" },
-  rough: { label: "Quick estimate rough", tone: "warn" },
-  none: { label: "No quick estimate", tone: "neutral" },
+  good: { label: GLOSSARY.quickTrust.dot.good, tone: "good" },
+  rough: { label: GLOSSARY.quickTrust.dot.rough, tone: "warn" },
+  none: { label: GLOSSARY.quickTrust.dot.none, tone: "neutral" },
 };
 
 /** Tooltip of the trust dot. */
-export const TRUST_TIP = "How reliable the quick estimate is for this change. The full model is always the firm answer.";
+export const TRUST_TIP = GLOSSARY.quickTrust.tip;
 
 /** The plain trust line of the preview pane. */
-export const PREVIEW_TRUST_LINE = {
-  good: "The quick estimate is reliable for this change.",
-  hatched: "Rough in the hatched areas — run the full model for a firm answer.",
-  rough: "The quick estimate is rough for this change — run the full model for a firm answer.",
-} as const;
+export const PREVIEW_TRUST_LINE: Readonly<Record<"good" | "hatched" | "rough", string>> = GLOSSARY.quickTrust.line;
 
 // ---------------------------------------------------------------- confidence (full model)
 
 export type ConfidenceTone = "cool" | "warm" | "neutral";
 
-/** The answer card's confidence chip by Likely.confidence. Cooling is never shown in crimson. */
+const confidenceWords = (c: Likely["confidence"], tone: ConfidenceTone) => ({ label: confidence(c).chip, tone, tip: confidence(c).sentence });
+
+/** The answer card's confidence chip by Likely.confidence (glossary words). Cooling is never shown in crimson. */
 export const CONFIDENCE_WORDS: Record<Likely["confidence"], { label: string; tone: ConfidenceTone; tip: string }> = {
-  confident_cools: { label: "Confident it cools", tone: "cool", tip: "The whole likely range is below zero: the change cools." },
-  confident_warms: { label: "Confident it warms", tone: "warm", tip: "The whole likely range is above zero: the change warms." },
-  could_be_zero: { label: "Might be no real effect", tone: "neutral", tip: "The likely range includes zero: the effect could be too small to tell apart from no change." },
-  unknown: { label: "No range available", tone: "neutral", tip: "This result has no uncertainty estimate, so there is no likely range." },
+  confident_cools: confidenceWords("confident_cools", "cool"),
+  confident_warms: confidenceWords("confident_warms", "warm"),
+  could_be_zero: confidenceWords("could_be_zero", "neutral"),
+  unknown: confidenceWords("unknown", "neutral"),
 };
 
 // ---------------------------------------------------------------- "why run the full model" in plain words

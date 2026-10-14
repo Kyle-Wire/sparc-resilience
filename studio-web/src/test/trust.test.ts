@@ -1,7 +1,8 @@
 // The run's trust grade (src/content/trust.ts): R² bands, the ±5-point coverage check, and
-// the plain one-line explanation.
+// the plain one-line explanation; the scenario verdicts in the glossary's plain words.
 import { describe, expect, it } from "vitest";
-import { r2Grade, TRUST_RULE, trustGrade } from "../content/trust";
+import { GLOSSARY, term } from "../content/glossary";
+import { r2Grade, TRUST_GRADE_LABEL, TRUST_RULE, trustGrade, VERDICT_TERMS, verdictWord } from "../content/trust";
 
 describe("trustGrade", () => {
   it("is null while the held-out R² is unknown", () => {
@@ -46,7 +47,7 @@ describe("trustGrade", () => {
   it("says it in one plain line without statistics, and explains a step down", () => {
     const good = trustGrade({ r2: 0.81, coverage: 0.89, coverageTarget: 0.9 })!;
     expect(good.line).toMatch(/^Predicts well/);
-    expect(good.line).toContain("likely ranges hold");
+    expect(good.line).toContain("prediction ranges hold");
     const fair = trustGrade({ r2: 0.81, coverage: 0.7, coverageTarget: 0.9 })!;
     expect(fair.label).toBe("Fair");
     expect(fair.line).toContain("too narrow");
@@ -54,5 +55,23 @@ describe("trustGrade", () => {
     for (const a of [good, fair, trustGrade({ r2: 0.45 })!]) {
       expect(a.line).not.toMatch(/R²|RMSE|coverage|\d/);
     }
+  });
+});
+
+describe("the words come from the glossary", () => {
+  it("grade labels and sentences", () => {
+    expect(TRUST_GRADE_LABEL).toEqual({ good: GLOSSARY.trust.good.label, fair: GLOSSARY.trust.fair.label, limited: GLOSSARY.trust.limited.label });
+    expect(trustGrade({ r2: 0.5, coverage: 0.99 })!.line).toBe(`${GLOSSARY.trust.fair.sentence} ${GLOSSARY.trustRanges.wide}`);
+  });
+
+  it("scenario verdicts in plain words, the server's label kept for the rest", () => {
+    expect(verdictWord("robust")).toEqual({ label: "Solid", term: "verdict_robust" });
+    expect(verdictWord("direction", "Direction only")).toEqual({ label: "Direction clear", term: "verdict_direction" });
+    expect(verdictWord("not_established").label).toBe("Not proven");
+    // the technical name stays in the tooltip
+    expect(Object.values(VERDICT_TERMS).map((id) => term(id).technical)).toEqual(["Robust", "Direction only", "Not established"]);
+    expect(verdictWord("unknown", "Unknown")).toEqual({ label: "Unknown", term: null });
+    expect(verdictWord("toString")).toEqual({ label: "toString", term: null });
+    expect(verdictWord("no_data")).toEqual({ label: "no data", term: null });
   });
 });

@@ -185,15 +185,15 @@ def test_e2e_real_fast(studio_server, studio_page):
     add.select_option(f"configured:{other['slug']}")
     pairs = page.get_by_role("table", name=re.compile(r"Pairwise differences"))
     pairs.wait_for(timeout=120_000)
-    rerun = page.get_by_role("button", name=re.compile(r"^Re-run"))
-    if rerun.count():      # the configured scenario has no per-fold results yet: re-run it exactly
+    rerun = page.get_by_role("button", name=re.compile(r"^Run full model again"))
+    if rerun.count():      # the configured scenario has no per-fold results yet: run the full model on it again
         rerun.first.click()
         wait_for(lambda: server.get("/api/jobs", params={"kind": "engine.rerun_configured", "limit": 1})["items"], 30,
                  "the configured re-run job")
         rerun_job = server.wait_job(_newest_job(server, "engine.rerun_configured")["id"], timeout=300)
         assert rerun_job["status"] == "succeeded", rerun_job
     pair_row = pairs.locator("tbody tr").first
-    wait_for(lambda: "paired" in pair_row.inner_text().lower() and "needs exact" not in pair_row.inner_text().lower(), 180,
+    wait_for(lambda: "paired" in pair_row.inner_text().lower() and "needs a full model run" not in pair_row.inner_text().lower(), 180,
              "the paired SE of the pair")
     assert re.search(r"[−+]?\d[\d.]* ± \d[\d.]* °F", pair_row.inner_text()), pair_row.inner_text()
     sp.shot("compare paired SE")
@@ -202,18 +202,18 @@ def test_e2e_real_fast(studio_server, studio_page):
     sp.goto(f"/r/{rid}/lab/climate")     # the old Lab page redirects to its new home
     page.wait_for_url(re.compile(rf"/r/{rid}/heat/future"))
     page.get_by_role("group", name="Adaptations").get_by_role("button").first.click()
-    page.get_by_role("heading", name=re.compile(r"Share of cells at or above")).first.wait_for(timeout=120_000)
+    page.get_by_role("heading", name=re.compile(r"Share of places at or above")).first.wait_for(timeout=120_000)
     thresholds = page.get_by_label("Thresholds (°F)")
     thresholds.fill("92")
     thresholds.press("Enter")
-    page.get_by_role("heading", name="Share of cells at or above 92.0 °F").wait_for(timeout=60_000)
+    page.get_by_role("heading", name="Share of places at or above 92.0 °F").wait_for(timeout=60_000)
     sp.shot("climate threshold 92")
 
     # -- plan: the budget slider moves the Pareto curve and the totals; save and verify ---------------
     sp.goto(f"/r/{rid}/lab/plans")
     benefit = page.locator(".kpi", has_text="Planned benefit").first.locator(".value")
     wait_for(lambda: re.search(r"\d", benefit.inner_text()), 60, "the plan preview")
-    pareto = page.get_by_role("figure").filter(has=page.get_by_text("Benefit vs budget")).first
+    pareto = page.get_by_role("figure").filter(has=page.get_by_text("Cooling for each budget")).first
     before = (benefit.inner_text(), pareto.inner_html())
     slider = page.get_by_role("slider", name=re.compile(r"^Budget"))
     lo, hi = float(slider.get_attribute("min") or 0), float(slider.get_attribute("max"))
@@ -226,7 +226,7 @@ def test_e2e_real_fast(studio_server, studio_page):
     page.wait_for_url(re.compile(r"/lab/plans/pl_[a-z0-9]+"))
     plid = page.url.rsplit("/", 1)[1]
     wait_for(lambda: server.get(f"/api/plans/{plid}").get("realised"), 300, "the plan verification", interval=0.5)
-    realised = page.locator(".kpi", has_text="Realised (exact)").first.locator(".value")
+    realised = page.locator(".kpi", has_text="Checked benefit").first.locator(".value")
     wait_for(lambda: re.search(r"\d", realised.inner_text()), 60, "the realised total on the page")
     sp.shot("plan verified")
 

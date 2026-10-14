@@ -5,8 +5,15 @@
 // `run.plan`, so the graph is what the run's stage rail will show.
 import type { PlanNode } from "../../../api/types";
 import { Icon, type IconName } from "../../../components/ui/Icon";
+import { isTermId, term } from "../../../content/glossary";
 import { fmtDurationRange } from "../../../theme/format";
 import { planCounts, planNodeViews, stageShort } from "../model/plan";
+
+/** A stage's plain name from the glossary ("S2_S3" → "Train the models"), else the server's label. */
+function stageLabel(id: string, label: string): string {
+  const t = `stage_${id.toLowerCase()}`;
+  return isTermId(t) ? term(t).label : label;
+}
 
 const STATE: Record<PlanNode["state"], { icon: IconName; text: string }> = {
   will_run: { icon: "play", text: "will run" },
@@ -37,7 +44,12 @@ export function PlanGraph({
               </span>
               <div className="plan-body">
                 <div className="plan-title">
-                  <span className="mono plan-id">{stageShort(n.id)}</span> <span className="plan-label">{n.label}</span>
+                  {stageShort(n.id) ? (
+                    <>
+                      <span className="mono plan-id">{stageShort(n.id)}</span>{" "}
+                    </>
+                  ) : null}
+                  <span className="plan-label">{stageLabel(n.id, n.label)}</span>
                 </div>
                 <div className="plan-meta">
                   <span className="plan-state">{st.text}</span>

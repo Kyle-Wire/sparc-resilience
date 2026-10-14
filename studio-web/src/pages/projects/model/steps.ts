@@ -3,18 +3,33 @@
 // (`GET /api/projects/{pid}` readiness[]); scenarios, analysis and about have no spine row,
 // so their dot is derived from the draft and its validation issues.
 import type { Issue, ReadinessRow } from "../../../api/types";
+import { term } from "../../../content/glossary";
 import { getList, getString } from "./dotted";
 
 export type StepId = "data" | "levers" | "physics" | "inputs" | "scenarios" | "analysis" | "about";
 
-export const STEPS: readonly { id: StepId; label: string }[] = [
-  { id: "data", label: "Data" },
-  { id: "levers", label: "Levers" },
-  { id: "physics", label: "Physics" },
-  { id: "inputs", label: "Inputs" },
-  { id: "scenarios", label: "Scenarios" },
-  { id: "analysis", label: "Analysis" },
-  { id: "about", label: "About" },
+/**
+ * The steps in plain words (`label`), with what each one sets (`help`, the ⓘ beside the step's
+ * content) and the config sections it edits as the technical name (`technical`).
+ */
+export const STEPS: readonly { id: StepId; label: string; help: string; technical: string }[] = [
+  { id: "data", label: "Data", help: "Upload the file of temperature readings and say which columns hold the temperature, the coordinates and the map layers.", technical: "data" },
+  { id: "levers", label: term("levers").label, help: term("levers").tip, technical: "predictors, actionable levers, coupling, mediators" },
+  {
+    id: "physics",
+    label: "Weather & physics settings",
+    help: "Which map layers stand for tree cover, paving and the like, so the built-in heat-physics model can use them, and how that model behaves.",
+    technical: "physics (roles, base model)",
+  },
+  { id: "inputs", label: "More data", help: "The weather on the measurement day, future-climate data, and where people live and what covers the ground. Studio can download them.", technical: "physics.forcing, climate.table, planner.layers" },
+  { id: "scenarios", label: "Scenarios", help: "Changes worked out with every run, such as +10 points of tree canopy citywide.", technical: "scenarios, joint_scenarios" },
+  {
+    id: "analysis",
+    label: "Extra analyses",
+    help: "Optional analyses after the model is trained: cause-and-effect checks, future climate, budget plans, and how the models are tested and blended.",
+    technical: "causal, climate, optimize, planner, influence, cv, models, stacker, response",
+  },
+  { id: "about", label: "About", help: "The project's name and the title of its report.", technical: "report, name" },
 ];
 
 export function isStepId(v: string | null | undefined): v is StepId {

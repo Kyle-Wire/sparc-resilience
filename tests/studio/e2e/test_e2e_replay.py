@@ -21,7 +21,8 @@ from pathlib import Path
 from .conftest import SYNTH_RUN, StudioPage, drag_on, rail_states, visit_run_pages, wait_for
 
 REPLAY_SPEED = "1"
-SETUP_STEPS = ["Levers", "Physics", "Inputs", "Scenarios", "Analysis", "About"]
+SETUP_STEPS = [("What you can change", "levers"), ("Weather & physics settings", "physics"), ("More data", "inputs"),
+               ("Scenarios", "scenarios"), ("Extra analyses", "analysis"), ("About", "about")]
 STATE_FOR = {"will_run": "done", "skipped": "disabled", "cached": "cached"}
 
 
@@ -63,15 +64,15 @@ def test_e2e_replay(studio_server, studio_page):
     # -- setup pages: the data check, then every step --------------------------------------------
     sp.goto(f"/p/{pid}/setup/data")
     page.get_by_role("button", name="Check data").click()
-    page.get_by_text("Points kept").wait_for()
-    kept = page.locator(".kpi", has_text="Points kept").inner_text()
+    page.get_by_text("Readings kept").wait_for()
+    kept = page.locator(".kpi", has_text="Readings kept").inner_text()
     assert re.search(r"\d", kept), kept
     sp.shot("setup data check")
-    for step in SETUP_STEPS:
+    for step, step_id in SETUP_STEPS:
         page.get_by_role("tab", name=step).click()
-        page.wait_for_url(re.compile(rf"/setup/{step.lower()}$"))
+        page.wait_for_url(re.compile(rf"/setup/{step_id}$"))
         page.get_by_role("tab", name=step, selected=True).wait_for()
-        sp.shot(f"setup {step}")
+        sp.shot(f"setup {step_id}")
 
     # -- launch: the plan graph is the fixture's plan --------------------------------------------
     sp.goto(f"/p/{pid}/launch")
@@ -183,8 +184,13 @@ def test_e2e_replay(studio_server, studio_page):
     picker = page.get_by_role("group", name="Choose a map layer")
     picker.wait_for()
     themes = picker.get_by_role("group", name="Map theme").get_by_role("button")
+    # a planner's Map leaves out the per-model layers (each base model's held-out prediction and miss,
+    # oof_* / resid_*): they belong to Model details, and a ?layer= link still opens one
     n_layers = 0
-    groups = server.get(f"/api/runs/{rid}/layers")["groups"]
+    per_model = ("oof_", "resid_")
+    all_groups = server.get(f"/api/runs/{rid}/layers")["groups"]
+    groups = [g for g in ({**g, "layers": [m for m in g["layers"] if not m["key"].startswith(per_model)]}
+                          for g in all_groups) if g["layers"]]
     for i, group in enumerate(groups):
         themes.nth(i).click()
         select = picker.locator("select").last
@@ -194,7 +200,11 @@ def test_e2e_replay(studio_server, studio_page):
             n_layers += 1
         if i in (0, len(groups) - 1):
             sp.shot(f"map theme {group['label']}")
-    assert n_layers == sum(len(g["layers"]) for g in groups) and n_layers >= 50
+    assert n_layers == sum(len(g["layers"]) for g in groups) and n_layers >= 40
+    hidden = [m for g in all_groups for m in g["layers"] if m["key"].startswith(per_model)]
+    if hidden:
+        sp.goto(f"/r/{rid}/map?layer={hidden[0]['key']}")
+        page.get_by_role("heading", name=hidden[0]["label"], exact=True).first.wait_for()
 
     # -- brush the legend histogram → the selection count on the map and in Region stats ----------
     sp.goto(f"/r/{rid}/map?tool=region")

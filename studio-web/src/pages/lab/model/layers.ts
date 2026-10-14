@@ -2,6 +2,7 @@
 // temperature, exceedance) and Studio result/plan layers, as LayerMeta entries the map kit
 // understands. Percentile stats are left null so the domain is computed from the values.
 import type { LayerGroup, LayerMeta, LayerStats } from "../../../api/types";
+import { term } from "../../../content/glossary";
 
 export function quickStats(values: ArrayLike<number> | null): LayerStats {
   let n = 0;
@@ -61,7 +62,7 @@ export function resultLayerMetas(resId: string, unit: string, realizedVars: stri
   const base = `res:${resId}`;
   const list: SyntheticLayer[] = [
     { key: `${base}:delta`, label: "Temperature change (full model)", unit, sign_note: "negative = cooler", desc: "The full model's estimate of the temperature change in each place." },
-    { key: `${base}:delta_sd`, label: "Spread between model runs", unit, scale: "seq", desc: "How much the model's repeat runs disagree in each place; more spread means less sure." },
+    { key: `${base}:delta_sd`, label: term("jackknife_se").label, unit, scale: "seq", desc: "How much the change in each place moves between the models trained on different test areas; more spread means less sure." },
     { key: `${base}:extrapolation`, label: "Beyond measured conditions", unit: "", scale: "seq", desc: "Places where the change goes beyond anything measured in this city (hatched)." },
     ...realizedVars.map((v): SyntheticLayer => ({ key: `${base}:realized_${v}`, label: `What changed: ${leverNames[v] ?? v}`, unit: leverUnits[v] ?? "", desc: "The change the full model actually applied, after keeping it within realistic limits." })),
   ];

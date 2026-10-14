@@ -58,7 +58,7 @@ def test_region_cap_zeroes_cells_outside(client, synth_run):
     mask = np.asarray(client.post(f"/api/runs/{rid}/selection/resolve", json={"selection": region}).json()["mask"])
     m = np.unpackbits(np.frombuffer(base64.b64decode(str(mask)), dtype=np.uint8), bitorder="little")[:dose.size]
     assert dose[m == 0].max() == 0.0 and dose[m == 1].max() > 0
-    assert "selected region" in r.json()["constraint"]
+    assert "selected area" in r.json()["constraint"]
 
 
 def test_plan_objectives_and_equity(client, synth_run):
@@ -69,7 +69,7 @@ def test_plan_objectives_and_equity(client, synth_run):
         "equity": {"source": "share_60_plus", "focus": 0.5}})
     assert ppl.status_code == 200, ppl.text
     out = ppl.json()
-    assert out["objective"].startswith("resident-weighted") and "plantable space" in out["constraint"]
+    assert out["objective"].startswith("cooling where people live") and "open ground that can take trees" in out["constraint"]
     assert not np.allclose(_dose(out["dose"]), _dose(base["dose"]))
     bad = client.post(f"/api/runs/{rid}/plans/preview", json={"lever": "albedo", "budget": 10,
                                                                "cap": {"plantable": True}})
@@ -199,7 +199,7 @@ def test_people_objective_reports_unweighted_cooling(client, run_ctx, synth_run)
     for a, b in zip(ppl["pareto"], cool["pareto"]):
         assert a["budget"] == b["budget"] and a["benefit"] <= b["benefit"] * (1 + 1e-9)
     assert ppl["pareto"][2]["benefit"] == pytest.approx(ppl["planned_total"], rel=1e-9)
-    assert f"{raw['planned_total_cooling']:,.4g}" in ppl["caption"] and "unweighted" in ppl["caption"]
+    assert f"weighted total is {raw['planned_total_cooling']:,.0f}" in ppl["caption"] and "unweighted" in ppl["caption"]
     assert "weighted total" not in cool["caption"]
     plan = client.post(f"/api/runs/{rid}/plans", json={"params": {"lever": "canopy", "budget": 1000,
                                                                    "objective": "people"}, "name": "People",

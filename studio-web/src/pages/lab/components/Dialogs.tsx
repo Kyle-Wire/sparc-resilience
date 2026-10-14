@@ -26,6 +26,7 @@ import {
 import { Button } from "../../../components/ui/Button";
 import { Dialog } from "../../../components/ui/Dialog";
 import { Table } from "../../../components/ui/Table";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { useJobs } from "../../../stores/jobs";
 import { toast } from "../../../stores/ui";
 import { fmtDuration, fmtNum } from "../../../theme/format";
@@ -64,7 +65,7 @@ export function LadderDialog({ sid, rid, edits, editIndex, onClose, onDone }: { 
       open
       onClose={onClose}
       busy={busy}
-      title="Make a ladder"
+      title="Try growing amounts (a ladder)"
       footer={
         <>
           <Button onClick={onClose} disabled={busy}>
@@ -76,13 +77,16 @@ export function LadderDialog({ sid, rid, edits, editIndex, onClose, onDone }: { 
         </>
       }
     >
-      <p className="cap">Each rung is a child revision with one value of the chosen edit, tagged with the ladder's id. The library plots ΔT against the dose with its likely range.</p>
+      <p className="cap">
+        Each amount becomes a new version of this scenario, tagged with the ladder&apos;s id. The library charts the temperature change against the amount, with its likely range.
+        <InfoTip term="ladder" />
+      </p>
       <label className="field">
-        <span className="field-label">Edit</span>
+        <span className="field-label">Change</span>
         <select value={index} onChange={(e) => setIndex(Number(e.target.value))}>
           {edits.map((e, i) => (
             <option key={i} value={i} disabled={e.mode === "per_cell"}>
-              Edit {i + 1}: {e.lever} · {MODE_INFO[e.mode].label}
+              Change {i + 1}: {e.lever} · {MODE_INFO[e.mode].label}
             </option>
           ))}
         </select>
@@ -93,7 +97,7 @@ export function LadderDialog({ sid, rid, edits, editIndex, onClose, onDone }: { 
         <span className="hint">{parsed.bad.length ? `Not numbers: ${parsed.bad.join(", ")}` : `Comma separated, e.g. 5, 10, 20, 30.`}</span>
       </label>
       <label className="row">
-        <input type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} /> Run them exactly on this run now
+        <input type="checkbox" checked={runNow} onChange={(e) => setRunNow(e.target.checked)} /> Run them through the full model on this run now
       </label>
     </Dialog>
   );
@@ -161,7 +165,7 @@ export function AcrossRunsDialog({ sid, pid, rid, onClose }: { sid: string; pid:
       }
     >
       <p className="cap">
-        Evaluates this scenario on each chosen run, one engine at a time inside a heavy job (not the engine host). The spread becomes the specification band of this version of the scenario: its exact results take it when the check ends (editing a draft afterwards needs a new check).
+        Evaluates this scenario on each chosen run, one engine at a time inside a heavy job (not the engine host). The spread becomes the specification band of this version of the scenario: its full model results take it when the check ends (editing a draft afterwards needs a new check).
       </p>
       {runs.error ? <p className="callout" data-tone="crit">{errorMessage(runs.error)}</p> : null}
       <fieldset className="stack" style={{ gap: 4, border: 0, padding: 0 }}>
@@ -262,7 +266,7 @@ export function PromoteDialog({ sid, onClose }: { sid: string; onClose: () => vo
       wide
       onClose={onClose}
       busy={busy}
-      title="Promote to the project config"
+      title="Add to the project settings"
       footer={
         <>
           <Button onClick={onClose} disabled={busy}>
@@ -403,7 +407,7 @@ export function DeleteScenarioDialog({ sid, name, onDeleted, onClose }: { sid: s
         <strong>{name}</strong> ({sid}) will be removed from the library. This cannot be undone.
       </p>
       <label className="row">
-        <input type="checkbox" checked={results} onChange={(e) => setResults(e.target.checked)} /> Also delete its exact results (otherwise they stay viewable)
+        <input type="checkbox" checked={results} onChange={(e) => setResults(e.target.checked)} /> Also delete its full model results (otherwise they stay viewable)
       </label>
       {children !== null ? (
         <p className="callout" role="alert" data-has-children="true">

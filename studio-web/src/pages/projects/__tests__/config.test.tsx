@@ -2,6 +2,7 @@
 // gutter at their YAML line, the impact preview shows before the save, the save sends
 // If-Match with the base version, and a 409 opens the conflict dialog. The page says that
 // comments are not preserved.
+import { act } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { byText, click, flush, mockFetch, typeInto, waitFor } from "../../../test/render";
 import ConfigEditor, { lineIssues } from "../ConfigEditor";
@@ -50,7 +51,11 @@ describe("config editor", () => {
     await waitFor(() => container.querySelector('.gutter [data-level="error"]'), 5000, "gutter mark");
     const mark = container.querySelector<HTMLElement>('.gutter [data-level="error"]')!;
     expect(mark.textContent).toContain("20");
-    expect(mark.title).toContain("dose out of bounds");
+    expect(mark.hasAttribute("title")).toBe(false);
+    act(() => {
+      mark.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, relatedTarget: null }));
+    });
+    expect((await waitFor(() => document.querySelector('[role="tooltip"]'), 2000, "gutter tooltip")).textContent).toContain("dose out of bounds");
     m.restore();
   });
 

@@ -476,6 +476,8 @@ export function createRegion(rid: string, name: string, spec: SelectionSpec): Pr
 export type ConfiguredScenario = {
   slug: string;
   name: string;
+  /** Plain display name of a ladder scenario ("Trees & canopy +5 pts"); the name otherwise. */
+  label?: string | null;
   city: Likely;
   p10: number | null;
   p90: number | null;

@@ -5,12 +5,15 @@ import { errorMessage } from "../../api/client";
 import { deleteProject, patchProject, useProjectList } from "../../api/projects";
 import { invalidate } from "../../api/resource";
 import type { Project } from "../../api/types";
-import { Badge, DemoBadge } from "../../components/ui/Badge";
+import { Badge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { ConfirmDialog } from "../../components/ui/Dialog";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table, type Column } from "../../components/ui/Table";
+import { term } from "../../content/glossary";
+import { DemoTag, TipSpan } from "../../layouts/tips";
 import { Link } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtDateTime, fmtNum, fmtRelative } from "../../theme/format";
@@ -57,31 +60,43 @@ export default function Projects() {
       render: (p) => (
         <span className="row" style={{ gap: 6 }}>
           <Link to={`/p/${encodeURIComponent(p.id)}`}>{p.name}</Link>
-          {p.demo ? <DemoBadge /> : null}
+          {p.demo ? <DemoTag /> : null}
           {p.archived ? <Badge>archived</Badge> : null}
         </span>
       ),
     },
-    { key: "template", label: "Template", value: (p) => p.template ?? "", render: (p) => (p.template ? p.template.replace(/_/g, " ") : "—") },
-    { key: "readiness", label: "Readiness", align: "right", value: (p) => (p.readiness_score.total ? p.readiness_score.done / p.readiness_score.total : null), render: (p) => `${p.readiness_score.done}/${p.readiness_score.total}` },
+    { key: "template", label: "Started from", value: (p) => p.template ?? "", render: (p) => (p.template ? p.template.replace(/_/g, " ") : "—") },
+    {
+      key: "readiness",
+      label: term("readiness").label,
+      align: "right",
+      tip: <InfoTip term="readiness" />,
+      value: (p) => (p.readiness_score.total ? p.readiness_score.done / p.readiness_score.total : null),
+      render: (p) => `${p.readiness_score.done} of ${p.readiness_score.total}`,
+    },
     { key: "n_runs", label: "Runs", align: "right", value: (p) => p.n_runs },
     {
       key: "last_run",
       label: "Last run",
+      tip: <InfoTip term="r2" />,
       value: (p) => p.last_run?.created_utc ?? null,
       render: (p) =>
         p.last_run ? (
           <span className="row" style={{ gap: 6 }}>
             <StatusChip status={p.last_run.status} />
-            {p.last_run.r2 !== null ? <span className="num">R² {fmtNum(p.last_run.r2, 3)}</span> : null}
+            {p.last_run.r2 !== null ? (
+              <span className="num">
+                {term("r2").label} {fmtNum(p.last_run.r2, 3)}
+              </span>
+            ) : null}
             <span className="cap">{fmtRelative(p.last_run.created_utc)}</span>
           </span>
         ) : (
           "—"
         ),
     },
-    { key: "active_jobs", label: "Active jobs", align: "right", value: (p) => p.active_jobs },
-    { key: "updated_utc", label: "Updated", value: (p) => p.updated_utc, render: (p) => <span title={fmtDateTime(p.updated_utc)}>{fmtRelative(p.updated_utc)}</span> },
+    { key: "active_jobs", label: "Jobs running", align: "right", value: (p) => p.active_jobs },
+    { key: "updated_utc", label: "Updated", value: (p) => p.updated_utc, render: (p) => <TipSpan tip={fmtDateTime(p.updated_utc)}>{fmtRelative(p.updated_utc)}</TipSpan> },
     {
       key: "actions",
       label: "Actions",
@@ -92,19 +107,20 @@ export default function Projects() {
           <Button size="small" variant="ghost" onClick={() => void archive(p, !p.archived)}>
             {p.archived ? "Restore" : "Archive"}
           </Button>
-          <Button
-            size="small"
-            variant="ghost"
-            icon="x"
-            disabled={p.active_jobs > 0}
-            title={p.active_jobs > 0 ? "Jobs are running on this project" : undefined}
-            onClick={() => {
-              setWithFiles(false);
-              setDeleting(p);
-            }}
-          >
-            Delete
-          </Button>
+          <TipSpan tip={p.active_jobs > 0 ? "Work is still running on this project. Delete it once that has finished." : null}>
+            <Button
+              size="small"
+              variant="ghost"
+              icon="x"
+              disabled={p.active_jobs > 0}
+              onClick={() => {
+                setWithFiles(false);
+                setDeleting(p);
+              }}
+            >
+              Delete
+            </Button>
+          </TipSpan>
         </span>
       ),
     },

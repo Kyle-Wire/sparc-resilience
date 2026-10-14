@@ -4,6 +4,8 @@
 // job events. The run's home for it is How much to trust this (`/r/:rid/trust#validation`),
 // which lists the verdicts (`IndependentChecks`) and keeps the cards (`StudyCards`) behind a
 // disclosure; the default export is the complete page.
+// Plain words (phase 4): the independent checks are named in the glossary's plain words ("Fake-change
+// test", "Simpler models", …) with an ⓘ giving what each does and its technical name.
 import { useEffect } from "react";
 import { useRunScenarios } from "../../api/lab";
 import { useView } from "../../api/runs";
@@ -19,9 +21,12 @@ import {
 } from "../../api/studies";
 import { Card } from "../../components/ui/Card";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { StatusChip } from "../../components/ui/StatusChip";
+import type { TermId } from "../../content/glossary";
 import { useRunContext } from "../../layouts/RunLayout";
 import { Link, runHref, useRoute } from "../../router";
+import { KIND_TERMS, kindLabel } from "./components/common";
 import { StudyCard } from "./components/StudyCard";
 import { TruthCard } from "./components/RunViews";
 import "./studies.css";
@@ -44,7 +49,7 @@ export function cardRows(rows: readonly StudyStatusRow[] | undefined): StudyStat
  */
 export const CHECK_KINDS: readonly StudyKind[] = ["baselines", "placebo", "simcheck", "multiverse", "reproduce", "literature", "benchmark"];
 
-export type CheckVerdict = { kind: StudyKind; label: string; state: StudyState; line: string };
+export type CheckVerdict = { kind: StudyKind; label: string; state: StudyState; line: string; term: TermId | null };
 
 const STATE_LINE: Record<StudyState, string> = {
   not_run: "Not run yet.",
@@ -55,14 +60,28 @@ const STATE_LINE: Record<StudyState, string> = {
   failed: "The last attempt failed.",
 };
 
+/**
+ * The simple-model check's headline in plain words. The server writes the pipeline's verdict
+ * ("stack not distinguishable from hgb_focal (|ΔMSE| ≤ 2 SE)"); anything unrecognised is kept.
+ */
+export function plainBaselinesHeadline(head: string): string {
+  const h = head.trim();
+  if (/^stack better than every baseline/i.test(h)) return "More accurate than every simple model.";
+  if (/^stack better than the best baseline/i.test(h)) return "More accurate than the best simple model, but not clearly better than all of them.";
+  if (/^stack not distinguishable/i.test(h)) return "Not clearly more accurate than the best simple model: the difference is too small to tell apart.";
+  if (/^best baseline .* better than the stack/i.test(h)) return "Less accurate than the best simple model.";
+  return h;
+}
+
 /** One line per independent check, in card order: the server's headline, else what its state means. */
 export function checkVerdicts(rows: readonly StudyStatusRow[] | undefined): CheckVerdict[] {
   return cardRows(rows)
     .filter((r) => CHECK_KINDS.includes(r.kind))
     .map((r) => {
-      const head = r.headline?.trim();
+      const raw = r.headline?.trim();
+      const head = raw && r.kind === "baselines" ? plainBaselinesHeadline(raw) : raw;
       const line = head ? (r.state === "stale" ? `${head} (out of date: the run has changed since)` : head) : STATE_LINE[r.state] ?? r.state;
-      return { kind: r.kind, label: KIND_LABELS[r.kind] ?? r.kind, state: r.state, line };
+      return { kind: r.kind, label: kindLabel(r.kind), state: r.state, line, term: KIND_TERMS[r.kind] ?? null };
     });
 }
 
@@ -88,7 +107,8 @@ export function IndependentChecks({ rid }: { rid: string }) {
           <li key={v.kind} className="row" data-check-kind={v.kind} data-state={v.state} style={{ alignItems: "baseline", flexWrap: "nowrap" }}>
             <StatusChip status={v.state} text={v.state === "not_run" ? "not run" : v.state === "stale" ? "out of date" : undefined} />
             <span>
-              <strong>{v.label}</strong> {v.line}{" "}
+              <strong>{v.label}</strong>
+              {v.term ? <InfoTip term={v.term} technical={KIND_LABELS[v.kind]} /> : null} {v.line}{" "}
               <Link to={`${runHref(rid, "trust")}#study-${v.kind}`} className="cap">
                 {v.state === "not_run" ? "Run it" : "Details"}
               </Link>
@@ -166,8 +186,9 @@ export default function Validation() {
           Validation
         </h2>
         <p className="sx-intro">
-          Checks that tell you how far to trust this run: reference baselines, placebo layers, simulation checks with planted effects, a multiverse of alternative choices, an exact
-          reproduction and the uncertainty report that combines them. Each study runs against the run's launch snapshot, never the current project config.
+          Checks that tell you how far to trust this run: simpler models to beat, fake changes that should show no effect, made-up data with a known effect to recover, other
+          reasonable modelling choices, an exact re-run, and the uncertainty report that combines them. Each check runs on the run exactly as it was launched, never on the
+          project&apos;s current settings.
         </p>
       </header>
       <StudyCards />

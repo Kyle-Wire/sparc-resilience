@@ -17,6 +17,7 @@ import { useLevers, useScenario, type CompileResult, type Lever } from "../../ap
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { IconButton } from "../../components/ui/IconButton";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Table } from "../../components/ui/Table";
 import { useRunDetail } from "../../layouts/resources";
 import { findLayer } from "../../map/LayerPicker";
@@ -86,7 +87,10 @@ function CompileDetails({ compile, compileError, compiling, levers }: { compile:
   const rows = c ? Object.entries(c.levers).map(([v, x]) => ({ v, ...x, lever: levers.find((l) => l.var === v) })) : [];
   return (
     <section className="compile-panel stack" aria-label={ADVANCED_WORDS.details} aria-busy={compiling || undefined}>
-      <h4>{ADVANCED_WORDS.details}</h4>
+      <h4 className="lab-tip-head">
+        {ADVANCED_WORDS.details}
+        <InfoTip term="compile" />
+      </h4>
       {compileError ? (
         <p className="callout" data-tone="crit">
           {compileError}
@@ -107,7 +111,10 @@ function CompileDetails({ compile, compileError, compiling, levers }: { compile:
             <dd className="num">{fmtNum(rows.reduce((a, r) => a + r.est_cost, 0), 0)}</dd>
             <dt>{ADVANCED_WORDS.fullModelTime}</dt>
             <dd className="num">≈ {fmtDuration(c.est_exact_s)}</dd>
-            <dt>{ADVANCED_WORDS.portable}</dt>
+            <dt>
+              {ADVANCED_WORDS.portable}
+              <InfoTip term="portable" />
+            </dt>
             <dd>{c.portable ? ADVANCED_WORDS.portableYes : ADVANCED_WORDS.portableNo}</dd>
           </dl>
           {rows.length ? (
@@ -172,22 +179,28 @@ function AdvancedOptions({ m, open, onToggle }: { m: WorkbenchModel; open: boole
       {open ? (
         <div className="lab-advanced-body stack">
           <fieldset className="stack lab-advanced-toggles">
-            <label className="row" title={ADVANCED_WORDS.clipTip}>
+            <label className="row">
               <input type="checkbox" checked={options.clip_to_support ?? true} onChange={(e) => setOption("clip_to_support", e.target.checked)} />
               {ADVANCED_WORDS.clip}
+              <InfoTip term="realistic_limits" />
             </label>
-            <label className="row" title={ADVANCED_WORDS.mediatorsTip}>
+            <label className="row">
               <input type="checkbox" checked={options.mediators ?? true} onChange={(e) => setOption("mediators", e.target.checked)} />
               {ADVANCED_WORDS.mediators}
+              <InfoTip term="mediators" />
             </label>
-            <label className="row" title={ADVANCED_WORDS.expertTip}>
+            <label className="row">
               <input type="checkbox" checked={!!options.expert} onChange={(e) => setOption("expert", e.target.checked)} />
               {ADVANCED_WORDS.expert}
+              <InfoTip term="expert_mode" />
             </label>
           </fieldset>
           <CompileDetails compile={m.compile} compileError={m.compileError} compiling={m.compiling} levers={m.levers} />
           <section className="stack" aria-label={ADVANCED_WORDS.model}>
-            <h4>{ADVANCED_WORDS.model}</h4>
+            <h4 className="lab-tip-head">
+              {ADVANCED_WORDS.model}
+              <InfoTip term="exact_engine" />
+            </h4>
             <EngineChip rid={m.rid} />
           </section>
           <section className="stack" aria-label={ADVANCED_WORDS.editor}>

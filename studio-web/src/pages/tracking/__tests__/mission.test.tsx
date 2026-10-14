@@ -152,10 +152,21 @@ describe("stage rail chips", () => {
       expect((st.textContent ?? "").trim().length).toBeGreaterThan(0);
     }
     const s2 = chips.find((b) => b.dataset.stage === "S2_S3")!;
-    expect(s2.title).toContain("loaded from the checkpoint");
+    // plain stage names on the chips; what the stage does, the reason and the technical name in a tooltip (no native title)
+    expect(s2.querySelector(".rail-name")!.textContent).toContain("Train the models");
+    expect(s2.hasAttribute("title")).toBe(false);
+    const tipOf = (b: HTMLElement) => {
+      act(() => b.focus());
+      const text = document.querySelector('[role="tooltip"]')!.textContent ?? "";
+      act(() => b.blur());
+      return text;
+    };
+    const s2tip = tipOf(s2);
+    expect(s2tip).toContain("loaded from the checkpoint");
+    expect(s2tip).toContain("S2–S3 · ");
     expect(s2.textContent).toContain("◆");
     expect(chips.find((b) => b.dataset.stage === "S4")!.getAttribute("aria-pressed")).toBe("true");
-    expect(chips.find((b) => b.dataset.stage === "baselines")!.title).toContain("disabled in the config (baselines.enabled)");
+    expect(tipOf(chips.find((b) => b.dataset.stage === "baselines")!)).toContain("turned off in the project settings");
   });
 
   it("pulses a running chip only without reduced motion", () => {
@@ -492,7 +503,7 @@ describe("BottomTabs embedded in Model details", () => {
     jid: job.id, phase: "ended", error: null, job, state: replay(sample), reconstructed: false, replaying: false, resources: [], recent: [], ended: job.status, epochs: [], logs: [], logCapped: false,
   });
 
-  it("leaves out Outputs and Config & provenance, each a link to its Model details section", async () => {
+  it("leaves out Outputs and Settings & audit trail, each a link to its Model details section", async () => {
     clearResources();
     fm = mockFetch({ "GET /api/jobs/j_e/logs": { body: { lines: [], next_cursor: 0 } } });
     const job = makeJob({ id: "j_e", status: "succeeded", run_id: "r_e" });
@@ -501,7 +512,7 @@ describe("BottomTabs embedded in Model details", () => {
     const { container } = render(<BottomTabs entry={entryFor(job)} job={job} meta={undefined} embedded />);
     const tabs = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent ?? "");
     expect(tabs.some((t) => t.startsWith("Outputs"))).toBe(false);
-    expect(tabs).not.toContain("Config & provenance");
+    expect(tabs).not.toContain("Settings & audit trail");
     expect(tabs).toContain("Logs");
     expect(container.querySelector('[role="tab"][aria-selected="true"]')!.textContent).toBe("Logs");
     const moved = container.querySelector("[data-moved-tabs]")!;
@@ -517,7 +528,10 @@ describe("BottomTabs embedded in Model details", () => {
     const { container } = render(<BottomTabs entry={entryFor(job)} job={job} meta={undefined} />);
     const tabs = [...container.querySelectorAll('[role="tab"]')].map((t) => t.textContent ?? "");
     expect(tabs.some((t) => t.startsWith("Outputs"))).toBe(true);
-    expect(tabs).toContain("Config & provenance");
+    // the glossary's words (Saved models, Audit trail), not "Checkpoints" / "Config & provenance"
+    expect(tabs).toContain("Settings & audit trail");
+    expect(tabs).toContain("Saved models");
+    expect(tabs).not.toContain("Checkpoints");
     expect(container.querySelector("[data-moved-tabs]")).toBeNull();
   });
 });

@@ -13,21 +13,36 @@ import { openEngine, trustRunCheckpoint, useRunEngine, type EngineState, type Ru
 import { Button } from "../../../components/ui/Button";
 import { Dialog } from "../../../components/ui/Dialog";
 import { ActionButton, runAction } from "../../../components/ui/EmptyState";
+import { InfoTip } from "../../../components/ui/InfoTip";
 import { StatusChip } from "../../../components/ui/StatusChip";
 import { useRunDetail } from "../../../layouts/resources";
 import { useJobs } from "../../../stores/jobs";
 import { toast } from "../../../stores/ui";
 import { fmtNum, fmtPct } from "../../../theme/format";
+import { Tip } from "./Tip";
 
+/** The chip's words: the full model's state, short (the glossary's engine lines are the long form). */
 export const ENGINE_TEXT: Record<EngineState, string> = {
-  no_checkpoint: "no checkpoint (preview only)",
-  cold: "engine cold",
-  queued: "engine queued",
-  loading: "engine loading",
-  ready: "engine ready",
-  busy: "engine busy",
-  incompatible: "checkpoint incompatible",
-  error: "engine error",
+  no_checkpoint: "full model not available",
+  cold: "full model not loaded",
+  queued: "full model waiting",
+  loading: "full model loading",
+  ready: "full model ready",
+  busy: "full model busy",
+  incompatible: "full model not available",
+  error: "full model could not load",
+};
+
+/** What each state means, in the chip's tooltip. */
+const ENGINE_TIP: Record<EngineState, string> = {
+  no_checkpoint: "This run kept no saved models, so only the quick estimate is available.",
+  cold: "The full model loads when you run it, or now with Load full model.",
+  queued: "The full model is waiting to load.",
+  loading: "The full model is loading.",
+  ready: "The full model is loaded and ready to run.",
+  busy: "The full model is working on another run; yours will wait its turn.",
+  incompatible: "This run's saved models were made by other code and cannot be loaded here.",
+  error: "The full model could not load.",
 };
 
 /** The run's engine state, live from `engine.status` events when there are any. */
@@ -44,13 +59,13 @@ export async function requestOpen(rid: string): Promise<ApiError | null> {
     const r = await openEngine(rid);
     if (r.job) {
       useJobs.getState().upsert(r.job);
-      toast("info", "Loading the run into the engine", { href: `/jobs/${r.job.id}`, linkLabel: "Track" });
+      toast("info", "Loading the full model", { href: `/jobs/${r.job.id}`, linkLabel: "Track" });
     }
     if (r.status) mutate(`run:${rid}:engine`, r.status);
     return null;
   } catch (e) {
     if (e instanceof ApiError && (e.code === "untrusted_pickle" || e.code === "engine_memory")) return e;
-    toast("error", "Could not open the engine", { body: errorMessage(e), action: e instanceof ApiError && e.action ? e.action : undefined });
+    toast("error", "Could not load the full model", { body: errorMessage(e), action: e instanceof ApiError && e.action ? e.action : undefined });
     return null;
   }
 }
@@ -78,17 +93,19 @@ export function TrustDialog({ rid, error, onClose, onTrusted }: { rid: string; e
       open
       onClose={onClose}
       busy={busy}
-      title="Trust this run's checkpoint?"
+      title="Trust this run's saved models?"
       footer={
         <>
           <Button onClick={onClose} disabled={busy}>
-            Use preview only
+            Use the quick estimate only
           </Button>
           {/* The server's action label repeats the risk the callout below names; it stays as the tooltip so
               the button is short enough for the dialog. */}
-          <Button variant="danger" busy={busy} onClick={() => void trust()} disabled={!dir && !error.action?.path} title={error.action?.label}>
-            Trust and open the engine
-          </Button>
+          <Tip tip={error.action?.label}>
+            <Button variant="danger" busy={busy} onClick={() => void trust()} disabled={!dir && !error.action?.path}>
+              Trust and load the full model
+            </Button>
+          </Tip>
         </>
       }
     >
@@ -102,7 +119,10 @@ export function TrustDialog({ rid, error, onClose, onTrusted }: { rid: string; e
           Run folder: <span className="mono">{dir}</span>
         </p>
       ) : null}
-      <p className="cap">The preview (emulator) and every stored output stay available without trusting the checkpoint; exact results need it.</p>
+      <p className="cap">
+        The quick estimate and every stored output stay available without trusting the saved models (the checkpoint); the full model needs them.
+        <InfoTip term="checkpoint" />
+      </p>
     </Dialog>
   );
 }
@@ -146,7 +166,7 @@ export function EngineChip({ rid }: { rid: string }) {
     setRefusal(err);
     void reload();
   };
-  const text = state ? ENGINE_TEXT[state] : "engine";
+  const text = state ? ENGINE_TEXT[state] : "full model";
   const meta = state === "loading" && progress !== null ? fmtPct(progress) : undefined;
   // a run that stopped before it finished has a checkpoint but no manifest: the engine cannot load it, so the
   // chip offers the server's remedy (resume the run) instead of an "Open engine" that can only fail again
@@ -154,19 +174,25 @@ export function EngineChip({ rid }: { rid: string }) {
   const canOpen = !unfinished && (state === "cold" || state === "error" || (state === null && !!status));
   return (
     <span className="lab-engine row" data-state={state ?? "unknown"}>
-      <StatusChip status={state ?? "absent"} text={text} meta={meta} title={status?.step ?? (status?.error ? status.error.message : undefined)} />
+      <Tip tip={[state ? ENGINE_TIP[state] : null, status?.step ?? status?.error?.message ?? null].filter(Boolean).join(" ")} focusable>
+        <StatusChip status={state ?? "absent"} text={text} meta={meta} />
+      </Tip>
       {state === "loading" && status?.step ? <span className="cap">{status.step}</span> : null}
       {(state === "incompatible" || unfinished) && status?.action ? <ActionButton action={status.action} size="small" variant="default" /> : null}
       {unfinished ? <span className="cap">{status?.error?.message}</span> : null}
-      {status?.code_match === false ? (
-        <span className="cap" title="The checkpoint was written by different core code; exact results are marked stale.">
-          code changed
-        </span>
+      {state === "no_checkpoint" ? (
+        <span className="cap">this run did not save its trained models</span>
+      ) : status?.code_match === false ? (
+        <Tip tip="The saved models were made by a different version of SPARC; full-model results are marked out of date." focusable>
+          <span className="cap">saved by an older SPARC version</span>
+        </Tip>
       ) : null}
       {canOpen ? (
-        <Button size="small" busy={busy} onClick={() => void open()} title="Load the run's checkpoint for exact results">
-          Open engine
-        </Button>
+        <Tip tip="Load the run's saved models so the full model can run.">
+          <Button size="small" busy={busy} onClick={() => void open()}>
+            Load full model
+          </Button>
+        </Tip>
       ) : null}
       {refusal?.code === "untrusted_pickle" ? (
         <TrustDialog

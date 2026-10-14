@@ -326,7 +326,10 @@ describe("requirements", () => {
     );
     await flush(3);
     const mv = container.querySelector('[data-kind="multiverse"]')!;
-    expect(mv.textContent).toContain("stale vs run");
+    expect(mv.textContent).toContain("out of date");
+    // tooltips, not native titles: the status says when it was updated, the intro's ⓘ names the check
+    expect(container.querySelector("[title]")).toBeNull();
+    expect(mv.querySelector<HTMLElement>("p.cap button.infotip")!.dataset.term).toBe("multiverse");
     expect(mv.textContent).toContain("Estimated ≈");
     expect(mv.textContent).toContain("Sign stable in 8 of 8 scenarios");
     expect(mv.querySelector("details.vt-launch")!.hasAttribute("open")).toBe(false);

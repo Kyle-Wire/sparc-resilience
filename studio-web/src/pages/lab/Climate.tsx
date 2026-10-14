@@ -8,29 +8,48 @@
 // so the embedded form leaves those out (each climate number once) and shows the scenario ×
 // projection matrix once at least one adaptation is picked. The default export is the complete
 // tool in the Lab's frame (the old `/r/:rid/lab/climate` URL redirects to Heat risk › Future).
+// Plain words (phase 4): emissions futures and periods by their glossary names ("Moderate
+// emissions", "Mid-century (2041–2060)"), the pathway codes only in an ⓘ's technical line; the
+// statistic as the climate models' low end / middle / high end; cells as places; the offset
+// gauges as "Cancels out N% of the expected warming".
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { errorMessage } from "../../api/client";
 import { exploreClimate, getResultLayer, useClimateFactors, useRunScenarios, useScenarios, type ClimateExplore, type ItemRef, type PeopleExposureRow, type WarmingRow } from "../../api/lab";
 import type { LayerGroup, LayerMeta } from "../../api/types";
 import { Bars, DotRange, Gauge } from "../../charts";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { InfoTip } from "../../components/ui/InfoTip";
 import { Seg } from "../../components/ui/Seg";
 import { Table } from "../../components/ui/Table";
+import { periodLabel, sspLabel, term } from "../../content/glossary";
 import { useRunDetail } from "../../layouts/resources";
 import { MapView } from "../../map/MapView";
 import { runLayerLoader, useRunGrid, useRunLayers, type LayerValues } from "../../map/data";
 import { quantiles } from "../../map/domain";
 import { codecs, useRoute, useUrlState } from "../../router";
+import { emissionsName, futureName, futureShort, pathwayCodes, periodName } from "../runhub/climateWords";
 import { useUi } from "../../stores/ui";
-import { fmtInt, fmtNum, fmtPct, fmtSignedValue, unitLabel } from "../../theme/format";
+import { fmtInt, fmtNum, fmtPct, fmtSignedValue, fmtTempChange, unitLabel } from "../../theme/format";
 import { LabFrame } from "./components/LabFrame";
-import { decodeStatistic, encodeStatistic, exceedance, futureTemperature, presentToday, shareAt, shareAtOrAbove, statisticLabel, warmingValue } from "./model/climate";
+import { Tip } from "./components/Tip";
+import { decodeStatistic, encodeStatistic, exceedance, futureTemperature, presentToday, shareAt, shareAtOrAbove, warmingValue } from "./model/climate";
 import { decodeItemRef, encodeItemRef, itemLayerKey } from "./model/doc";
 import { syntheticMeta } from "./model/layers";
 import { parseNumberList } from "./model/library";
 import { debounce } from "./model/timing";
 
-const projLabel = (r: { label: string; period: string }) => `${r.label} ${r.period.replace("-", "–")}`;
+/** A projection in full ("Moderate emissions, mid-century (2041–2060)") and on a chart row ("Moderate, mid-century"). */
+const projLabel = (r: { experiment: string; label: string; period: string }) => futureName(r.experiment, r.period, r.label);
+const projShort = (r: { experiment: string; label: string; period: string }) => futureShort(r.experiment, r.period, r.label);
+
+/** The warming statistic in plain words: the climate models' middle estimate, low end, high end, or one model. */
+function statWord(stat: ReturnType<typeof decodeStatistic>): string {
+  if (typeof stat === "object") return `climate model ${stat.model}`;
+  return stat === "median" ? "middle climate-model estimate" : stat === "p10" ? "low end of the climate models" : "high end of the climate models";
+}
+
+/** Room for chart-row labels (Bars cuts them to the gutter): about 6.6 px a character. */
+const gutterFor = (labels: string[]) => Math.max(0, ...labels.map((l) => l.length)) * 6.6 + 16;
 
 function ClimateMaps({
   rid,
@@ -98,7 +117,10 @@ function ClimateMaps({
   const center = useMemo(() => (obs ? quantiles(obs, [0.5])[0] : null), [obs]);
   const groups = useMemo<LayerGroup[]>(() => {
     const ls: LayerMeta[] = [
-      syntheticMeta({ key: "climate:future", label: "Future temperature", unit, scale: "div", center: center ?? 0, decimals: 1, desc: "Observed + warming + adaptation ΔT (computed in the browser)." }, future),
+      syntheticMeta(
+        { key: "climate:future", label: "Future temperature", unit, scale: "div", center: center ?? 0, decimals: 1, desc: "Measured temperature + warming + the adaptation's temperature change (worked out in your browser)." },
+        future,
+      ),
     ];
     if (threshold !== null) ls.push(syntheticMeta({ key: "climate:exceed", label: `At or above ${fmtNum(threshold, 1)} ${unitLabel(unit)}`, unit: "", scale: "cat", labels: ["below", "at or above"], dtype: "uint8" }, exceed));
     return [{ id: "climate", label: "Climate", layers: ls }];
@@ -106,12 +128,12 @@ function ClimateMaps({
   const loader = useCallback(async (m: LayerMeta): Promise<LayerValues> => (m.key === "climate:exceed" ? exceed ?? new Uint8Array(0) : future ?? new Float32Array(0)), [future, exceed]);
 
   if (!grid.data) return <p className="cap">Loading the map…</p>;
-  if (!all.some((l) => l.key === "obs")) return <p className="cap">The observed temperature layer is not in this run.</p>;
+  if (!all.some((l) => l.key === "obs")) return <p className="cap">The measured temperature layer is not in this run.</p>;
   const share = future && threshold !== null ? shareAtOrAbove(future, threshold) : null;
   return (
     <section className="stack" aria-label="Future maps">
       <div className="row">
-        <select aria-label="Projection for the map" value={proj} onChange={(e) => setProj(Number(e.target.value))}>
+        <select aria-label="Future climate for the map" value={proj} onChange={(e) => setProj(Number(e.target.value))}>
           {warming.map((r, i) => (
             <option key={`${r.experiment}-${r.period}`} value={i}>
               {projLabel(r)}
@@ -129,12 +151,12 @@ function ClimateMaps({
         <span className="cap">
           {embedded
             ? share !== null
-              ? `${fmtPct(share)} of cells at or above ${fmtNum(threshold, 1)} ${unitLabel(unit)} (${statisticLabel(stat)} warming)`
+              ? `${fmtPct(share)} of places at or above an air temperature of ${fmtNum(threshold, Number.isInteger(threshold) ? 0 : 1)} ${unitLabel(unit)} (warming: ${statWord(stat)})`
               : null
-            : `Warming ${w !== null ? fmtSignedValue(w, unit, 2) : "—"} (${statisticLabel(stat)})${share !== null ? ` · ${fmtPct(share)} of cells at or above ${fmtNum(threshold, 1)} ${unitLabel(unit)}` : ""}`}
+            : `Warming ${w !== null ? fmtSignedValue(w, unit, 2) : "—"} (${statWord(stat)})${share !== null ? ` · ${fmtPct(share)} of places at or above an air temperature of ${fmtNum(threshold, Number.isInteger(threshold) ? 0 : 1)} ${unitLabel(unit)}` : ""}`}
         </span>
       </div>
-      {future ? <MapView grid={grid.data} groups={groups} loadLayer={loader} height={460} title="Future temperature" /> : <p className="cap">Loading observed temperatures…</p>}
+      {future ? <MapView grid={grid.data} groups={groups} loadLayer={loader} height={460} title="Future temperature" /> : <p className="cap">Loading measured temperatures…</p>}
     </section>
   );
 }
@@ -166,9 +188,9 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
 
   const names = useMemo(() => new Map((scenarios.data ?? []).flatMap((s) => (s.latest ? [[s.latest.id, s.name] as const] : []))), [scenarios.data]);
   const options = useMemo(() => {
-    const opts: { ref: ItemRef; label: string }[] = [];
+    const opts: { ref: ItemRef; label: string; configName?: string }[] = [];
     for (const r of runSc.data?.results ?? []) if (r.kind === "exact") opts.push({ ref: { kind: "result", id: r.id }, label: names.get(r.id) ?? `Result ${r.id}` });
-    for (const c of runSc.data?.configured ?? []) opts.push({ ref: { kind: "configured", slug: c.slug }, label: c.name });
+    for (const c of runSc.data?.configured ?? []) opts.push({ ref: { kind: "configured", slug: c.slug }, label: c.label || c.name, ...(c.label && c.label !== c.name ? { configName: c.name } : {}) });
     return opts;
   }, [runSc.data, names]);
   const adaptations = useMemo(() => adaptRaw.map(decodeItemRef).filter((r): r is ItemRef => r !== null), [adaptRaw]);
@@ -219,7 +241,13 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
   if (!factors.data || !grid.data) return <p className="cap">Loading…</p>;
   const f = factors.data;
   if (!f.present) {
-    return frame(<EmptyState title="No climate change factors yet" body="Fetch CMIP6 change factors for this city to see future warming and how much each adaptation offsets." action={f.action} />);
+    return frame(
+      <EmptyState
+        title="No climate projections yet"
+        body="Fetch the climate models' projections (CMIP6 change factors) for this city to see future warming and how much of it each adaptation cancels out."
+        action={f.action}
+      />,
+    );
   }
   const warming = f.warming.filter((w) => (!exps.length || exps.includes(w.experiment)) && (!pers.length || pers.includes(w.period)));
   const data = out.data;
@@ -235,16 +263,19 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
     <>
       <div className="lab-form">
         <div className="field">
-          <span className="field-label">Statistic across models</span>
+          <span className="field-label">
+            Climate-model estimate
+            <InfoTip term="climate_models" technical="Middle = median, low end = 10th percentile, high end = 90th percentile of the CMIP6 models" />
+          </span>
           <Seg<string>
-            label="Statistic"
+            label="Climate-model estimate"
             size="small"
             value={typeof stat === "object" ? "model" : stat}
             onChange={(v) => setStatRaw(v === "model" ? encodeStatistic({ model: f.models[0] ?? "" }) : v)}
             options={[
-              { value: "median", label: "Median" },
-              { value: "p10", label: "p10" },
-              { value: "p90", label: "p90" },
+              { value: "median", label: "Middle" },
+              { value: "p10", label: "Low end" },
+              { value: "p90", label: "High end" },
               { value: "model", label: "One model", disabled: !f.models.length },
             ]}
           />
@@ -260,24 +291,30 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
         </div>
         <label className="field">
           <span className="field-label">Thresholds ({u})</span>
-          <input value={tText} placeholder={data ? data.thresholds.join(", ") : "from the config"} onChange={(e) => setTText(e.target.value)} />
+          <input value={tText} placeholder={data ? data.thresholds.join(", ") : "from the run's settings"} onChange={(e) => setTText(e.target.value)} />
         </label>
         <div className="field">
-          <span className="field-label">Scenarios (SSP)</span>
-          <div className="chips" role="group" aria-label="Experiments">
+          <span className="field-label">
+            Emissions futures
+            <InfoTip term="ssp" technical={pathwayCodes(f.experiments)} />
+          </span>
+          <div className="chips" role="group" aria-label="Emissions futures">
             {f.experiments.map((e) => (
               <button key={e} type="button" className="chip" aria-pressed={!exps.length || exps.includes(e)} onClick={() => setExps(exps.includes(e) ? exps.filter((x) => x !== e) : [...exps, e])}>
-                {e.toUpperCase()}
+                {emissionsName(e)}
               </button>
             ))}
           </div>
         </div>
         <div className="field">
-          <span className="field-label">Periods</span>
-          <div className="chips" role="group" aria-label="Periods">
+          <span className="field-label">
+            Time periods
+            <InfoTip term="climate_period" />
+          </span>
+          <div className="chips" role="group" aria-label="Time periods">
             {f.periods.map((p) => (
               <button key={p} type="button" className="chip" aria-pressed={!pers.length || pers.includes(p)} onClick={() => setPers(pers.includes(p) ? pers.filter((x) => x !== p) : [...pers, p])}>
-                {p}
+                {periodName(p)}
               </button>
             ))}
           </div>
@@ -289,9 +326,11 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
           {options.map((o) => {
             const k = encodeItemRef(o.ref);
             return (
-              <button key={k} type="button" className="chip" aria-pressed={adaptRaw.includes(k)} onClick={() => toggleAdapt(k)}>
-                {o.label}
-              </button>
+              <Tip key={k} tip={o.configName ? `Its name in the run's settings: ${o.configName}` : null}>
+                <button type="button" className="chip" aria-pressed={adaptRaw.includes(k)} onClick={() => toggleAdapt(k)}>
+                  {o.label}
+                </button>
+              </Tip>
             );
           })}
           {!options.length ? <span className="cap">No exact results or configured scenarios on this run yet.</span> : null}
@@ -300,11 +339,11 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
       {out.error && picked ? <p className="callout" data-tone="crit">{out.error}</p> : null}
       {embedded ? null : (
         <DotRange
-          title="Warming by scenario and period"
-          units={`${u} above the baseline`}
+          title="Warming by emissions future and period"
+          units={`${u} warmer than 1995–2014`}
           rows={warming.map((w) => ({
             id: `${w.experiment}-${w.period}`,
-            label: projLabel(w),
+            label: projShort(w),
             est: warmingValue(w, stat),
             lo: w.p10,
             hi: w.p90,
@@ -314,24 +353,34 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
           }))}
           valueLabel="Warming"
           unit={u}
-          rangeLabel="10th–90th percentile of models"
-          outerLabel="model range"
-          caption={`Dots: ${statisticLabel(stat)}; grey points: individual models.`}
+          rangeLabel="Most models"
+          outerLabel="All models"
+          caption={`Dots: the ${statWord(stat)}; bars: the range of most climate models (10th to 90th percentile); grey points: individual models.`}
         />
       )}
       {!picked ? (
-        <p className="cap">Pick one or more adaptations above to see, for each climate projection, how much of the warming they offset and how many cells and residents stay at or above each threshold.</p>
+        <p className="cap">
+          Pick one or more adaptations above to see, for each future climate, how much of the expected warming they cancel out and how many places and residents stay at or
+          above each temperature.
+        </p>
       ) : data && t !== null ? (
         <>
           <div className="row">
-            <span className="cap">Threshold</span>
-            <Seg<number> label="Threshold" size="small" value={Math.min(thresholdIdx, ths.length - 1)} onChange={setThresholdIdx} options={ths.map((x, i) => ({ value: i, label: `${fmtNum(x, 1)} ${u}` }))} />
+            <span className="cap">Air temperature</span>
+            <Seg<number> label="Air temperature" size="small" value={Math.min(thresholdIdx, ths.length - 1)} onChange={setThresholdIdx} options={ths.map((x, i) => ({ value: i, label: `${fmtNum(x, 1)} ${u}` }))} />
             {out.loading ? <span className="spinner" aria-label="Updating" /> : null}
           </div>
           <Bars
-            title={`Share of cells at or above ${fmtNum(t, 1)} ${u}`}
-            units="share of cells"
-            categories={["Today", ...projections.map(projLabel)]}
+            title={`Share of places with an air temperature at or above ${fmtNum(t, Number.isInteger(t) ? 0 : 1)} ${u}`}
+            note={
+              <>
+                Each place is one square of the map
+                <InfoTip term="cell" />
+              </>
+            }
+            units="share of places"
+            labelGutter={gutterFor(projections.map(projShort))}
+            categories={["Today", ...projections.map(projShort)]}
             series={variants.map((name, k) => ({
               id: name,
               label: name,
@@ -340,11 +389,11 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
               hi: [null, ...projections.map((p) => p.variants[k]?.share_at_or_above[tKey(p.variants[k].share_at_or_above)]?.p90 ?? null)],
               muted: k === 0 && variants.length > 1,
             }))}
-            valueLabel="Share of cells"
+            valueLabel="Share of places"
             unit="share"
-            categoryLabel="Period"
+            categoryLabel="Future climate"
             domain={[0, 1]}
-            caption="Bars: median across models; whiskers: 10th–90th percentile of models."
+            caption="Bars: the climate models' middle estimate; whiskers: the range of most models (10th to 90th percentile)."
           />
           {gaugeProj && gaugeProj.variants.some((v) => v.offset_share_of_median_warming !== null) ? (
             <div className="grid3">
@@ -354,24 +403,30 @@ export function ClimateAdaptation({ rid, embedded = false }: { rid: string; embe
                   <Gauge
                     key={v.name}
                     title={v.name}
-                    label={`of ${projLabel(gaugeProj)} median warming offset`}
+                    note={
+                      <>
+                        {term("climate_offset").label}
+                        <InfoTip term="climate_offset" />
+                      </>
+                    }
+                    label="of the expected warming cancelled"
                     value={v.offset_share_of_median_warming}
                     min={0}
                     max={Math.max(1, v.offset_share_of_median_warming ?? 0)}
                     ticks={[1]}
                     format={(x) => fmtPct(x)}
-                    caption={`Cancels ${fmtPct(v.offset_share_of_median_warming)} of ${projLabel(gaugeProj)} median warming (mean ΔT ${fmtSignedValue(v.adaptation_mean_delta, unit, 3)}).`}
+                    caption={`Cancels out ${fmtPct(v.offset_share_of_median_warming)} of the warming expected by ${periodLabel(gaugeProj.period)}, with ${sspLabel(gaugeProj.experiment)}. Citywide: ${fmtTempChange(v.adaptation_mean_delta, unit, 3)}.`}
                   />
                 ))}
             </div>
           ) : null}
           {data.people_exposure?.length ? (
             <Table<PeopleExposureRow>
-              caption="Residents at or above each threshold"
+              caption="Residents at or above each air temperature"
               csvName="people-exposure"
               rowKey={(r, i) => `${r.experiment ?? "today"}-${r.period ?? ""}-${r.variant}-${i}`}
               columns={[
-                { key: "case", label: "Case", value: (r) => (r.period ? `${r.label} ${r.period}` : r.label) },
+                { key: "case", label: "Climate", value: (r) => (r.period ? (r.experiment ? futureName(r.experiment, r.period, r.label) : `${r.label} ${periodLabel(r.period)}`) : r.label) },
                 { key: "variant", label: "Adaptation", value: (r) => r.variant },
                 { key: "warming", label: "Warming", unit: u, align: "right", value: (r) => r.warming, render: (r) => (r.warming !== null ? fmtNum(r.warming, 2) : "—") },
                 ...data.thresholds.map((th) => ({

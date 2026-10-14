@@ -35,7 +35,7 @@ def test_heat_without_campaign_humidity_asks_for_a_dewpoint(client, fixture_run)
 
     text = json.dumps(report_blocks(run_context(client.app.state.studio, rid), client.app.state.studio.db, ["heat"],
                                     project={}, maps=False))
-    assert "needs the campaign's humidity" in text
+    assert "needs the humidity on the measurement day" in text
     # no campaign humidity: no heat layers
     keys = {m["key"] for g in client.get(f"/api/runs/{rid}/layers").json()["groups"] for m in g["layers"]}
     assert "heat_index" not in keys
@@ -169,7 +169,7 @@ def test_providence_heat(client, ctx, providence_runs, tmp_path, monkeypatch):
     blocks = report_blocks(run_context(client.app.state.studio, rid), client.app.state.studio.db, ["heat"],
                            project={}, maps=False)
     text = json.dumps(blocks)
-    assert "Heat stress" in text and "Extreme caution or worse" in text and "Robust" in text
+    assert "Heat risk: who is exposed" in text and "Extreme caution or worse" in text and "Robust" in text
     hi = f32(client.get(f"/api/runs/{rid}/layers/heat_index.bin").content)
     assert hi.size == len(pd.read_parquet(light / "predictions.parquet"))
     assert 80 < float(np.nanmedian(hi)) < 110

@@ -1,7 +1,6 @@
 // Circle selection: press at the centre, drag out the radius; produces {kind: "circle"}.
-import { fmtInt } from "../../theme/format";
 import type { GridData } from "../grid";
-import { countMask, crsOf, maskWhere, toCrs } from "./shapes";
+import { countMask, crsOf, maskWhere, placesText, toCrs } from "./shapes";
 import type { MapTool, RasterPoint, ToolPreview, ToolResult } from "./types";
 
 export function circleSelection(g: GridData, c: RasterPoint, rRaster: number): ToolResult {
@@ -12,7 +11,7 @@ export function circleSelection(g: GridData, c: RasterPoint, rRaster: number): T
     kind: "selection",
     spec: { kind: "circle", crs, center: toCrs(g, c), radius_m },
     mask,
-    label: `Circle ${Math.round(radius_m)} m · ${fmtInt(countMask(mask))} cells`,
+    label: `Circle ${Math.round(radius_m)} m · ${placesText(countMask(mask))}`,
     portable: crs === "EPSG:4326",
   };
 }

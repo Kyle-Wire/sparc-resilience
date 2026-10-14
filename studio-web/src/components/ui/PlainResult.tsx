@@ -1,7 +1,10 @@
 import { useState, type ReactNode } from "react";
 import type { Likely } from "../../api/types";
+import { confidence as confidenceWords } from "../../content/glossary";
 import { fmtInt, fmtNum, fmtPct, fmtRange, fmtValue } from "../../theme/format";
 import { Badge } from "./Badge";
+import { InfoTip } from "./InfoTip";
+import { Term } from "./Term";
 
 export type Confidence = "confident_cools" | "confident_warms" | "could_be_zero" | "unknown";
 
@@ -16,6 +19,11 @@ export function confidenceOf(l: Pick<Likely, "lo" | "hi">): Confidence {
   return "could_be_zero";
 }
 
+/**
+ * The Lab's short confidence sentence (its `confidenceWord` plus a full stop; the answer card's
+ * range strip reads it). The PlainResult card itself shows the glossary's chip and sentence
+ * (`confidence()` in content/glossary.ts).
+ */
 export const CONFIDENCE_TEXT: Record<Confidence, string> = {
   confident_cools: "Confident it cools.",
   confident_warms: "Confident it warms.",
@@ -52,23 +60,45 @@ export type PlainResultProps = {
   title?: ReactNode;
 };
 
-/** Plain-language likely-range card with an expert toggle (SE, n, method). */
+/** Badge tone of each confidence: cools in the accent, warms in red, could be zero in amber. */
+const CONFIDENCE_TONE: Record<Confidence, "accent" | "crit" | "warn" | undefined> = {
+  confident_cools: "accent",
+  confident_warms: "crit",
+  could_be_zero: "warn",
+  unknown: undefined,
+};
+
+/** "In 35% of the places changed, the change goes beyond the conditions measured in this city, so …" (a Term explains it). */
+export function extrapolationLine(frac: number): ReactNode {
+  return (
+    <>
+      In {fmtPct(frac)} of the places changed, the change goes <Term id="extrapolated">beyond the conditions measured in this city</Term>, so treat this result with extra caution.
+    </>
+  );
+}
+
+/**
+ * Plain-language likely-range card: the headline with its likely range, the confidence chip and
+ * sentence (glossary), qualifiers, and a "Technical details" toggle (estimate, SE, interval, n).
+ */
 export function PlainResult({ likely, unit, subject, fracExtrapolated, qualifiers = [], expert, decimals = 2, title }: PlainResultProps) {
   const [showExpert, setShowExpert] = useState(false);
   const conf = confidenceOf(likely);
+  const words = confidenceWords(conf);
   const lines: ReactNode[] = [...qualifiers];
   if (fracExtrapolated !== null && fracExtrapolated !== undefined && fracExtrapolated > 0.2) {
-    lines.unshift(`${fmtPct(fracExtrapolated)} of the edited cells are outside the conditions the model was trained on (extrapolated), so treat this with extra caution.`);
+    lines.unshift(extrapolationLine(fracExtrapolated));
   }
   return (
     <div className="plain-result card">
       {title ? <p className="eyebrow">{title}</p> : null}
       <p className="headline">{likelySentence(likely, unit, subject, decimals)}</p>
       <p className="row">
-        <Badge tone={conf === "confident_cools" ? "accent" : conf === "confident_warms" ? "crit" : conf === "could_be_zero" ? "warn" : undefined}>
-          {conf === "confident_cools" ? "cools" : conf === "confident_warms" ? "warms" : conf === "could_be_zero" ? "could be zero" : "no range"}
-        </Badge>
-        <span>{CONFIDENCE_TEXT[conf]}</span>
+        <Badge tone={CONFIDENCE_TONE[conf]}>{words.chip}</Badge>
+        <span>
+          {words.sentence}
+          {conf !== "unknown" ? <InfoTip term="interval_95" /> : null}
+        </span>
       </p>
       {lines.length ? (
         <ul>
@@ -79,26 +109,38 @@ export function PlainResult({ likely, unit, subject, fracExtrapolated, qualifier
       ) : null}
       <div>
         <button type="button" className="btn small ghost" aria-expanded={showExpert} onClick={() => setShowExpert((v) => !v)}>
-          {showExpert ? "Hide details" : "Expert details"}
+          {showExpert ? "Hide technical details" : "Technical details"}
         </button>
       </div>
       {showExpert ? (
         <dl>
           <dt>Estimate</dt>
           <dd>{fmtValue(likely.estimate, unit, Math.max(decimals, 3))}</dd>
-          <dt>Standard error</dt>
+          <dt>
+            Standard error
+            <InfoTip term="jackknife_se" />
+          </dt>
           <dd>{likely.se === null ? "not available" : fmtValue(likely.se, unit, Math.max(decimals, 3))}</dd>
-          <dt>95% interval</dt>
+          <dt>
+            95% interval
+            <InfoTip term="interval_95" />
+          </dt>
           <dd>{fmtRange(likely.lo, likely.hi, unit, Math.max(decimals, 3))}</dd>
           {expert?.n !== undefined && expert.n !== null ? (
             <>
-              <dt>Cells</dt>
+              <dt>
+                Places
+                <InfoTip term="cell" />
+              </dt>
               <dd>{fmtInt(expert.n)}</dd>
             </>
           ) : null}
           {expert?.folds ? (
             <>
-              <dt>Folds (jackknife)</dt>
+              <dt>
+                Test areas (folds)
+                <InfoTip term="held_out_fold" />
+              </dt>
               <dd>{fmtNum(expert.folds, 0)}</dd>
             </>
           ) : null}

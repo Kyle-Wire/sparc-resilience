@@ -1,10 +1,10 @@
 // Mission Control bottom tabs (SPEC §5.10): Logs (virtualised, level/logger/stage/text filters,
 // follow-tail, copy, downloads, raw stderr), Warnings (grouped by code, linked to the output view),
 // Outputs (artifact feed linked to run tabs, even mid-run), Checkpoints, Resources (RSS, CPU and
-// process sparklines, peak, free RAM and disk, the 80% memory banner) and Config & provenance.
-// Embedded in a run's Model details (Run log), Outputs and Config & provenance are left out: each
+// process sparklines, peak, free RAM and disk, the 80% memory banner) and Settings & audit trail (config &
+// provenance). Embedded in a run's Model details (Run log), Outputs and Settings & audit trail are left out: each
 // is one line linking to its home there (Files, Provenance).
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useResource } from "../../../api/resource";
 import {
   getLogs,
@@ -30,12 +30,13 @@ import { StatusChip } from "../../../components/ui/StatusChip";
 import { Table, type Column } from "../../../components/ui/Table";
 import { Tabs } from "../../../components/ui/Tabs";
 import { VirtualList } from "../../../components/ui/VirtualList";
+import { useTipOn } from "../../../components/ui/useTipOn";
 import { copyText } from "../../../components/ui/download";
 import { codecs, Link, runHref, runViewHref, useUrlState } from "../../../router";
 import { toast } from "../../../stores/ui";
 import { LOG_KEEP, STAGE_IDS, type TrackerEntry, type TrackerState } from "../../../stores/tracker";
 import { fmtBytes, fmtDateTime, fmtNum } from "../../../theme/format";
-import { artifactTab, matchesLog, warningTab, type LogFilter } from "../model";
+import { artifactTab, matchesLog, STAGE_PLAIN, warningTab, type LogFilter } from "../model";
 
 export const BOTTOM_TABS = ["logs", "warnings", "outputs", "checkpoints", "resources", "config"] as const;
 export type BottomTab = (typeof BOTTOM_TABS)[number];
@@ -80,6 +81,17 @@ export async function loadLogLines(jid: string, f: LogFilter, signal?: AbortSign
     after = page.next_cursor;
   }
   return { lines, next_cursor: next, truncated };
+}
+
+/** One log line; the full message (cut short on a narrow row) shows in a tooltip on hover or tap. */
+function LogLine({ msg, children }: { msg: string; children: ReactNode }) {
+  const t = useTipOn<HTMLDivElement>(msg, { describe: false });
+  return (
+    <div ref={t.ref} className="logline" {...t.props()}>
+      {children}
+      {t.bubble}
+    </div>
+  );
 }
 
 function LogsTab({ entry }: { entry: TrackerEntry }) {
@@ -145,7 +157,7 @@ function LogsTab({ entry }: { entry: TrackerEntry }) {
         </div>
         <div className="field">
           <label htmlFor="log-stage">Stage</label>
-          <Select id="log-stage" options={[{ value: "", label: "All stages" }, ...STAGE_IDS.map((s) => ({ value: s, label: s }))]} value={stage} onChange={(v) => setStage(v)} />
+          <Select id="log-stage" options={[{ value: "", label: "All stages" }, ...STAGE_IDS.map((s) => ({ value: s, label: STAGE_PLAIN[s] }))]} value={stage} onChange={(v) => setStage(v)} />
         </div>
         <div className="field">
           <label htmlFor="log-q">Text</label>
@@ -183,14 +195,14 @@ function LogsTab({ entry }: { entry: TrackerEntry }) {
             renderRow={(i) => {
               const l = lines[i];
               return (
-                <div className="logline" title={l.msg}>
+                <LogLine msg={l.msg}>
                   <span className="ts">{clock(l.ts)}</span>
                   <span className="lvl" data-level={l.level}>
                     {l.level}
                   </span>
                   <span className="logger">{l.logger}</span>
                   <span className="msg">{l.msg}</span>
-                </div>
+                </LogLine>
               );
             }}
           />
@@ -449,9 +461,9 @@ export function BottomTabs({ entry, job, meta, embedded = false }: { entry: Trac
     { id: "logs" as const, label: "Logs" },
     { id: "warnings" as const, label: "Warnings", badge: nWarn ? <span className="muted num">({nWarn})</span> : undefined },
     { id: "outputs" as const, label: "Outputs", badge: Object.keys(state.artifacts).length ? <span className="muted num">({Object.keys(state.artifacts).length})</span> : undefined },
-    { id: "checkpoints" as const, label: "Checkpoints" },
+    { id: "checkpoints" as const, label: "Saved models" },
     { id: "resources" as const, label: "Resources" },
-    { id: "config" as const, label: "Config & provenance" },
+    { id: "config" as const, label: "Settings & audit trail" },
   ];
   const items = moved ? all.filter((i) => !MOVED_TABS.has(i.id)) : all;
   return (

@@ -1,14 +1,52 @@
-// Shared bits of the studies pages: cost and requirement wording, launch announcements, the
-// attach/detach toggle, the run picker and small layout helpers.
+// Shared bits of the studies pages: the study kinds in plain words, cost and requirement wording,
+// launch announcements, the attach/detach toggle, the run picker and small layout helpers.
+// Tooltips are Tooltip/InfoTip, never a native title (phase 4).
 import { useState, type ReactNode } from "react";
 import { errorMessage, isApiError } from "../../../api/client";
 import { invalidate } from "../../../api/resource";
-import { attachStudy, type StudyCost, type StudyEstimate } from "../../../api/studies";
+import { attachStudy, KIND_LABELS, type StudyCost, type StudyEstimate, type StudyKind } from "../../../api/studies";
 import type { Job, RunSummary } from "../../../api/types";
 import { Button } from "../../../components/ui/Button";
+import { Tooltip, useTooltip } from "../../../components/ui/Tooltip";
+import { term, type TermId } from "../../../content/glossary";
 import { useJobs } from "../../../stores/jobs";
 import { toast } from "../../../stores/ui";
 import { fmtDate, fmtDurationRange, fmtNum } from "../../../theme/format";
+
+/** The glossary term of each study kind that has one: its plain name and what it does. */
+export const KIND_TERMS: Partial<Record<StudyKind, TermId>> = {
+  baselines: "baselines",
+  placebo: "placebo",
+  simcheck: "attribution",
+  multiverse: "multiverse",
+  reproduce: "reproduce",
+  literature: "literature_check",
+  benchmark: "benchmark",
+  emulator: "emulator_preview",
+  uncertainty: "envelope",
+};
+
+/** A study kind in plain words (its glossary label), else its catalogue label. */
+export function kindLabel(kind: StudyKind): string {
+  const id = KIND_TERMS[kind];
+  return id ? term(id).label : (KIND_LABELS[kind] ?? kind);
+}
+
+/**
+ * A hover/focus/tap tooltip around content that is already a control (a link) or needs no
+ * keyboard stop (a date), in place of a native title: the bubble exists only while open, so it
+ * adds no text to the table. Without a tip the content renders as it is.
+ */
+export function TipSpan({ tip, children }: { tip: ReactNode; children: ReactNode }) {
+  const t = useTooltip<HTMLSpanElement>({ content: tip });
+  if (tip === null || tip === undefined || tip === "") return <>{children}</>;
+  return (
+    <span ref={t.anchorRef} className="tip-anchor" {...t.triggerProps}>
+      {children}
+      {t.bubble}
+    </span>
+  );
+}
 
 /** "≈ 4–6 min" for a status-row estimate. */
 export function estimateText(e: StudyEstimate | null | undefined): string | null {
@@ -84,15 +122,11 @@ export function AttachToggle({ studyId, runId, attached, label, onDone }: { stud
     }
   };
   return (
-    <Button
-      size="small"
-      busy={busy}
-      aria-pressed={attached}
-      title={attached ? "Feeds this run's uncertainty report. Detach to stop." : "Attach to feed this run's uncertainty report (re-runs it)."}
-      onClick={() => void toggle()}
-    >
-      {attached ? "Attached" : "Attach to run"}
-    </Button>
+    <Tooltip content={attached ? "This check widens the run's likely ranges (its uncertainty report). Detach to leave it out." : "Add this check to the run's uncertainty report, so its likely ranges count it too (the report runs again)."}>
+      <Button size="small" busy={busy} aria-pressed={attached} onClick={() => void toggle()}>
+        {attached ? "Attached" : "Attach to run"}
+      </Button>
+    </Tooltip>
   );
 }
 
@@ -126,12 +160,13 @@ export function FormField({ id, label, hint, children }: { id: string; label: Re
   );
 }
 
-/** A checkbox with its label. */
-export function Check({ checked, onChange, children, disabled, title }: { checked: boolean; onChange: (v: boolean) => void; children: ReactNode; disabled?: boolean; title?: string }) {
+/** A checkbox with its label; `tip` (an InfoTip) explains it, after the label's words. */
+export function Check({ checked, onChange, children, disabled, tip }: { checked: boolean; onChange: (v: boolean) => void; children: ReactNode; disabled?: boolean; tip?: ReactNode }) {
   return (
-    <label title={title}>
+    <label>
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {children}
+      {tip}
     </label>
   );
 }

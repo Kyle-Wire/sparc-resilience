@@ -373,7 +373,7 @@ def buys_lines(*, delta: np.ndarray, obs: np.ndarray | None, people: np.ndarray 
                 out.append(f"{'Moves' if moved > 0 else 'Pushes'} {abs(moved):,.0f} residents "
                            f"{'below' if moved > 0 else 'above'} {threshold:g} {unit} {label}")
     if cooling_per_cost is not None:
-        out.append(f"{1000.0 * cooling_per_cost:,.2f} {unit}·cells of cooling per 1,000 cost units")
+        out.append(f"{1000.0 * cooling_per_cost:,.2f} {unit}·places of cooling per 1,000 cost units")
     if warming_mid is not None and warming_mid > 0:
         share = -float(np.mean(d)) / float(warming_mid)
         out.append(f"Offsets {share:.0%} of the city's {warming_label or 'mid-century'} median warming")

@@ -1,11 +1,26 @@
 // The simcheck generator × seed grid (SPEC §5.11): each replicate is a cell coloured by its
 // effect share on the diverging ramp centred on 1, grey while pending, red on error, with a
 // dot for a gate redraw. Status is also in each cell's label and marker, never colour alone.
+// A cell's label shows in a tooltip on hover or tap (no native title); screen readers read its
+// aria-label.
+import type { CSSProperties, ReactNode } from "react";
 import type { SimcheckView } from "../../../api/studies";
+import { useTooltip } from "../../../components/ui/Tooltip";
 import { useDark } from "../../../stores/ui";
 import { fmtDuration, fmtNum } from "../../../theme/format";
 import { rampColor, TOKEN_VALUES } from "../../../theme/palette";
 import { cellKey, simCellLook, simGrid, simProgress } from "../model/simcheck";
+
+/** One replicate's cell: its label in a tooltip (hover, tap), the marker inside. */
+function SimCell({ label, style, children, ...data }: { label: string; style: CSSProperties; children: ReactNode; "data-status": string; "data-redraw"?: boolean; "data-fill": string }) {
+  const t = useTooltip<HTMLTableCellElement>({ content: label });
+  return (
+    <td ref={t.anchorRef} {...data} style={style} aria-label={label} {...t.triggerProps}>
+      {children}
+      {t.bubble}
+    </td>
+  );
+}
 
 export function SimcheckGrid({ view, workers = 1 }: { view: SimcheckView | null | undefined; workers?: number }) {
   const dark = useDark();
@@ -61,9 +76,9 @@ export function SimcheckGrid({ view, workers = 1 }: { view: SimcheckView | null 
                   const look = simCellLook(c, g, s, grid.span, dark);
                   // backgroundColor, not the `background` shorthand: the stylesheet hatches gate failures with background-image.
                   return (
-                    <td key={s} data-status={c.status} data-redraw={look.redraw || undefined} data-fill={look.fill} style={{ backgroundColor: look.fill, color: look.ink }} title={look.label} aria-label={look.label}>
+                    <SimCell key={s} label={look.label} data-status={c.status} data-redraw={look.redraw || undefined} data-fill={look.fill} style={{ backgroundColor: look.fill, color: look.ink }}>
                       {look.marker}
-                    </td>
+                    </SimCell>
                   );
                 })}
               </tr>
