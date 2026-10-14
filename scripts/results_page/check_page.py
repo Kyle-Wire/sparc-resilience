@@ -6,6 +6,7 @@
   :func:`sparc.core.results_page.build_results_page`;
 * checks the HTML shell (doctype, charset, viewport, ``lang``);
 * opens every map theme and layer (each CV fold of the folds layer) and reports JavaScript errors;
+* at a 390 px phone width: no sideways scroll, and every chart drawn at its own box's width;
 * checks the in-browser emulator of the Design theme against the Python reference
   (:func:`sparc.core.emulator.emulate`) for a patch of each lever.
 
@@ -83,6 +84,22 @@ def main(argv=None) -> int:
                         pg.wait_for_timeout(40)
         if n_layers == 0:
             errs.append("the map explorer lists no layers")
+        # a 390 px phone: no sideways scroll, and every chart drawn at its box's width (1 SVG unit = 1 CSS px)
+        ph = b.new_page(viewport={"width": 390, "height": 844})
+        ph.on("pageerror", lambda e: errs.append(f"pageerror (390 px): {e}"))
+        ph.goto(page.resolve().as_uri())
+        ph.wait_for_timeout(600)
+        ph.evaluate("document.getElementById('detailsGroup').open = true")
+        ph.wait_for_timeout(300)
+        phone = ph.evaluate("""() => { const de = document.documentElement; const off = [];
+            for (const s of document.querySelectorAll('.chart svg[role="img"]')) { const w = s.getBoundingClientRect().width;
+              if (w && Math.abs(w - s.viewBox.baseVal.width) > 1.5) off.push(`${(s.closest('[id]') || {}).id}: ${Math.round(w)} px for ${s.viewBox.baseVal.width}`); }
+            return { sw: de.scrollWidth, cw: de.clientWidth, off }; }""")
+        if phone["sw"] > phone["cw"]:
+            errs.append(f"390 px: the page scrolls sideways ({phone['sw']} px wide)")
+        errs.extend(f"390 px: chart not drawn at its width ({o})" for o in phone["off"])
+        print(f"390 px: page {phone['sw']} px wide, {len(phone['off'])} charts off their width")
+        ph.close()
         if (run / "emulator.npz").exists():
             data, *_ = load_run(run, copy.deepcopy(cfg))
             npz = np.load(run / "emulator.npz")

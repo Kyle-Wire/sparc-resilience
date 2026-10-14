@@ -6,9 +6,10 @@
 response_*.parquet, scenario_deltas.parquet, allocation.parquet and the stage files), plus the optional
 post-run outputs (planner/, emulator.npz/.json, placebo.json and the uncertainty / simcheck / multiverse
 sections merged into the manifest), and writes one self-contained HTML page: a map explorer (temperature,
-land cover, cooling footprints, saturation, scenarios, budget plan, climate futures, planner layers, a design
-tool and the CV folds) plus charts and tables for accuracy vs distance, area of influence, dose-response,
-scenarios, uncertainty, climate, the causal audit, the budget plan and the validation studies.
+land cover, cooling per step, diminishing returns, scenarios, budget plan, future climate, people and hot days, a
+paint-a-design tool and the test areas) plus charts and tables for accuracy vs distance, area of influence,
+dose-response, scenarios, uncertainty, climate, the causal audit, the budget plan and the validation studies.
+Everything outside Model details is in plain words, as SPARC Studio says them (``sparc/core/glossary.json``).
 
 Nothing here is tied to one city:
 
@@ -16,8 +17,8 @@ Nothing here is tied to one city:
   unpickled), and the held-out / buffer cells of each fold travel as one u8 mask per fold;
 * ``causal``, ``cv_distance``, ``optimize``, ``influence``, ``baselines``, ``climate`` and ``scenarios`` fall
   back to their stage files when the manifest lacks them (runs stopped before the manifest was finalised);
-* the map's layer catalogue (:func:`layer_catalog`) and the variable names come from the config's physics
-  roles and actionable levers;
+* the map's layer catalogue (:func:`layer_catalog`, in plain words) and the variable names come from the config's
+  physics roles and actionable levers;
 * the Pareto caption is written from the frontier's numbers (:func:`pareto_caption`).
 
 Page text comes from the config's optional ``report`` block::
@@ -42,27 +43,50 @@ from pathlib import Path
 import numpy as np
 
 __all__ = ["build_results_page", "collect", "render_page", "layer_catalog", "pareto_caption", "variable_names",
-           "lever_info", "TEMPLATE", "main"]
+           "lever_info", "glossary_payload", "TEMPLATE", "main"]
 
 TEMPLATE = Path(__file__).resolve().parent / "template.html"
 
-#: display names of the physics roles (the variable a role names gets this label)
-ROLE_NAMES = {"canopy": "Tree canopy", "impervious": "Impervious cover", "albedo": "Albedo", "ndvi": "NDVI",
+#: display names of the physics roles (the variable a role names gets this label), in plain words (the glossary's
+#: lever measures: "paving", "surface reflectivity")
+ROLE_NAMES = {"canopy": "Tree canopy", "impervious": "Paving", "albedo": "Surface reflectivity", "ndvi": "Greenness",
               "elevation": "Elevation", "water_distance": "Distance to water"}
-#: short names used in layer titles ("Canopy: footprint per +1 pp")
-ROLE_SHORT = {"canopy": "Canopy", "impervious": "Impervious", "albedo": "Albedo", "ndvi": "NDVI",
+#: short names used in layer titles ("Tree canopy: total effect of +1 pt, nearby included")
+ROLE_SHORT = {"canopy": "Tree canopy", "impervious": "Paving", "albedo": "Reflectivity", "ndvi": "Greenness",
               "elevation": "Elevation", "water_distance": "Distance to water"}
 #: nouns used in running text ("Planned canopy increase")
-ROLE_NOUNS = {"canopy": "canopy", "impervious": "impervious cover", "albedo": "albedo"}
+ROLE_NOUNS = {"canopy": "canopy", "impervious": "paving", "albedo": "reflectivity"}
 #: map inputs shown in the Land cover theme, in this order (roles), with unit and decimals
-INPUT_ROLES = (("canopy", "%", 0, "Share of the cell under tree canopy."),
-               ("impervious", "%", 0, "Share of the cell that is paved or built."),
-               ("ndvi", "", 2, "Vegetation greenness. In scenarios it follows canopy and impervious cover through "
-                               "a fitted monotone model."),
-               ("albedo", "", 3, "Surface reflectance (0–1)."))
+INPUT_ROLES = (("canopy", "%", 0, "Share of the place under tree canopy."),
+               ("impervious", "%", 0, "Share of the place that is paved or built on."),
+               ("ndvi", "", 2, "How green the plants in the place look from space, on a 0–1 scale. In scenarios it "
+                               "follows the tree-canopy and paving changes."),
+               ("albedo", "", 3, "How much sunlight the surfaces reflect, on a 0–1 scale (0 soaks up all of it, 1 "
+                                 "reflects all of it)."))
 _UNIT_LABELS = {"degf": "°F", "degc": "°C", "f": "°F", "c": "°C", "k": "K", "kelvin": "K"}
 _WORDS = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine",
           10: "ten"}
+
+
+#: fixed glossary sections the page reads (trust words, curve shapes, heat categories, lever names, pathways, periods)
+GLOSSARY_SECTIONS = ("trust", "trustRanges", "shapes", "heat", "levers", "emissions", "periods")
+
+
+def glossary_payload(template_text: str | None = None) -> dict:
+    """``DATA.glossary``: the plain words of ``sparc/core/glossary.json`` (shared with SPARC Studio) that the page uses.
+
+    Terms: every term id the template names as a quoted string (``infotip("r2")``, ``data-tip="coverage"``,
+    ``["R²", "r2"]``), with its label, tip and technical name (the longer ``more`` text is left out); plus the
+    fixed sections in :data:`GLOSSARY_SECTIONS`."""
+    from sparc.core.glossary import glossary
+
+    g = glossary()
+    text = TEMPLATE.read_text(encoding="utf-8") if template_text is None else template_text
+    used = set(re.findall(r"[\"']([a-z][a-z0-9_]*)[\"']", text))
+    terms = {k: {f: v[f] for f in ("label", "tip", "technical") if v.get(f)}
+             for k, v in (g.get("terms") or {}).items() if k in used}
+    return {"version": g.get("version"), "terms": terms,
+            **{s: g[s] for s in GLOSSARY_SECTIONS if isinstance(g.get(s), dict)}}
 
 
 # ---------------------------------------------------------------------------
@@ -119,8 +143,15 @@ def _fmt(v, d: int = 2) -> str:
 
 
 def _block_text(block_m) -> str:
-    """``2000`` → ``2 km`` (the held-out block size in running text); ``held-out`` when unknown."""
-    return f"{_km(block_m)} km" if block_m else "held-out"
+    """``2000`` → ``2 km`` (the size of the test blocks in running text); ``test`` when unknown."""
+    return f"{_km(block_m)} km" if block_m else "test"
+
+
+def _unit_word(unit: str, one: bool = False) -> str:
+    """A lever unit as a planner reads it (the glossary's unit word): ``pp`` → ``pts`` (``pt`` for one)."""
+    if unit == "pp":
+        return "pt" if one else "pts"
+    return unit
 
 
 def _number_word(n: int) -> str:
@@ -191,7 +222,7 @@ def pareto_caption(optimize: dict | None, units: str = "°F") -> str | None:
     o = optimize or {}
     pts = [p for p in ((o.get("pareto") or {}).get("points") or []) if isinstance(p, dict)]
     budget = o.get("budget")
-    base = f"Total planned cooling ({units} summed over cells) as the budget scales."
+    base = f"Total planned cooling ({units}·places, added up over every place) as the budget grows."
     if not pts or not budget:
         return None
     try:
@@ -215,15 +246,16 @@ def pareto_caption(optimize: dict | None, units: str = "°F") -> str | None:
     budget_ratio = xs[b] / xs[a]
     gain = (r - 1.0) / max(budget_ratio - 1.0, 1e-9)       # extra cooling per extra budget, vs the first budget
     if gain >= 0.85:
-        verdict = "so returns barely diminish at this scale: plenty of high-benefit cells remain."
+        verdict = "so returns barely diminish at this scale: plenty of places that cool well remain."
     elif gain >= 0.5:
         verdict = (f"so returns diminish: each extra unit of budget buys about {gain:.0%} of the cooling a unit of "
-                   "the smaller budget bought, because the best cells are treated first.")
+                   "the smaller budget bought, because the best places are changed first.")
     elif gain > 0:
         verdict = (f"so returns diminish sharply: each extra unit of budget buys only about {gain:.0%} of the "
-                   "cooling a unit of the smaller budget bought; most high-benefit cells are already in the plan.")
+                   "cooling a unit of the smaller budget bought; most of the places that cool well are already in "
+                   "the plan.")
     else:
-        verdict = "so the extra budget buys no further cooling: every cell that cools is already in the plan."
+        verdict = "so the extra budget buys no further cooling: every place that cools is already in the plan."
     return f"{base} {step} raises total cooling {r:.2f}×, {verdict}"
 
 
@@ -232,23 +264,28 @@ def pareto_caption(optimize: dict | None, units: str = "°F") -> str | None:
 # ---------------------------------------------------------------------------
 
 def _hd_label(case: str) -> tuple[str, bool]:
-    """``(label, is_today)`` of a planner hot-days case (``today``, ``ssp245_mid``, ``ssp585_late`` …)."""
+    """``(label, is_today)`` of a planner hot-days case (``today``, ``ssp245_mid``, ``ssp585_late`` …), in the
+    glossary's words: ``per summer, moderate emissions, mid-century (2041–2060)``."""
+    from sparc.core.glossary import section
+
     if case == "today":
-        return "per summer (today)", True
-    m = re.fullmatch(r"ssp(\d)(\d)(\d)_(mid|late)", case)
+        return "per summer, today", True
+    m = re.fullmatch(r"(ssp\d{3})_(mid|late)", case)
     if m:
-        period = "2041–2060" if m.group(4) == "mid" else "2081–2100"
-        return f"(SSP{m.group(1)}-{m.group(2)}.{m.group(3)}, {period})", False
-    return f"({case.replace('_', ' ')})", False
+        years = "2041-2060" if m.group(2) == "mid" else "2081-2100"
+        em = (section("emissions").get(m.group(1)) or {}).get("label") or m.group(1).upper()
+        period = (section("periods").get(years) or {}).get("label") or years.replace("-", "–")
+        return f"per summer, {em}, {period}", False
+    return f"per summer ({case.replace('_', ' ')})", False
 
 
 def layer_catalog(cfg, layers: dict, *, units: str, background: float, block_m=None, n_folds: int = 5,
                   scen_layers=(), climate: bool = False, sites: bool = False, design: bool = False,
                   optimize_variable: str | None = None) -> list[dict]:
-    """The map's layer list, generated from the config (roles, levers) and the layers present.
+    """The map's layer list, generated from the config (roles, levers) and the layers present, in plain words.
 
     Each entry is ``{group, key, name, unit, scale, center?, d, desc, mult?, zeroBlank?}``; keys starting with
-    ``__`` are computed in the page (climate futures, logger sites, the design tool, the CV folds)."""
+    ``__`` are computed in the page (future climate, logger sites, the design tool, the test areas)."""
     U = units
     roles = _roles(cfg)
     levers = lever_info(cfg)
@@ -259,18 +296,19 @@ def layer_catalog(cfg, layers: dict, *, units: str, background: float, block_m=N
         if o["key"].startswith("__") or o["key"] in layers:
             out.append(o)
 
-    bg = _fmt(background, 1)
     block = _block_text(block_m)
-    add(group="Temperature", key="obs", name="Observed air temperature", unit=U, scale="div", center=background,
-        d=1, desc=f"Measured air temperature. Colours are relative to the city median ({bg} {U}).")
-    add(group="Temperature", key="pred", name="Predicted (held-out)", unit=U, scale="div", center=background, d=1,
-        desc=f"Each cell is predicted by the fold model that never saw its {block} block, so this is what the model "
-             "knows without local data.")
-    add(group="Temperature", key="err", name="Error (observed − predicted)", unit=U, scale="div", center=0, d=2,
-        desc="Red: warmer than predicted. Blue: cooler. Large coherent patches are local heat sources or sinks the "
-             "inputs do not capture.")
-    add(group="Temperature", key="hw", name="90% interval half-width", unit=U, scale="seq", d=2,
-        desc="Cross-conformal interval: 90% of held-out cells fall within this distance of the prediction.")
+    add(group="Temperature", key="obs", name="Measured air temperature", unit=U, scale="div", center=background,
+        d=1, desc="Air temperature measured on the hot afternoon. Colours compare each place with the city's typical "
+                  "(median) temperature, the middle of the scale.")
+    add(group="Temperature", key="pred", name="Predicted air temperature", unit=U, scale="div", center=background,
+        d=1, desc=f"Each place is predicted by a model trained without the {block} block around it, so this is what "
+                  "the model knows without local readings.")
+    add(group="Temperature", key="err", name="Prediction miss (measured − predicted)", unit=U, scale="div", center=0,
+        d=2, desc="Orange: warmer than predicted. Purple: cooler than predicted. Large patches of one colour are local "
+                  "heat sources or cool spots the map layers do not capture.")
+    add(group="Temperature", key="hw", name="Prediction range (±)", unit=U, scale="seq", d=2,
+        desc="How far the 90% prediction range reaches either side of the prediction: 9 in 10 test readings fall "
+             "within it.")
     shown = set()
     for role, unit, d, desc in INPUT_ROLES:
         col = roles.get(role)
@@ -281,86 +319,93 @@ def layer_catalog(cfg, layers: dict, *, units: str, background: float, block_m=N
         if f"in_{var}" in shown:
             continue
         shown.add(f"in_{var}")
-        add(group="Land cover", key=f"in_{var}", name=str(info["label"]), unit=info["unit"], scale="seq",
-            d=3 if info["albedo_like"] else 1, desc=f"Today's {info['noun']} (an actionable lever).")
-    # cooling effects: footprint per unit (and own-cell for canopy) per lever
+        add(group="Land cover", key=f"in_{var}", name=str(info["label"]), unit=_unit_word(info["unit"]), scale="seq",
+            d=3 if info["albedo_like"] else 1, desc=f"Today's {info['noun']} (something a plan can change).")
+    # cooling per step: the total effect (nearby included) per unit, and the effect on the spot for canopy, per lever
     for var, info in levers.items():
         step = "0.01" if info["albedo_like"] else "1"
-        per = f"+{step}" + (f" {info['unit']}" if info["unit"] else "")
+        per = f"+{step}" + (f" {_unit_word(info['unit'], one=True)}" if info["unit"] else "")
         role = info["role"]
+        reach = "added up over every place it reaches"
         if role == "canopy":
-            desc = ("Total temperature change summed over every cell affected when this cell gains 1 percentage "
-                    "point of canopy (through neighbourhood features and heat transport).")
+            desc = (f"The temperature change, {reach}, when this place gains 1 percentage point of tree canopy "
+                    "(the cooler air spreads to the neighbours).")
         elif role == "impervious":
-            desc = ("Total temperature change when this cell gains 1 pp of impervious cover. Removing pavement "
-                    "reverses the sign.")
+            desc = (f"The temperature change, {reach}, when this place gains 1 percentage point of paving. Removing "
+                    "paving reverses the sign.")
         elif info["albedo_like"]:
-            desc = f"Total temperature change when this cell's {info['noun']} rises by 0.01."
+            desc = f"The temperature change, {reach}, when this place's {info['noun']} rises by 0.01 on its 0–1 scale."
         else:
-            desc = (f"Total temperature change summed over every cell affected when this cell's {info['noun']} rises "
-                    f"by {per.lstrip('+')} (through neighbourhood features and heat transport).")
+            desc = f"The temperature change, {reach}, when this place's {info['noun']} rises by {per.lstrip('+')}."
         if var == optimize_variable:
-            desc += " This is what the budget optimiser ranks."
-        add(group="Cooling effects", key=f"fp_{var}", name=f"{info['short']}: footprint per {per}", unit=U,
-            scale="div", center=0, d=4, desc=desc, **({"mult": 0.01} if info["albedo_like"] else {}))
+            desc += " This is what the budget plan ranks places by."
+        add(group="Cooling per step", key=f"fp_{var}", name=f"{info['short']}: total effect of {per}, nearby included",
+            unit=U, scale="div", center=0, d=4, desc=desc, **({"mult": 0.01} if info["albedo_like"] else {}))
         if role == "canopy":
-            add(group="Cooling effects", key=f"own_{var}", name=f"{info['short']}: own-cell effect per {per}",
+            add(group="Cooling per step", key=f"own_{var}", name=f"{info['short']}: effect of {per} on the spot",
                 unit=U, scale="div", center=0, d=5,
-                desc="Change in this cell's own temperature only, with its neighbours held fixed. Much smaller than "
-                     "the footprint: canopy cools its surroundings more than itself.")
+                desc="The change in this place's own temperature only, with its neighbours left as they are. Much "
+                     "smaller than the total: tree canopy cools its surroundings more than itself.")
     for var, info in levers.items():
-        nm = info["short"] + (" removal" if info["direction"] == "decrease" else "")
-        unit = info["unit"]
-        add(group="Saturation", key=f"cls_{var}", name=f"{nm}: response shape", scale="cat",
-            desc="Saturating: cooling levels off within the tested doses. Linear: no knee yet. Accelerating: little "
-                 "effect at first, then a sharp rise before levelling off. Grey: too little headroom to tell.")
-        add(group="Saturation", key=f"marg_{var}", name=f"{nm}: cooling per unit at today's level",
-            unit=f"{U}/{unit or 'unit'}", scale="seq", d=3,
-            desc="Initial slope of the fitted curve: the cooling the first unit of change would buy here. High values "
-                 "are the best places to act first.")
-        add(group="Saturation", key=f"A_{var}", name=f"{nm}: maximum cooling", unit=U, scale="seq", d=2,
-            desc="Plateau of the fitted saturating curve (for linear cells, the cooling at the largest dose tested).")
-        add(group="Saturation", key=f"d90_{var}", name=f"{nm}: dose for 90% of the maximum", unit=unit, scale="seq",
-            d=info["dose_decimals"],
-            desc="Neighbourhood dose that gets 90% of the achievable cooling. Small values mean the benefit saturates "
-                 "quickly.")
+        nm = info["short"] + (" removed" if info["direction"] == "decrease" else " added")
+        unit = _unit_word(info["unit"])
+        add(group="Diminishing returns", key=f"cls_{var}", name=f"{nm}: how the cooling builds up", scale="cat",
+            desc="Each place's cooling, sorted by how it builds up as more is added. Diminishing returns: each extra "
+                 "step cools less than the last. Steady returns: each step cools about the same. Slow start, then "
+                 "strong: little at first, then a sharp gain. Grey: still cooling at the most the space allows (hit "
+                 "the limit), or too little room to tell.")
+        # per +0.01 for a 0–1 lever (as its total-effect layer), per +1 unit otherwise
+        add(group="Diminishing returns", key=f"marg_{var}", name=f"{nm}: cooling from the first step",
+            unit=f"{U} per +0.01" if info["albedo_like"] else f"{U} per {_unit_word(info['unit'], one=True) or 'unit'}",
+            scale="seq", d=5 if info["albedo_like"] else 3,
+            desc="How much the first step of change would cool here. High values are the best places to act first.",
+            **({"mult": 0.01} if info["albedo_like"] else {}))
+        add(group="Diminishing returns", key=f"A_{var}", name=f"{nm}: most cooling possible", unit=U, scale="seq", d=2,
+            desc="The most cooling this place can get from the change, where its curve levels off (for places with "
+                 "steady returns, the cooling at the largest amount tested).")
+        add(group="Diminishing returns", key=f"d90_{var}", name=f"{nm}: amount for 90% of the cooling", unit=unit,
+            scale="seq", d=info["dose_decimals"],
+            desc="The amount of change (averaged over the neighbourhood) by which this place gets 90% of all the "
+                 "cooling it can get. Small values mean the benefit levels off quickly.")
     for s in scen_layers:
         add(group="Scenarios", key=s["key"], name=s["name"], unit=U, scale="div", center=0, d=2,
-            desc=f"Re-predicted change in air temperature at every cell for this scenario (mean of the {folds_word} "
-                 "fold models).")
+            desc=f"The change in afternoon air temperature at every place with this scenario (the average of the "
+                 f"{folds_word} models trained on different test areas).")
     oinfo = levers.get(optimize_variable or "") or {}
     noun = oinfo.get("noun") or "lever"
     verb = "decrease" if oinfo.get("direction") == "decrease" else "increase"
-    add(group="Budget plan", key="alloc_dose", name=f"Planned {noun} {verb}", unit=oinfo.get("unit") or "",
+    add(group="Budget plan", key="alloc_dose", name=f"Planned {noun} {verb}", unit=_unit_word(oinfo.get("unit") or ""),
         scale="seq", d=1, zeroBlank=True,
-        desc=f"Where the budget-optimal plan {'removes' if verb == 'decrease' else 'adds'} {noun}, and how much. "
-             "Untreated cells are blank.")
-    add(group="Budget plan", key="alloc_delta", name="Re-predicted ΔT of the plan", unit=U, scale="div", center=0, d=3,
-        desc="The whole plan applied at once and re-predicted through the model (closed-loop check).")
+        desc=f"Where the budget plan {'removes' if verb == 'decrease' else 'adds'} {noun}, and how much. Places it "
+             "leaves as they are are blank.")
+    add(group="Budget plan", key="alloc_delta", name="The plan's temperature change", unit=U, scale="div", center=0,
+        d=3, desc="The whole plan run through the full model at once, so neighbouring changes and limits all count "
+                  "(the checked benefit).")
     if climate:
-        add(group="Climate futures", key="__clim_temp", name="Future air temperature", unit=U, scale="climtemp",
+        add(group="Future climate", key="__clim_temp", name="Future air temperature", unit=U, scale="climtemp",
             center=background, d=1,
-            desc="Observed temperature plus the CMIP6 multi-model median warming for the chosen pathway and period, "
-                 "plus the chosen adaptation scenario's re-predicted change. Colours keep today's scale, so warming "
-                 "shows as a shift to red.")
-        add(group="Climate futures", key="__clim_thr", name="Cells at or above the heat threshold", scale="climthr",
-            desc="Cells whose projected temperature reaches the threshold chosen in the Heat exposure table (Climate "
-                 "futures section) under the chosen pathway, period and adaptation.")
-    add(group="Heat stress", key="heat_index", name="Heat index (NWS), campaign afternoon", unit="°F", scale="seq",
-        d=1, desc="Apparent temperature from the measured air temperature and the campaign's dewpoint (uniform "
-                  "across the city, so each cell's relative humidity follows from its own temperature), using the "
-                  "US National Weather Service heat index.")
-    add(group="Heat stress", key="heat_cat", name="Heat-risk category (NWS)", scale="heatcat",
-        desc="NWS heat-index categories: Caution 80–90 °F (fatigue with prolonged exposure), Extreme caution "
-             "90–103 °F (heat cramps and exhaustion possible), Danger 103–125 °F (heat stroke possible), Extreme "
-             "danger ≥ 125 °F (heat stroke highly likely).")
-    add(group="Planner", key="people", name="Residents per cell (HRSL)", unit="people", scale="seq", d=1,
-        desc="Residential population from Meta/CIESIN's High Resolution Settlement Layer (census-based, circa "
-             "2010s), summed onto each cell. Daytime presence differs.")
-    add(group="Planner", key="plantable", name="Room for more canopy", unit="pp", scale="seq", d=0,
-        desc="Canopy a cell could still gain: open green and bare land (ESA WorldCover 2021) plus a fifth of its "
-             "built-up area for street trees and lots, never above 100% minus today's canopy. The budget plan "
-             "respects it.")
+            desc="Today's measured temperature plus the warming the climate models expect (their middle answer) for "
+                 "the chosen emissions future and period, plus the chosen scenario's change. Colours keep today's "
+                 "scale, so warming shows as a shift to orange.")
+        add(group="Future climate", key="__clim_thr", name="Places at or above the heat threshold", scale="climthr",
+            desc="Places whose future temperature reaches the threshold chosen under Heat exposure (in the Future "
+                 "climate section), for the chosen emissions future, period and scenario.")
+    add(group="Heat risk", key="heat_index", name="Feels-like temperature, measured afternoon", unit="°F",
+        scale="seq", d=1,
+        desc="Air temperature and humidity combined into how hot it feels (the US National Weather Service heat "
+             "index), with the dew point measured that afternoon. The dew point is about the same across the city, "
+             "so the humidity of each place follows from its own temperature.")
+    add(group="Heat risk", key="heat_cat", name="Heat-risk level", scale="heatcat",
+        desc="The US National Weather Service levels of the feels-like temperature: Caution 80–90 °F (tiredness with "
+             "long exposure), Extreme caution 90–103 °F (heat cramps and exhaustion possible), Danger 103–125 °F "
+             "(heat stroke possible), Extreme danger 125 °F or more (heat stroke highly likely).")
+    add(group="People & hot days", key="people", name="Residents per place", unit="people", scale="seq", d=1,
+        desc="People living in each place, from Meta and CIESIN's High Resolution Settlement Layer (based on "
+             "censuses, around the 2010s). Daytime numbers differ.")
+    add(group="People & hot days", key="plantable", name="Room for more canopy", unit="pts", scale="seq", d=0,
+        desc="Tree canopy a place could still gain: open green and bare land (ESA WorldCover 2021) plus a fifth of "
+             "its built-up area for street trees and lots, never above 100% minus today's canopy. The budget plan "
+             "stays within it.")
     hd = []
     for key in layers:
         m = re.fullmatch(r"hd_(.+?)_(today|ssp\d{3}_(?:mid|late)|[a-z0-9]+_[a-z0-9]+)", key)
@@ -373,33 +418,34 @@ def layer_catalog(cfg, layers: dict, *, units: str, background: float, block_m=N
     first_today = True
     for _thr, t, case, key in sorted(hd, key=lambda r: (r[0], r[2] != "today", r[2])):
         label, today = _hd_label(case)
+        name = f"Hot afternoons ≥ {t} {U} {label}"
         if today:
-            name = f"Hot afternoons ≥ {t} {U} {label}"
             if first_today:
                 desc = (f"Summer days (June–August, 1995–2014 airport record) whose afternoon reaches {t} {U} in this "
-                        "cell: the airport's daily maximum plus the cell's campaign-afternoon difference from the "
-                        "airport.")
+                        "place: the airport's daily high plus this place's difference from the airport on the "
+                        "measured afternoon.")
                 first_today = False
             else:
                 desc = f"As above for {t} {U}."
         else:
-            name = f"Hot afternoons ≥ {t} {U} {label}"
-            desc = "As today, with each CMIP6 model's summer warming added to the airport record (median over models)."
-        add(group="Planner", key=key, name=name, unit="days", scale="seq", d=1, desc=desc)
+            desc = ("As today, with each climate model's summer warming added to the airport record (the middle "
+                    "answer across models).")
+        add(group="People & hot days", key=key, name=name, unit="days", scale="seq", d=1, desc=desc)
     if sites:
-        add(group="Planner", key="__sites", name="Suggested logger sites", scale="sites",
-            desc="Where new temperature loggers would most sharpen the canopy effect: low- and high-canopy cells at "
-                 "matched impervious cover, favouring places where the fold models disagree most, at least 400 m "
-                 "apart.")
+        add(group="People & hot days", key="__sites", name="Where to measure next", scale="sites",
+            desc="Where new temperature loggers would best pin down the tree-canopy effect: places with little and "
+                 "with a lot of tree canopy but similar paving, favouring places where models trained on different "
+                 "test areas disagree most, at least 400 m apart.")
     if design:
-        add(group="Design", key="__design", name="Your design: change in air temperature", unit=U, scale="design",
-            center=0, d=3,
-            desc="Paint changes on the map with the brush; the change in afternoon air temperature updates as you go. "
-                 "It comes from a linear emulator of the fitted model (fold-averaged), checked against the full model "
-                 "on random patches; use the Scenarios theme for city-wide changes.")
-    add(group="CV design", key="__folds", name="Spatial cross-validation folds", scale="folds",
-        desc="For the chosen fold: blue cells are held out for testing, orange cells are dropped from training as a "
-             "buffer, grey cells train the models. Every accuracy number on this page comes from this design.")
+        add(group="Paint a design", key="__design", name="Your design: quick estimate of the change", unit=U,
+            scale="design", center=0, d=3,
+            desc="Paint changes on the map with the brush; the quick estimate of the change in afternoon air "
+                 "temperature updates as you go. It is an instant, approximate answer, checked against the full "
+                 "model on random patches (see What cools). For citywide changes use the Scenarios theme.")
+    add(group="Test areas", key="__folds", name="How the model was tested", scale="folds",
+        desc="For the chosen test area: purple places are kept out of training and used to test the model, red "
+             "places are left out of training as a gap around them, grey places train it. Every accuracy number on "
+             "this page comes from this design.")
     return out
 
 
@@ -545,7 +591,8 @@ def collect(run, cfg, placebo_path=None) -> dict:
                        np.where(cm == "saturating", 1, np.where(cm == "linear", 2,
                                 np.where(cm == "sigmoid", 3, 0)))).astype(np.uint8)
         L[f"cls_{v}"] = {"kind": "cat", "b64": _b64(cls),
-                         "labels": ["too little headroom to tell", "saturating", "linear", "accelerating (S-shaped)"]}
+                         "labels": ["Hit the limit, or too little room to tell", "Diminishing returns", "Steady returns",
+                                    "Slow start, then strong"]}
     scen_layers = []
     if (run / "scenario_deltas.parquet").exists():
         d = pd.read_parquet(run / "scenario_deltas.parquet")
@@ -654,6 +701,7 @@ def collect(run, cfg, placebo_path=None) -> dict:
                  "ix": _b64(g.ix.astype(np.uint16)), "iy": _b64(g.iy.astype(np.uint16)), **_ids(data.ids)},
         "layers": L, "fold": _b64(fold), "excl": excl, "n_folds": int(folds.n_folds),
         "scen_layers": scen_layers, "caveats_extra": list(rep.get("caveats") or []),
+        "glossary": glossary_payload(),
     })
 
 
@@ -671,7 +719,7 @@ def render_page(blob: dict, cfg) -> str:
         "{{TITLE}}": html.escape(str(rep.get("title", "Urban Heat Model")), quote=False),
         "{{PLACE}}": html.escape(str(rep.get("place", cfg.name)), quote=False),
         "{{AREA}}": html.escape(str(rep.get("area", "the study area")), quote=False),
-        "{{CELL}}": f"{_fmt(qa.get('cell_m'), 0)} m cell" if qa.get("cell_m") else "grid cell",
+        "{{CELL}}": f"place, {_fmt(qa.get('cell_m'), 0)} m across" if qa.get("cell_m") else "place",
         "{{N_FOLDS}}": _number_word(int(blob.get("n_folds") or cv.get("n_folds") or 5)),
         "{{BLOCK}}": _block_text(cv.get("block_m")),
     }

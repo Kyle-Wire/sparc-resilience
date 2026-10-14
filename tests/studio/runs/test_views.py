@@ -314,6 +314,8 @@ def _template_caveats(data: dict) -> list[str]:
     src = TEMPLATE.read_text("utf-8")
     fmt = re.search(r"^const fmt = .*$", src, re.M).group(0)
     sfmt = re.search(r"^const sfmt = .*$", src, re.M).group(0)
+    # the footer that caveats() also writes names the run's date in words
+    dates = [re.search(rf"^const {name} = .*$", src, re.M).group(0) for name in ("MONTHS", "dateWords")]
     body = re.search(r"^function caveats\(\) \{.*?^\}$", src, re.M | re.S).group(0)
     js = "\n".join([
         f"const DATA = {json.dumps(data)};",
@@ -322,7 +324,7 @@ def _template_caveats(data: dict) -> list[str]:
         "const out = [];",
         "const $ = () => ({ append: (x) => out.push(x), set textContent(v) {} });",
         "const el = (tag, attrs, text) => text;",
-        fmt, sfmt, body, "caveats();", "process.stdout.write(JSON.stringify(out));"])
+        fmt, sfmt, *dates, body, "caveats();", "process.stdout.write(JSON.stringify(out));"])
     res = subprocess.run(["node", "-e", js], capture_output=True, text=True, timeout=60)
     assert res.returncode == 0, res.stderr
     return json.loads(res.stdout)

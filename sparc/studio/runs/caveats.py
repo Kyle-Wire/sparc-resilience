@@ -118,12 +118,16 @@ def caveats_for(ctx) -> list[str]:
                      f"effect in {n - k} of {n} tests: a smooth map layer can pick up chance citywide patterns. "
                      "Compare real effects with that floor, and lean on the cause-and-effect check, which passed "
                      f"{pz.get('n_pass_causal') or 0} of {n}.")
-    ext = [s.get("name") for s in (m.get("scenarios") or []) if isinstance(s, dict)
-           and (s.get("frac_extrapolated") or 0) > 0.2]
+    scen = [s for s in (m.get("scenarios") or []) if isinstance(s, dict)]
+    ext = [s.get("name") for s in scen if (s.get("frac_extrapolated") or 0) > 0.2]
     if ext:
-        items.append("These scenarios push more than 20% of the changed places beyond conditions measured in the "
-                     f"city: {', '.join(str(e) for e in ext)}. Treat their results as rough extrapolations, not "
-                     "predictions.")
+        n, total = len(ext), len(scen)
+        if n == total:
+            which = f"{'The' if n == 1 else 'Both' if n == 2 else f'All {n}'} {'scenario' if n == 1 else 'scenarios'}"
+        else:
+            which = f"{n} of {total} scenarios" + (f" ({', '.join(str(e) for e in ext)})" if n <= 3 else "")
+        items.append(f"{which} {'pushes' if n == 1 else 'push'} more than 1 in 5 of the changed places beyond "
+                     "conditions measured in the city. Treat their results as rough guides, not predictions.")
     pv = (m.get("physics") or {}).get("v_norm_m")
     forcing = ((m.get("config") or raw).get("physics") or {}).get("forcing_info")
     if isinstance(pv, dict) and isinstance(pv.get("mean"), (int, float)) and pv["mean"] < 1 and not forcing:
