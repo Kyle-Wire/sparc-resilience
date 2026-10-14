@@ -31,6 +31,7 @@ import { ActionButton, EmptyState } from "../../components/ui/EmptyState";
 import { Icon } from "../../components/ui/Icon";
 import { NumberField } from "../../components/ui/NumberField";
 import { Seg } from "../../components/ui/Seg";
+import { StageRail } from "../../components/ui/StageRail";
 import { useProject } from "../../layouts/resources";
 import { codecs, Link, navigate, setQuery, useRoute, useUrlState } from "../../router";
 import { useJobs } from "../../stores/jobs";
@@ -282,9 +283,15 @@ export default function Launch() {
       <div className="launch-grid">
         <div className="stack">
           <Card title="Stages" eyebrow="What runs">
-            <ul className="stage-list" aria-label="Stages">
-              {rows.map((r) => (
-                <li key={r.id} data-stage={r.id} data-locked={r.locked || undefined}>
+            <StageRail
+              className="stage-list"
+              label="Stages"
+              stages={rows.map((r) => ({
+                id: r.id,
+                label: r.label,
+                status: r.checked ? "todo" : "skipped",
+                data: { stage: r.id, locked: r.locked ? "true" : undefined },
+                content: (
                   <label>
                     <input type="checkbox" checked={r.checked} disabled={r.locked} onChange={(e) => setSelection(toggleStage(selection, r.id, e.target.checked))} />
                     <span className="stage-text">
@@ -293,9 +300,9 @@ export default function Launch() {
                     </span>
                     {r.reason ? <span className="cap stage-reason">({r.reason})</span> : null}
                   </label>
-                </li>
-              ))}
-            </ul>
+                ),
+              }))}
+            />
             <p className="cap">Baselines and the skill-vs-distance curve run with S2–S3; the climate stage runs with S5 when enabled.</p>
           </Card>
           <Card title="Options" eyebrow="How it runs">

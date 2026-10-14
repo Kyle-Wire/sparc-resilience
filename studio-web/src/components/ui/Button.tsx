@@ -2,7 +2,9 @@ import type { ButtonHTMLAttributes, ReactNode } from "react";
 import { Icon, type IconName } from "./Icon";
 
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  variant?: "default" | "primary" | "danger" | "ghost";
+  /** default: surface + hairline. primary: ink fill. accent: crimson fill, for the one main
+   *  call to action on a view. ghost: no chrome. danger: destructive. */
+  variant?: "default" | "primary" | "accent" | "danger" | "ghost";
   size?: "normal" | "small";
   icon?: IconName;
   /** Shows a spinner and disables the button. */

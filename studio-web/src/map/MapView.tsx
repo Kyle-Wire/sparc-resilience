@@ -221,13 +221,13 @@ export function MapView(props: MapViewProps) {
       g.imageSmoothingEnabled = false;
       g.drawImage(raster, 0, 30, grid.nx * S, grid.ny * S);
       g.fillStyle = tc.ink;
-      g.font = "600 16px 'Public Sans', sans-serif";
+      g.font = "600 16px Inter, system-ui, sans-serif";
       g.fillText(`${props.title ? props.title + " · " : ""}${showMeta.label}`, 8, 20);
       // legend: class swatches for categorical layers, else the ramp with its range
       const lx = grid.nx * S + 16;
       const lut = getLuts(dark)[showDomain.kind === "div" ? "div" : "seq"];
       if (showDomain.kind === "cat") {
-        g.font = "12px 'Public Sans', sans-serif";
+        g.font = "12px Inter, system-ui, sans-serif";
         categorySwatches(showMeta, dark, showDomain.nCat).forEach((sw, k) => {
           const y = 44 + k * 20;
           g.fillStyle = sw.color;
@@ -242,7 +242,7 @@ export function MapView(props: MapViewProps) {
           g.fillRect(lx + i, 50, 1.2, 16);
         }
         g.fillStyle = tc.ink2;
-        g.font = "12px 'Public Sans', sans-serif";
+        g.font = "12px Inter, system-ui, sans-serif";
         g.fillText(`≤ ${fmtNum(showDomain.lo, showMeta.decimals)}`, lx, 84);
         const hiTxt = `≥ ${fmtNum(showDomain.hi, showMeta.decimals)} ${unitLabel(showMeta.unit)}`;
         g.fillText(hiTxt, lx + 200 - g.measureText(hiTxt).width, 84);
@@ -257,7 +257,7 @@ export function MapView(props: MapViewProps) {
       const len = niceLength((grid.nx * S * 0.3) / pxPerM);
       g.fillStyle = tc.ink;
       g.fillRect(12, 30 + grid.ny * S - 14, len * pxPerM, 3);
-      g.font = "12px 'IBM Plex Mono', monospace";
+      g.font = "12px 'JetBrains Mono', ui-monospace, monospace";
       g.fillText(fmtMeters(len), 16 + len * pxPerM, 30 + grid.ny * S - 10);
       const blob = await new Promise<Blob>((res, rej) => c.toBlob((bb) => (bb ? res(bb) : rej(new Error("PNG encoding failed"))), "image/png"));
       downloadBlob(blob, `${fileSlug(`${props.title ?? "map"}-${showMeta.key}`)}.png`);

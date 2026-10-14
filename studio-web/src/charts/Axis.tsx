@@ -21,11 +21,32 @@ export function autoTickCount(orient: "bottom" | "left", lengthPx: number): numb
   return Math.max(2, Math.min(8, Math.floor(Math.abs(lengthPx) / (orient === "bottom" ? 80 : 45))));
 }
 
+/** Rough rendered width of an 11px tick label (≈ 6.5 px a character). */
+const labelWidth = (s: string) => s.length * 6.5;
+
+/**
+ * Drop every other tick until neighbouring labels no longer collide: bottom labels need their
+ * width plus a 10 px gap, left labels a 14 px line. Axes under 120 px across keep only the domain
+ * ends. Explicit `ticks` are kept as given.
+ */
+export function fitTicks(tks: number[], scale: Scale, orient: "bottom" | "left", fmt: (v: number) => string): number[] {
+  const span = Math.abs(scale.range[1] - scale.range[0]);
+  if (orient === "bottom" && span < 120 && tks.length > 2) {
+    const [d0, d1] = scale.domain;
+    return d0 === d1 ? [d0] : [Math.min(d0, d1), Math.max(d0, d1)];
+  }
+  const need = (a: number, b: number) => (orient === "bottom" ? (labelWidth(fmt(a)) + labelWidth(fmt(b))) / 2 + 10 : 14);
+  const fits = (ts: number[]) => ts.every((t, i) => i === 0 || Math.abs(scale(t) - scale(ts[i - 1])) >= need(ts[i - 1], t));
+  let out = tks;
+  while (out.length > 2 && !fits(out)) out = out.filter((_, i) => i % 2 === 0);
+  return out;
+}
+
 export function Axis({ scale, orient, at, grid = 0, title, ticks, tickCount, format, signed }: AxisProps) {
   const count = tickCount ?? autoTickCount(orient, scale.range[1] - scale.range[0]);
-  const tks = ticks ?? scale.ticks(count);
   const step = scale.kind === "linear" ? tickStep(scale.domain[0], scale.domain[1], count) : undefined;
   const fmt = format ?? ((v: number) => (scale.kind === "log" ? formatLogTick(v) : formatTick(v, step, signed)));
+  const tks = ticks ?? fitTicks(scale.ticks(count), scale, orient, fmt);
   const [r0, r1] = scale.range;
   if (orient === "bottom") {
     return (

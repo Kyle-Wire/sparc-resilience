@@ -2,7 +2,7 @@
 // plot to brush a value range (snapped to bin edges); keyboard: focus a bar, Enter selects
 // its bin, Shift+Enter extends the brush to it, Escape clears.
 import { useRef, useState, type PointerEvent } from "react";
-import { Axis, axisTitle } from "./Axis";
+import { Axis, autoTickCount, axisTitle } from "./Axis";
 import { ChartFrame, markProps, useChart, useChartWidth, type ChartTable, type FrameOptions } from "./ChartFrame";
 import { linearScale, niceDomain } from "./scales";
 import { fmtInt, fmtNum } from "../theme/format";
@@ -86,6 +86,8 @@ function Plot(p: HistogramProps & { bins: Bins }) {
   const sx = linearScale([edges[0], edges[edges.length - 1]], [M.left, W - M.right]);
   const maxC = Math.max(1, ...counts);
   const sy = linearScale(niceDomain(0, maxC), [H - M.bottom, M.top]);
+  // Counts are whole numbers: drop fractional ticks (a 0…1 domain would otherwise label 0, 1, 1).
+  const yTicks = sy.ticks(autoTickCount("left", H - M.top - M.bottom)).filter((v) => Number.isInteger(v));
   const [drag, setDrag] = useState<[number, number] | null>(null);
   const anchor = useRef<number | null>(null);
   const d = p.decimals ?? 2;
@@ -150,7 +152,7 @@ function Plot(p: HistogramProps & { bins: Bins }) {
         }
       }}
     >
-      <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={p.countLabel ?? "Cells"} format={(v) => fmtInt(v)} />
+      <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={p.countLabel ?? "Cells"} ticks={yTicks} format={(v) => fmtInt(v)} />
       <Axis scale={sx} orient="bottom" at={H - M.bottom} title={axisTitle(p.xLabel, p.unit)} />
       {counts.map((c, i) => {
         const x0 = sx(edges[i]);

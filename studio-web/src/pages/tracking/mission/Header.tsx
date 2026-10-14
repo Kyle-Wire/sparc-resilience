@@ -115,7 +115,7 @@ export function Header({
     <header className="card mc-head" aria-label="Job">
       <div className="mc-title">
         <h1>{job.label || job.kind}</h1>
-        {mode ? <Badge tone="accent">{mode}</Badge> : null}
+        {mode ? <Badge tone="mode">{mode}</Badge> : null}
         {run?.demo ? <Badge tone="demo">DEMO</Badge> : null}
         <StatusChip status={job.status} />
         {job.blocked ? <span className="cap">blocked: {job.blocked.reason}</span> : null}

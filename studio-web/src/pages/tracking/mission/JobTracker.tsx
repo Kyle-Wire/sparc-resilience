@@ -90,7 +90,8 @@ export function JobTracker({ jid, deps }: { jid: string; deps?: TrackerDeps }) {
       ) : null}
       {job.kind.startsWith("study.") ? <ChildMatrix job={job} state={state} /> : null}
       <div className="mc-body">
-        <section className="card" aria-label="Timeline">
+        {/* The Gantt is its own chart card (VCard); no outer card frame around it. */}
+        <section className="mc-timeline" aria-label="Timeline">
           <GanttPanel jid={jid} state={state} logs={entry.logs} nowS={nowMs / 1000} zoom={stageQ} onStage={(s) => (STAGE_IDS as readonly string[]).includes(s) && setStageQ(s)} />
         </section>
         {hasStages ? (

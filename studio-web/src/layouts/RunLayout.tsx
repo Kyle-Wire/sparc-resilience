@@ -84,7 +84,7 @@ export function RunLayout({ rid, children }: { rid: string; children: ReactNode 
     <RunCtx.Provider value={{ rid, detail: detail.data, outputs: outputs.data }}>
       <div className="run-head">
         <h1 style={{ fontSize: "1.35rem" }}>{run ? run.label || detail.data?.header.name || run.id : rid}</h1>
-        {run ? <Badge tone="accent">{modeLabel(run.mode, run.coarse_m)}</Badge> : null}
+        {run ? <Badge tone="mode">{modeLabel(run.mode, run.coarse_m)}</Badge> : null}
         {run?.demo ? <Badge tone="demo">DEMO</Badge> : null}
         {run ? <StatusChip status={run.status} /> : null}
         <span className="cap mono">{rid}</span>

@@ -11,8 +11,24 @@
 .lab-title h2 { font-size: 1.2rem; overflow-wrap: anywhere; }
 .lab-engine { gap: 6px; }
 
-.lab-panes { align-items: start; }
 .lab-pane { display: grid; gap: 12px; min-width: 0; align-content: start; }
+/* The workbench reads as one framed surface: hairline dividers between the panes, the editor and
+   compile panes on --surface-2 so the map pane carries the focus. Collapsed panes drop their
+   padding and divider so the 0-width track stays empty. Below 1100 px the panes stack. */
+.lab-panes { gap: 0; align-items: stretch; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.lab-panes > .lab-pane { padding: 14px; }
+.lab-panes > .lab-pane:first-child, .lab-panes > .lab-pane:last-child { background: var(--surface-2); }
+.lab-panes .card.flat { background: var(--surface); }
+.lab-panes > .lab-map { background-image: var(--tex-grid); background-size: var(--tex-grid-size); }
+@media (min-width: 1101px) {
+  .lab-panes > .lab-pane:first-child { border-right: 1px solid var(--line); border-radius: var(--radius) 0 0 var(--radius); }
+  .lab-panes > .lab-pane:last-child { border-left: 1px solid var(--line); border-radius: 0 var(--radius) var(--radius) 0; }
+  .lab-panes[data-left="collapsed"] > .lab-pane:first-child, .lab-panes[data-right="collapsed"] > .lab-pane:last-child { padding: 0; border: 0; }
+}
+@media (max-width: 1100px) {
+  .lab-panes > .lab-pane:first-child { border-bottom: 1px solid var(--line); border-radius: var(--radius) var(--radius) 0 0; }
+  .lab-panes > .lab-pane:last-child { border-top: 1px solid var(--line); border-radius: 0 0 var(--radius) var(--radius); }
+}
 /* The map's side panel sits beside the map only when the map pane itself is wide enough (it is
    ~450 px between the editor and compile panes on a 1440 px screen): a container query, since the
    pane's width depends on the sidebar and on which panes are collapsed, not on the viewport. */
@@ -42,7 +58,7 @@
 .sel-count { min-height: 1.2em; font-variant-numeric: tabular-nums; }
 .sel-node { display: grid; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .sel-node[data-op] { border-style: dashed; }
-.sel-child { padding-left: 12px; border-left: 2px solid var(--line); display: grid; gap: 4px; }
+.sel-child { padding-left: 12px; border-left: 1px solid var(--line-strong); display: grid; gap: 4px; }
 .sel-form { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .sel-form input:not([type]) , .sel-form input[type="text"] { min-width: 0; }
 .sel-actions { margin-left: auto; display: inline-flex; gap: 4px; align-items: center; }
@@ -52,7 +68,7 @@
 
 .compile-panel .kv { margin-bottom: 8px; }
 
-.compare-tray { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 -2px 8px rgb(0 0 0 / 0.06); }
+.compare-tray { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: var(--shadow); }
 .compare-tray .chip { display: inline-flex; align-items: center; gap: 2px; }
 
 .result-inspector { gap: 14px; border-top: 1px solid var(--line); padding-top: 14px; }

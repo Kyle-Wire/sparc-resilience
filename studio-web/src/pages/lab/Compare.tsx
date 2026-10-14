@@ -300,7 +300,7 @@ function CompareBody({ rid, pid, cmp, grid, catalog, unit }: { rid: string; pid:
             <h3>Difference map: {pairLabel(p)}</h3>
             {p.layer_key ? (
               <>
-                <p className="cap">Negative (blue) where {label(p.a)} is cooler than {label(p.b)}.</p>
+                <p className="cap">Negative (purple) where {label(p.a)} is cooler than {label(p.b)}.</p>
                 <MapView grid={grid} groups={groups} loadLayer={load} layerKey={p.layer_key} height={420} title={`${label(p.a)} minus ${label(p.b)}`} />
               </>
             ) : (

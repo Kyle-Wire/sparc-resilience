@@ -68,7 +68,7 @@ function HumidityControl({ h, value, onChange }: { h: HeatSections["humidity"]; 
           />
           °C
         </label>
-        <button type="button" className="btn small" onClick={apply}>
+        <button type="button" className="btn" onClick={apply}>
           Apply
         </button>
       </div>

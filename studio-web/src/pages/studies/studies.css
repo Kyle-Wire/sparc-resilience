@@ -36,11 +36,11 @@
 .sg-wrap { overflow: auto; max-width: 100%; position: relative; }
 .sg-grid { border-collapse: separate; border-spacing: 2px; font-size: 0.74rem; }
 .sg-grid th { font-weight: 500; color: var(--ink-2); padding: 0 6px 0 0; text-align: right; white-space: nowrap; }
-.sg-grid thead th { text-align: center; padding: 0; font-size: 0.68rem; color: var(--muted); }
-.sg-grid td { width: 22px; min-width: 22px; height: 20px; border-radius: 3px; text-align: center; font-variant-numeric: tabular-nums; line-height: 1; }
+.sg-grid thead th { text-align: center; padding: 0; font-family: var(--font-mono); font-size: 0.68rem; color: var(--muted); }
+.sg-grid td { width: 22px; min-width: 22px; height: 20px; border-radius: 3px; text-align: center; font-family: var(--font-mono); font-variant-numeric: tabular-nums; line-height: 1; }
 .sg-grid td[data-status="error"] { font-weight: 700; }
 .sg-grid td[data-status="running"] { outline: 2px solid var(--st-running); outline-offset: -2px; }
-.sg-grid td[data-status="gate_fail"] { background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(0, 0, 0, 0.28) 3px 4px); }
+.sg-grid td[data-status="gate_fail"] { background-image: repeating-linear-gradient(45deg, transparent 0 3px, color-mix(in srgb, var(--hatch) 45%, transparent) 3px 4px); }
 .sg-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 0.78rem; color: var(--ink-2); }
 .sg-legend i { display: inline-block; width: 14px; height: 12px; border-radius: 3px; vertical-align: -2px; margin-right: 4px; }
 .sg-ramp { display: inline-flex; align-items: center; gap: 4px; }
@@ -54,7 +54,7 @@
 /* studies hub matrix */
 .hub-matrix { border-collapse: collapse; font-size: 0.82rem; width: 100%; }
 .hub-matrix th, .hub-matrix td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; vertical-align: middle; }
-.hub-matrix thead th { font-size: 0.74rem; color: var(--ink-2); font-weight: 600; white-space: nowrap; }
+.hub-matrix thead th { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 500; white-space: nowrap; }
 .hub-matrix td a { text-decoration: none; }
 
 /* report builder */
@@ -62,11 +62,11 @@
 @media (max-width: 1000px) { .rb { grid-template-columns: minmax(0, 1fr); } }
 .rb-side { display: grid; gap: 12px; min-width: 0; }
 .rb-side fieldset { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; margin: 0; display: grid; gap: 6px; min-width: 0; }
-.rb-side legend { font-size: 0.8rem; font-weight: 600; color: var(--ink-2); padding: 0 4px; }
+.rb-side legend { font-family: var(--font-mono); font-size: 10px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding: 0 4px; }
 .rb-side .sx-checks label small { color: var(--muted); }
 .rb-pick { max-height: 180px; overflow: auto; }
 .rb-preview { display: grid; gap: 8px; min-width: 0; }
-.rb-frame { width: 100%; height: min(78vh, 900px); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; }
+.rb-frame { width: 100%; height: min(78vh, 900px); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: #fff; } /* the report is a print document: always paper-white, in both themes */
 
 /* findings */
 .fd-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }

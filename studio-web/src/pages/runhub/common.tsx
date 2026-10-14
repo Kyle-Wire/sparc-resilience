@@ -256,7 +256,7 @@ export function KpiTiles({ kpis, units, label }: { kpis: ViewKpi[]; units?: View
   );
 }
 
-const SEVERITY_TONE: Record<string, "crit" | "warn" | "neutral" | "accent"> = { error: "crit", critical: "crit", warn: "warn", warning: "warn", info: "accent" };
+const SEVERITY_TONE: Record<string, "crit" | "warn" | "neutral" | "accent"> = { error: "crit", critical: "crit", warn: "warn", warning: "warn", info: "neutral" };
 
 /** QA / data-health flags (severity shown as text and icon, not colour alone). */
 export function FlagList({ flags, empty = "No flags raised." }: { flags: ViewFlag[]; empty?: string }) {

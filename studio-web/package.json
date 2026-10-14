@@ -15,9 +15,8 @@
     "gen:api": "node scripts/gen-api.mjs"
   },
   "dependencies": {
-    "@fontsource/archivo": "5.3.0",
-    "@fontsource/ibm-plex-mono": "5.3.0",
-    "@fontsource/public-sans": "5.3.0",
+    "@fontsource/inter": "5.3.0",
+    "@fontsource/jetbrains-mono": "5.3.0",
     "marked": "18.0.14",
     "react": "19.3.0",
     "react-dom": "19.3.0",

@@ -1,50 +1,97 @@
-/* Design tokens (SPEC §12.7). Surfaces, ink, accents and semantic colours are ported from
-   scripts/results_page/template.html; --nodata, --hatch, the --st-* status tokens and --demo
-   are new. Canvas renderers read the same values from theme/palette.ts THEME_COLORS. */
+/* Design tokens (SPEC §12.7): the SPARC brand system (warm paper and ink neutrals, a crimson
+   accent, the purple→gold brand ramp, Inter + JetBrains Mono). Token names are stable; other
+   code reads them. Canvas renderers and exports read the same values from theme/palette.ts
+   (THEME_COLORS, TOKEN_VALUES, HEAT_COLORS): keep those copies in sync with this file. */
 :root {
-  --page: #f5f6f4;
-  --surface: #fcfcfb;
-  --surface-2: #f0f1ee;
-  --ink: #0b0b0b;
-  --ink-2: #52514e;
-  --muted: #7a7974;
-  --grid: #e1e0d9;
-  --axis: #c3c2b7;
-  --line: rgba(11, 11, 11, 0.10);
-  --line-strong: rgba(11, 11, 11, 0.22);
-  --accent: #2a78d6;
-  --accent-ink: #1c5cab;
+  /* Brand ramp (fixed across themes) */
+  --sparc-purple: #602468;
+  --sparc-magenta: #9e337d;
+  --sparc-pink: #e94d9b;
+  --sparc-red: #e94461;
+  --sparc-crimson: #e73c25;
+  --sparc-orange: #e76c25;
+  --sparc-amber: #e79024;
+  --sparc-gold: #f0b632;
+  --sparc-yellow: #fbdd46;
+  --grad-ramp: linear-gradient(90deg,
+    var(--sparc-purple) 0%, var(--sparc-magenta) 14%, var(--sparc-pink) 28%, var(--sparc-red) 42%,
+    var(--sparc-crimson) 56%, var(--sparc-orange) 70%, var(--sparc-amber) 82%, var(--sparc-gold) 92%, var(--sparc-yellow) 100%);
+
+  /* Surfaces and ink */
+  --page: #f7f4ee;
+  --surface: #ffffff;
+  --surface-2: #ede8dd;
+  --shell: #ede8dd;
+  --ink: #1a1416;
+  --ink-2: #4a3f3a;
+  --muted: #6e6358;
+  --grid: #e6e0d4;
+  --axis: #c9c2b3;
+  --line: rgba(26, 20, 22, 0.12);
+  --line-strong: #c9c2b3;
+  --chip: rgba(26, 20, 22, 0.05);
+  --shadow: 0 1px 2px rgba(26, 20, 22, 0.06), 0 8px 24px rgba(26, 20, 22, 0.10);
+  --scrim: rgba(26, 20, 22, 0.42);
+  --tex-grid:
+    linear-gradient(rgba(26, 20, 22, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(26, 20, 22, 0.035) 1px, transparent 1px);
+  --tex-grid-size: 24px 24px;
+
+  /* Accent: --accent for marks, rules and focus; --accent-strong for filled buttons with
+     --on-accent text (AA); --accent-ink for accent-coloured text on paper. */
+  --accent: #e73c25;
+  --accent-strong: #c4301b;
+  --accent-ink: #b02a17;
+  --accent-soft: rgba(231, 60, 37, 0.08);
   --on-accent: #ffffff;
-  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a;
-  --gray-mark: #b9b8b1;
-  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
-  --good-ink: #006300; --warn-ink: #8a5a00; --serious-ink: #9c4a1f; --crit-ink: #a8282a;
-  --chip: #eceeea;
-  --shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
-  --hc0: #c9cec6; --hc1: #f2c14e; --hc2: #ec8a2c; --hc3: #d4402f; --hc4: #8c1c2e;
 
-  --nodata: #e4e4df;
-  --hatch: #52514e;
+  /* Categorical series: six distinct hues (purple, crimson, gold, magenta, orange, warm slate)
+     plus grey for muted series. Charts cycle --s1…--s6; maps use --s1…--s3. */
+  --s1: #602468; --s2: #e73c25; --s3: #b9770e; --s4: #d94f9e; --s5: #f0963f; --s6: #6e6358;
+  --gray-mark: #b8b0a3;
+
+  /* Stage tones: the 7 stops of the purple→gold brand ramp. stageTone(i, n) in palette.ts samples
+     it at i/(n-1), so n stages span the ramp once (no wrap). Dark lifts purple and magenta to ≥ 3:1. */
+  --tone-0: #602468; --tone-1: #9e337d; --tone-2: #e94d9b; --tone-3: #e73c25; --tone-4: #e76c25; --tone-5: #e79024; --tone-6: #f0b632;
+
+  /* Diverging arms (ΔT: cool = negative, on the brand purple), 1 = mild … 3 = strong */
+  --cool-1: #b79ac4; --cool-2: #602468; --cool-3: #3d1650;
+  --warm-1: #f3b77a; --warm-2: #e76c25; --warm-3: #9c2a14;
+
+  /* Semantic status: fills, inks (text) and tinted backgrounds */
+  --good: #3a8a4a; --warning: #f0b632; --serious: #e76c25; --critical: #c8312b;
+  --good-ink: #2f6b3a; --warn-ink: #8a5a00; --serious-ink: #9c4a1f; --crit-ink: #a8282a;
+  --good-bg: #e6ecdc; --warn-bg: #f8ecd0; --crit-bg: #f8e1da;
+
+  /* NWS heat-index categories */
+  --hc0: #cfc8bb; --hc1: #f0b632; --hc2: #e79024; --hc3: #e73c25; --hc4: #602468;
+
+  --nodata: #e4ded2;
+  --hatch: #4a3f3a;
   --demo: #8a5a00;
-  --demo-bg: #fdf1d6;
+  --demo-bg: #f8ecd0;
 
-  --st-queued: #7a7974;
-  --st-running: #2a78d6;
-  --st-done: #006300;
-  --st-cached: #5b6f86;
-  --st-skipped: #9a998f;
+  --st-queued: #6e6358;
+  --st-running: #e73c25;
+  --st-done: #2f6b3a;
+  --st-cached: #5d6678;
+  --st-skipped: #9a9084;
   --st-failed: #a8282a;
   --st-cancelled: #8a5a00;
   --st-interrupted: #9c4a1f;
   --st-stale: #8a5a00;
-  --st-blocked: #7a4fb0;
+  --st-blocked: #602468;
 
-  --font-display: "Archivo", "Arial Narrow", system-ui, sans-serif;
-  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --font-display: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
-  --radius: 10px;
-  --radius-sm: 8px;
+  --radius: 8px;
+  --radius-sm: 5px;
+  /* One height for every inline control (inputs, selects, segmented controls, buttons) so a
+     toolbar's borders and baselines line up; .btn.small is the 28px compact step. */
+  --control-h: 32px;
+  --card-pad: 16px;
   --gutter: 20px;
   --sidebar-w: 232px;
   --topbar-h: 52px;
@@ -55,28 +102,42 @@
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --page: #0f100f; --surface: #1a1a19; --surface-2: #222220; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a998f;
-    --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10); --line-strong: rgba(255, 255, 255, 0.24);
-    --accent: #3987e5; --accent-ink: #86b6ef; --on-accent: #ffffff; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
-    --good-ink: #0ca30c; --warn-ink: #fab219; --serious-ink: #ec835a; --crit-ink: #e66767; --chip: #242423;
-    --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-    --hc0: #4a4d48; --hc1: #e9c46a; --hc2: #f08c3a; --hc3: #e8564a; --hc4: #c2364a;
-    --nodata: #2a2a28; --hatch: #c3c2b7; --demo: #fab219; --demo-bg: #3a2f12;
-    --st-queued: #9a998f; --st-running: #86b6ef; --st-done: #3fbf3f; --st-cached: #9fb3cc; --st-skipped: #7f7e76;
-    --st-failed: #e66767; --st-cancelled: #fab219; --st-interrupted: #ec835a; --st-stale: #fab219; --st-blocked: #b89be0;
+    --page: #141012; --surface: #1d181a; --surface-2: #262022; --shell: #181315;
+    --ink: #f4efe6; --ink-2: #d2c9bc; --muted: #a0958a;
+    --grid: #2a2326; --axis: #4a4043; --line: rgba(247, 244, 238, 0.10); --line-strong: #4a4043; --chip: rgba(247, 244, 238, 0.06);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.45);
+    --scrim: rgba(0, 0, 0, 0.6);
+    --tex-grid: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+    --accent: #f0553c; --accent-strong: #e73c25; --accent-ink: #ff8a72; --accent-soft: rgba(240, 85, 60, 0.14); --on-accent: #ffffff;
+    --s1: #c58bd0; --s2: #f0553c; --s3: #f0b632; --s4: #e8489a; --s5: #f08a3c; --s6: #a0958a; --gray-mark: #8a7f78;
+    --tone-0: #b46cc0; --tone-1: #b8428e; --tone-2: #e94d9b; --tone-3: #f0553c; --tone-4: #e76c25; --tone-5: #e79024; --tone-6: #f0b632;
+    --cool-1: #5a2a63; --cool-2: #c58bd0; --cool-3: #f0dcf5; --warm-1: #8e3a1c; --warm-2: #e76c25; --warm-3: #f8ab5e;
+    --good-ink: #7cc489; --warn-ink: #f0b632; --serious-ink: #f0935a; --crit-ink: #f07a6e;
+    --good-bg: #1f2a21; --warn-bg: #33291a; --crit-bg: #3a1d1c;
+    --hc0: #4a4043; --hc1: #f0b632; --hc2: #e79024; --hc3: #f0553c; --hc4: #b46cc0;
+    --nodata: #2e2729; --hatch: #d2c9bc; --demo: #f0b632; --demo-bg: #33291a;
+    --st-queued: #a0958a; --st-running: #f0553c; --st-done: #7cc489; --st-cached: #a3adc0; --st-skipped: #7d7268;
+    --st-failed: #f07a6e; --st-cancelled: #f0b632; --st-interrupted: #f0935a; --st-stale: #f0b632; --st-blocked: #c58bd0;
     color-scheme: dark;
   }
 }
 
 :root[data-theme="dark"] {
-  --page: #0f100f; --surface: #1a1a19; --surface-2: #222220; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #9a998f;
-  --grid: #2c2c2a; --axis: #383835; --line: rgba(255, 255, 255, 0.10); --line-strong: rgba(255, 255, 255, 0.24);
-  --accent: #3987e5; --accent-ink: #86b6ef; --on-accent: #ffffff; --s1: #3987e5; --s2: #d95926; --s3: #199e70; --gray-mark: #5e5d58;
-  --good-ink: #0ca30c; --warn-ink: #fab219; --serious-ink: #ec835a; --crit-ink: #e66767; --chip: #242423;
-  --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-  --hc0: #4a4d48; --hc1: #e9c46a; --hc2: #f08c3a; --hc3: #e8564a; --hc4: #c2364a;
-  --nodata: #2a2a28; --hatch: #c3c2b7; --demo: #fab219; --demo-bg: #3a2f12;
-  --st-queued: #9a998f; --st-running: #86b6ef; --st-done: #3fbf3f; --st-cached: #9fb3cc; --st-skipped: #7f7e76;
-  --st-failed: #e66767; --st-cancelled: #fab219; --st-interrupted: #ec835a; --st-stale: #fab219; --st-blocked: #b89be0;
+  --page: #141012; --surface: #1d181a; --surface-2: #262022; --shell: #181315;
+  --ink: #f4efe6; --ink-2: #d2c9bc; --muted: #a0958a;
+  --grid: #2a2326; --axis: #4a4043; --line: rgba(247, 244, 238, 0.10); --line-strong: #4a4043; --chip: rgba(247, 244, 238, 0.06);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --scrim: rgba(0, 0, 0, 0.6);
+  --tex-grid: linear-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+  --accent: #f0553c; --accent-strong: #e73c25; --accent-ink: #ff8a72; --accent-soft: rgba(240, 85, 60, 0.14); --on-accent: #ffffff;
+  --s1: #c58bd0; --s2: #f0553c; --s3: #f0b632; --s4: #e8489a; --s5: #f08a3c; --s6: #a0958a; --gray-mark: #8a7f78;
+  --tone-0: #b46cc0; --tone-1: #b8428e; --tone-2: #e94d9b; --tone-3: #f0553c; --tone-4: #e76c25; --tone-5: #e79024; --tone-6: #f0b632;
+  --cool-1: #5a2a63; --cool-2: #c58bd0; --cool-3: #f0dcf5; --warm-1: #8e3a1c; --warm-2: #e76c25; --warm-3: #f8ab5e;
+  --good-ink: #7cc489; --warn-ink: #f0b632; --serious-ink: #f0935a; --crit-ink: #f07a6e;
+  --good-bg: #1f2a21; --warn-bg: #33291a; --crit-bg: #3a1d1c;
+  --hc0: #4a4043; --hc1: #f0b632; --hc2: #e79024; --hc3: #f0553c; --hc4: #b46cc0;
+  --nodata: #2e2729; --hatch: #d2c9bc; --demo: #f0b632; --demo-bg: #33291a;
+  --st-queued: #a0958a; --st-running: #f0553c; --st-done: #7cc489; --st-cached: #a3adc0; --st-skipped: #7d7268;
+  --st-failed: #f07a6e; --st-cancelled: #f0b632; --st-interrupted: #f0935a; --st-stale: #f0b632; --st-blocked: #c58bd0;
   color-scheme: dark;
 }

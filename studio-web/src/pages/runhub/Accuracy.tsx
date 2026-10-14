@@ -338,7 +338,8 @@ export default function Accuracy() {
               {(h) => <ResidualHistogram hist={h} />}
             </Section>
           </div>
-          <div className="grid2">
+          {/* Without zones, Residuals by fold takes the full width instead of half a row on its own. */}
+          <div className={s.resid_by_zone?.length ? "grid2" : "stack"}>
             <Section title="Residuals by zone" data={s.resid_by_zone}>
               {(z) =>
                 z.length ? (
@@ -354,7 +355,7 @@ export default function Accuracy() {
                     caption={`${z.length} zones; boxes are quartiles, whiskers the 10th–90th percentile.`}
                   />
                 ) : (
-                  <p className="cap">This run has no zones.</p>
+                  <p className="cap" style={{ gridColumn: "1 / -1" }}>This run has no zones.</p>
                 )
               }
             </Section>
@@ -394,26 +395,31 @@ export default function Accuracy() {
           </Section>
           <div className="grid2">
             <Section title="Advection verdict" data={s.advection}>
-              {(a) => (
-                <div className="stack">
-                  <p className="row">
+              {(a) => {
+                const verdict = (
+                  <>
                     <strong>Advection:</strong> {a.verdict}{" "}
                     {a.selected !== null ? <Badge tone={a.selected ? "accent" : undefined}>{a.selected ? "advection kept" : "advection off"}</Badge> : null}
-                  </p>
-                  {a.fold_delta_rmse.length ? (
-                    <DotRange
-                      title="Advection ΔRMSE per fold"
-                      units={`${unitLabel(vm.units.target)} (with − without advection)`}
-                      rows={a.fold_delta_rmse.map((v, i) => ({ id: `f${i}`, label: `Fold ${i + 1}`, est: v }))}
-                      valueLabel="ΔRMSE"
-                      unit={unitLabel(vm.units.target)}
-                      signed
-                      decimals={3}
-                      caption={`Dots left of zero: advection lowered the held-out error in that fold (${a.fold_delta_rmse.filter((v) => v !== null && v < 0).length} of ${a.fold_delta_rmse.length}).`}
-                    />
-                  ) : null}
-                </div>
-              )}
+                  </>
+                );
+                return a.fold_delta_rmse.length ? (
+                  <DotRange
+                    title="Advection ΔRMSE per fold"
+                    note={verdict}
+                    units={`${unitLabel(vm.units.target)} (with − without advection)`}
+                    rows={a.fold_delta_rmse.map((v, i) => ({ id: `f${i}`, label: `Fold ${i + 1}`, est: v }))}
+                    valueLabel="ΔRMSE"
+                    unit={unitLabel(vm.units.target)}
+                    signed
+                    decimals={3}
+                    caption={`Dots left of zero: advection lowered the held-out error in that fold (${a.fold_delta_rmse.filter((v) => v !== null && v < 0).length} of ${a.fold_delta_rmse.length}).`}
+                  />
+                ) : (
+                  <div className="card">
+                    <p className="row">{verdict}</p>
+                  </div>
+                );
+              }}
             </Section>
             <Section title="Forcing card" data={s.forcing}>
               {(f) => (

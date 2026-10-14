@@ -1,0 +1,63 @@
+/* App shell brand layer (AppShell.tsx, RunLayout.tsx): the ramp strip across the top, the paper
+   sidebar with the 24px grid texture, the gradient brand mark, kicker-style section labels, nav
+   items with an accent bar on the current page, and the translucent top bar (website .nav).
+   Layout and breakpoints stay in theme/base.css. This file is imported from the shell, which
+   loads before base.css, so each rule is qualified by .shell to win regardless of order. */
+
+/* ---------------------------------------------------------------- ramp strip */
+.shell-ramp { position: fixed; top: 0; left: 0; right: 0; z-index: 40; height: 3px; background: var(--grad-ramp); pointer-events: none; }
+@media (prefers-reduced-motion: no-preference) {
+  .shell-ramp { background-size: 200% 100%; animation: shell-ramp-shift 18s ease-in-out infinite; }
+}
+@keyframes shell-ramp-shift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+
+/* ---------------------------------------------------------------- sidebar */
+@media (min-width: 861px) {
+  /* the sidebar column, painted on the shell so it runs the full page height */
+  div.shell { background: linear-gradient(to right, var(--shell) calc(var(--sidebar-w) - 1px), var(--line) calc(var(--sidebar-w) - 1px), var(--line) var(--sidebar-w), transparent var(--sidebar-w)); }
+}
+.shell .shell-sidebar { background-color: var(--shell); background-image: var(--tex-grid); background-size: var(--tex-grid-size); border-right: 1px solid var(--line); padding: 16px 12px 12px; gap: 8px; }
+
+.shell .shell-brand { gap: 10px; padding: 2px 8px 14px; margin: 0 -2px 4px; border-bottom: 1px solid var(--line); font-family: var(--font-display); font-size: 15px; line-height: 1; letter-spacing: -0.02em; color: var(--ink); }
+.shell .shell-brand .logo {
+  width: 20px; height: 20px; flex: none; border-radius: var(--radius-sm);
+  background: conic-gradient(from 210deg at 50% 50%, var(--sparc-purple), var(--sparc-magenta), var(--sparc-pink), var(--sparc-crimson), var(--sparc-orange), var(--sparc-amber), var(--sparc-gold), var(--sparc-purple));
+  box-shadow: inset 0 0 0 1px rgba(26, 20, 22, 0.08);
+}
+.shell-wordmark { white-space: nowrap; }
+.shell-wordmark b { font-weight: 800; }
+.shell-wordmark span { font-weight: 500; color: var(--muted); }
+
+/* section label (the project switcher's "Project") as a kicker */
+.shell .shell-sidebar .field > .eyebrow { display: block; padding: 4px 6px 2px; }
+
+.shell .shell-nav { gap: 1px; }
+.shell .shell-nav a, .shell .shell-nav .nav-disabled { position: relative; gap: 8px; padding: 6px 10px; border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; line-height: 1.4; color: var(--ink-2); }
+.shell .shell-nav a svg { color: var(--muted); }
+.shell .shell-nav a:hover { background: color-mix(in srgb, var(--surface) 55%, transparent); color: var(--ink); }
+.shell .shell-nav a[aria-current="page"] { background: var(--surface); color: var(--ink); font-weight: 500; box-shadow: 0 0 0 1px var(--line); }
+.shell .shell-nav a[aria-current="page"]::before { content: ""; position: absolute; left: 0; top: 6px; bottom: 6px; width: 2px; border-radius: 1px; background: var(--accent); }
+.shell .shell-nav a[aria-current="page"] svg { color: var(--ink); }
+.shell .shell-nav a.emph { font-weight: 600; color: var(--accent-ink); }
+.shell .shell-nav .nav-disabled { color: var(--muted); }
+.shell .shell-sidebar-bottom { padding-top: 10px; }
+
+/* ---------------------------------------------------------------- top bar */
+.shell .shell-topbar {
+  background: color-mix(in srgb, var(--page) 88%, transparent);
+  -webkit-backdrop-filter: saturate(1.2) blur(10px);
+  backdrop-filter: saturate(1.2) blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.shell .breadcrumb { font-size: 13px; }
+
+/* ---------------------------------------------------------------- run layout */
+.shell .run-tab-group > .eyebrow { font-size: 10px; }
+.shell .run-head .cap.mono { font-size: 11px; letter-spacing: 0.02em; }
+
+@media print {
+  .shell-ramp { display: none; }
+}

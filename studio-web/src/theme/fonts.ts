@@ -1,24 +1,25 @@
-// Bundled fonts (SPEC §12.1, §12.7): Archivo for display, Public Sans for body text and
-// IBM Plex Mono for eyebrows, numbers and logs. Only the latin woff2 files of the weights in
+// Bundled fonts (SPEC §12.1, §12.7): Inter for display and body text, JetBrains Mono for
+// kickers, labels, numbers in tables and logs. Only the latin woff2 files of the weights in
 // use are bundled (from the @fontsource packages), so Studio works offline and makes no
-// external requests. The static Archivo package has no width axis: `font-stretch: 87%` in
-// base.css falls back to the normal width.
-import archivo600 from "@fontsource/archivo/files/archivo-latin-600-normal.woff2?url";
-import archivo700 from "@fontsource/archivo/files/archivo-latin-700-normal.woff2?url";
-import plexMono400 from "@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2?url";
-import plexMono500 from "@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-500-normal.woff2?url";
-import publicSans400 from "@fontsource/public-sans/files/public-sans-latin-400-normal.woff2?url";
-import publicSans500 from "@fontsource/public-sans/files/public-sans-latin-500-normal.woff2?url";
-import publicSans600 from "@fontsource/public-sans/files/public-sans-latin-600-normal.woff2?url";
+// external requests.
+import inter400 from "@fontsource/inter/files/inter-latin-400-normal.woff2?url";
+import inter500 from "@fontsource/inter/files/inter-latin-500-normal.woff2?url";
+import inter600 from "@fontsource/inter/files/inter-latin-600-normal.woff2?url";
+import inter700 from "@fontsource/inter/files/inter-latin-700-normal.woff2?url";
+import inter800 from "@fontsource/inter/files/inter-latin-800-normal.woff2?url";
+import mono400 from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2?url";
+import mono500 from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-500-normal.woff2?url";
+import mono600 from "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-600-normal.woff2?url";
 
 export const FONT_FACES: { family: string; weight: number; url: string }[] = [
-  { family: "Archivo", weight: 600, url: archivo600 },
-  { family: "Archivo", weight: 700, url: archivo700 },
-  { family: "Public Sans", weight: 400, url: publicSans400 },
-  { family: "Public Sans", weight: 500, url: publicSans500 },
-  { family: "Public Sans", weight: 600, url: publicSans600 },
-  { family: "IBM Plex Mono", weight: 400, url: plexMono400 },
-  { family: "IBM Plex Mono", weight: 500, url: plexMono500 },
+  { family: "Inter", weight: 400, url: inter400 },
+  { family: "Inter", weight: 500, url: inter500 },
+  { family: "Inter", weight: 600, url: inter600 },
+  { family: "Inter", weight: 700, url: inter700 },
+  { family: "Inter", weight: 800, url: inter800 },
+  { family: "JetBrains Mono", weight: 400, url: mono400 },
+  { family: "JetBrains Mono", weight: 500, url: mono500 },
+  { family: "JetBrains Mono", weight: 600, url: mono600 },
 ];
 
 export function fontFaceCss(): string {

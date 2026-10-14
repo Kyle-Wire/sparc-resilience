@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 
-/** Small uppercase badge: mode (FAST / COARSE 60 / FULL), DEMO, LIVE, STALE… */
-export function Badge({ tone, children, title }: { tone?: "accent" | "warn" | "crit" | "demo"; children: ReactNode; title?: string }) {
+/** Small uppercase badge: mode (FAST / COARSE 60 / FULL), DEMO, LIVE, STALE… The run mode uses
+ *  tone "mode" (neutral ink on a hairline): crimson stays for alerts, the active state and the CTA. */
+export function Badge({ tone, children, title }: { tone?: "accent" | "warn" | "crit" | "demo" | "mode"; children: ReactNode; title?: string }) {
   return (
     <span className="badge" data-tone={tone} title={title}>
       {children}

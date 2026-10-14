@@ -52,6 +52,8 @@ export type FrameOptions = {
   caption?: ReactNode;
   /** Units shown under the title (also in the table header). */
   units?: string;
+  /** A short line in the header under the title (a verdict or status that belongs to this chart). */
+  note?: ReactNode;
   legend?: ReactNode;
   /** Render only the plot (inside SmallMultiples or table cells). */
   bare?: boolean;
@@ -157,7 +159,7 @@ text{font-family:var(--font-body);font-variant-numeric:tabular-nums}
 .gridline{stroke:var(--grid);stroke-width:1}
 .axisline{stroke:var(--axis);stroke-width:1}
 .zero{stroke:var(--ink-2);stroke-width:1;stroke-dasharray:3 3}
-.brush{fill:rgba(42,120,214,0.18);stroke:var(--accent)}
+.brush{fill:var(--accent);fill-opacity:0.18;stroke:var(--accent)}
 `;
 
 /** Serialise a chart <svg> into a standalone document (exported for tests). */
@@ -287,7 +289,7 @@ export type ChartFrameProps = FrameOptions & {
 };
 
 /** The frame every kit chart renders inside. */
-export function ChartFrame({ title, caption, units, legend, bare, exportName, pin, handleRef, actions, className, table, children }: ChartFrameProps) {
+export function ChartFrame({ title, caption, units, note, legend, bare, exportName, pin, handleRef, actions, className, table, children }: ChartFrameProps) {
   const dark = useUi((s) => s.dark);
   const context = useUi((s) => s.context);
   const route = useRoute();
@@ -401,13 +403,16 @@ export function ChartFrame({ title, caption, units, legend, bare, exportName, pi
 
   return (
     <Ctx.Provider value={ctx}>
-      <figure className={["chart-frame", className ?? ""].filter(Boolean).join(" ")} aria-labelledby={titleId} style={{ margin: 0 }} data-chart={title}>
-        <header>
-          <div>
-            <h3 id={titleId}>{title}</h3>
-            {units ? <p className="cap">Units: {units}</p> : null}
+      <figure className={["chart-frame", "vcard", className ?? ""].filter(Boolean).join(" ")} aria-labelledby={titleId} style={{ margin: 0 }} data-chart={title}>
+        <header className="vcard-head">
+          <div className="chart-title">
+            <h3 id={titleId} className="kicker" title={title}>
+              {title}
+            </h3>
+            {units ? <p className="cap chart-units">Units: {units}</p> : null}
+            {note ? <div className="chart-note">{note}</div> : null}
           </div>
-          <div className="chart-tools" role="toolbar" aria-label={`${title} export`}>
+          <div className="chart-tools vcard-meta" role="toolbar" aria-label={`${title} export`}>
             {actions}
             <button type="button" className="btn small ghost" onClick={handle.exportSvg} aria-label={`Export ${title} as SVG`}>
               <Icon name="download" /> SVG

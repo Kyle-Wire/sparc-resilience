@@ -139,7 +139,7 @@ export default function RunHistory() {
     },
     { key: "status", label: "Status", value: (r) => r.status, render: (r) => <StatusChip status={r.status} /> },
     { key: "label", label: "Label", value: (r) => r.label ?? r.id, render: (r) => <Link to={`/r/${encodeURIComponent(r.id)}`}>{r.label || r.id}</Link> },
-    { key: "mode", label: "Mode", value: (r) => r.mode, render: (r) => <Badge tone="accent">{modeLabel(r.mode, r.coarse_m)}</Badge> },
+    { key: "mode", label: "Mode", value: (r) => r.mode, render: (r) => <Badge tone="mode">{modeLabel(r.mode, r.coarse_m)}</Badge> },
     { key: "created", label: "Started", value: (r) => r.created_utc, render: (r) => fmtDate(r.created_utc) },
     { key: "duration", label: "Duration", align: "right", value: (r) => r.duration_s, render: (r) => fmtDuration(r.duration_s) },
     { key: "r2", label: "R²", align: "right", value: (r) => r.r2, render: (r) => fmtNum(r.r2, 3) },

@@ -34,6 +34,8 @@ export type TableProps<T> = {
   /** Show the CSV copy/download buttons; the value names the file. */
   csvName?: string | null;
   empty?: ReactNode;
+  /** Frame the table as a card: this title in the header, the CSV actions in its right slot. */
+  title?: ReactNode;
 };
 
 /** Missing for sorting: null, undefined, NaN and ±Infinity (always listed last). */
@@ -70,6 +72,7 @@ export function Table<T>({
   maxHeight = 480,
   csvName = null,
   empty,
+  title,
 }: TableProps<T>) {
   const [sort, setSort] = useState(initialSort ?? null);
   const [scrollTop, setScrollTop] = useState(0);
@@ -102,92 +105,115 @@ export function Table<T>({
 
   const csv = () => tableCsv(columns, sorted);
 
-  return (
-    <div className="stack" style={{ gap: 6 }}>
-      {csvName !== null ? (
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <button
-            type="button"
-            className="btn small ghost"
-            onClick={async () => {
-              const ok = await copyText(csv());
-              toast(ok ? "success" : "warning", ok ? "Table copied as CSV" : "Copy failed: use Download CSV");
-            }}
-          >
-            <Icon name="copy" /> Copy CSV
-          </button>
-          <button type="button" className="btn small ghost" onClick={() => downloadText(csv(), `${fileSlug(csvName || "table")}.csv`, "text/csv;charset=utf-8")}>
-            <Icon name="download" /> Download CSV
-          </button>
-        </div>
-      ) : null}
-      <div className="tablewrap" style={virtual ? { maxHeight, overflowY: "auto" } : undefined} onScroll={virtual ? (e: UIEvent<HTMLDivElement>) => setScrollTop(e.currentTarget.scrollTop) : undefined}>
-        <table className="tbl">
-          {caption ? <caption className="sr-only">{caption}</caption> : null}
-          <thead>
-            <tr>
-              {columns.map((c) => {
-                const active = sort?.key === c.key;
-                const label = c.unit ? `${c.label} (${c.unit})` : c.label;
-                return (
-                  <th
-                    key={c.key}
-                    className={c.align === "right" ? "r" : undefined}
-                    style={c.width ? { width: c.width } : undefined}
-                    aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : undefined}
-                    scope="col"
-                  >
-                    {c.sortable === false ? (
-                      label
-                    ) : (
-                      <button type="button" onClick={() => toggle(c.key)}>
-                        {label}
-                        {active ? <Icon name={sort!.dir === "asc" ? "chevronUp" : "chevronDown"} size={12} /> : null}
-                      </button>
-                    )}
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {sorted.length === 0 ? (
-              <tr>
-                <td colSpan={columns.length} className="muted">
-                  {empty ?? "No rows"}
-                </td>
-              </tr>
-            ) : null}
-            {virtual && first > 0 ? (
-              <tr className="spacer-row" aria-hidden="true">
-                <td colSpan={columns.length} style={{ height: first * rowHeight }} />
-              </tr>
-            ) : null}
-            {sorted.slice(first, last).map((r, k) => {
-              const i = first + k;
+  const csvActions =
+    csvName !== null ? (
+      <>
+        <button
+          type="button"
+          className="btn small ghost"
+          onClick={async () => {
+            const ok = await copyText(csv());
+            toast(ok ? "success" : "warning", ok ? "Table copied as CSV" : "Copy failed: use Download CSV");
+          }}
+        >
+          <Icon name="copy" /> Copy CSV
+        </button>
+        <button type="button" className="btn small ghost" onClick={() => downloadText(csv(), `${fileSlug(csvName || "table")}.csv`, "text/csv;charset=utf-8")}>
+          <Icon name="download" /> Download CSV
+        </button>
+      </>
+    ) : null;
+
+  const grid = (
+    <div className="tablewrap" style={virtual ? { maxHeight, overflowY: "auto" } : undefined} onScroll={virtual ? (e: UIEvent<HTMLDivElement>) => setScrollTop(e.currentTarget.scrollTop) : undefined}>
+      <table className="tbl">
+        {caption ? <caption className="sr-only">{caption}</caption> : null}
+        <thead>
+          <tr>
+            {columns.map((c) => {
+              const active = sort?.key === c.key;
+              const label = c.unit ? `${c.label} (${c.unit})` : c.label;
               return (
-                <tr
-                  key={rowKey ? rowKey(r, i) : i}
-                  className={highlight?.(r) ? "hl" : undefined}
-                  onClick={onRowClick ? () => onRowClick(r) : undefined}
-                  style={virtual ? { height: rowHeight } : onRowClick ? { cursor: "pointer" } : undefined}
+                <th
+                  key={c.key}
+                  className={c.align === "right" ? "r" : undefined}
+                  style={c.width ? { width: c.width } : undefined}
+                  aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : undefined}
+                  scope="col"
                 >
-                  {columns.map((c) => (
-                    <td key={c.key} className={c.align === "right" ? "r" : undefined}>
-                      {cell(c, r)}
-                    </td>
-                  ))}
-                </tr>
+                  {c.sortable === false ? (
+                    label
+                  ) : (
+                    <button type="button" onClick={() => toggle(c.key)}>
+                      {label}
+                      {active ? <Icon name={sort!.dir === "asc" ? "chevronUp" : "chevronDown"} size={12} /> : null}
+                    </button>
+                  )}
+                </th>
               );
             })}
-            {virtual && last < sorted.length ? (
-              <tr className="spacer-row" aria-hidden="true">
-                <td colSpan={columns.length} style={{ height: (sorted.length - last) * rowHeight }} />
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.length === 0 ? (
+            <tr>
+              <td colSpan={columns.length} className="muted">
+                {empty ?? "No rows"}
+              </td>
+            </tr>
+          ) : null}
+          {virtual && first > 0 ? (
+            <tr className="spacer-row" aria-hidden="true">
+              <td colSpan={columns.length} style={{ height: first * rowHeight }} />
+            </tr>
+          ) : null}
+          {sorted.slice(first, last).map((r, k) => {
+            const i = first + k;
+            return (
+              <tr
+                key={rowKey ? rowKey(r, i) : i}
+                className={highlight?.(r) ? "hl" : undefined}
+                onClick={onRowClick ? () => onRowClick(r) : undefined}
+                style={virtual ? { height: rowHeight } : onRowClick ? { cursor: "pointer" } : undefined}
+              >
+                {columns.map((c) => (
+                  <td key={c.key} className={c.align === "right" ? "r" : undefined}>
+                    {cell(c, r)}
+                  </td>
+                ))}
               </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
+            );
+          })}
+          {virtual && last < sorted.length ? (
+            <tr className="spacer-row" aria-hidden="true">
+              <td colSpan={columns.length} style={{ height: (sorted.length - last) * rowHeight }} />
+            </tr>
+          ) : null}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  if (title)
+    return (
+      <section className="card table-card">
+        <header>
+          <div>
+            <h3>{title}</h3>
+          </div>
+          {csvActions ? <div className="row table-actions">{csvActions}</div> : null}
+        </header>
+        {grid}
+      </section>
+    );
+  return (
+    <div className="stack" style={{ gap: 6 }}>
+      {csvActions ? (
+        <div className="row table-actions" style={{ justifyContent: "flex-end" }}>
+          {csvActions}
+        </div>
+      ) : null}
+      {grid}
     </div>
   );
 }

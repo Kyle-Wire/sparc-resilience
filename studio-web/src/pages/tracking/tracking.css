@@ -14,6 +14,7 @@
 .mc-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .mc-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(320px, 440px); gap: 14px; align-items: start; }
 .mc-body > * { min-width: 0; }
+.mc-timeline { display: grid; min-width: 0; }
 @media (max-width: 1100px) { .mc-body { grid-template-columns: minmax(0, 1fr); } }
 .mc-note { font-size: 0.82rem; color: var(--muted); }
 
@@ -26,12 +27,19 @@
 .rail-chip .rail-time { font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 .rail-ck { color: var(--s3); font-size: 0.72rem; }
 .rail.mini .rail-chip { min-width: 0; padding: 2px 5px; }
+/* Mission Control's 01–11 strip: the cards share the width (flex 1 1 0) so all eleven fit at
+   ≥ 1000px; below that they keep an 84px minimum and the strip scrolls sideways (fallback only).
+   Long status words ellipsise inside the card (the chip's title carries the full text). */
+.stage-rail.rail:not(.mini)[data-orientation="horizontal"] > .stage-rail-item { flex: 1 1 0; min-width: 84px; }
+.stage-rail.rail:not(.mini) .rail-chip { min-width: 0; width: 100%; }
+.stage-rail.rail:not(.mini) .rail-chip .status { max-width: 100%; }
+.stage-rail.rail:not(.mini) .rail-chip .status > span:first-of-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* fold × model grid */
 .foldgrid { border-collapse: separate; border-spacing: 3px; font-size: 0.8rem; }
-.foldgrid th { font-weight: 600; color: var(--ink-2); font-size: 0.76rem; text-align: center; padding: 2px 4px; }
+.foldgrid th { font-family: var(--font-mono); font-weight: 500; color: var(--ink-2); font-size: 0.72rem; text-align: center; padding: 2px 4px; }
 .foldgrid th[scope="row"] { text-align: right; }
-.foldgrid td { min-width: 62px; height: 40px; padding: 2px 4px; text-align: center; border-radius: 4px; font-variant-numeric: tabular-nums; line-height: 1.15; border: 1px solid transparent; }
+.foldgrid td { min-width: 62px; height: 40px; padding: 2px 4px; text-align: center; border-radius: var(--radius-sm); font-family: var(--font-mono); font-variant-numeric: tabular-nums; line-height: 1.15; border: 1px solid transparent; }
 .foldgrid td[data-status="pending"] { background: var(--nodata); color: var(--muted); }
 .foldgrid td[data-status="running"] { border: 2px solid var(--st-running); }
 .foldgrid td[data-status="error"] { border: 2px solid var(--st-failed); }
@@ -46,13 +54,13 @@
 .kv-inline span b { font-variant-numeric: tabular-nums; }
 .checklist { border-collapse: collapse; width: 100%; font-size: 0.84rem; }
 .checklist th, .checklist td { padding: 5px 6px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
-.checklist th { font-size: 0.76rem; color: var(--ink-2); font-weight: 600; }
-.checklist .r { text-align: right; font-variant-numeric: tabular-nums; }
+.checklist th { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+.checklist .r { text-align: right; font-family: var(--font-mono); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
 .matrix-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr)); gap: 10px; }
 .simgrid { border-collapse: separate; border-spacing: 2px; font-size: 0.74rem; }
-.simgrid td { width: 26px; height: 22px; border-radius: 3px; text-align: center; font-variant-numeric: tabular-nums; }
+.simgrid td { width: 26px; height: 22px; border-radius: 3px; text-align: center; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .simgrid td[data-status="pending"] { background: var(--nodata); }
-.simgrid td[data-status="error"] { background: var(--critical); color: #fff; }
+.simgrid td[data-status="error"] { background: var(--critical); color: var(--on-accent); }
 .simgrid td[data-status="running"] { outline: 2px solid var(--st-running); }
 .simgrid th { font-weight: 500; color: var(--ink-2); padding: 0 4px; text-align: right; }
 
@@ -72,12 +80,18 @@
 .spine li { display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 7px 0; border-bottom: 1px solid var(--line); }
 .spine li:last-child { border-bottom: 0; }
 @media (max-width: 860px) { .spine li { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+/* The board scrolls sideways inside its card; a fade on the right edge shows that more columns follow. */
+.board-frame { position: relative; min-width: 0; }
+.board-frame::after { content: ""; position: absolute; top: 1px; right: 1px; bottom: 1px; width: 40px; border-radius: 0 var(--radius) var(--radius) 0; background: linear-gradient(to right, transparent, var(--surface)); pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+.board-frame[data-more]::after { opacity: 1; }
 .board-wrap { overflow-x: auto; max-width: 100%; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .board { border-collapse: separate; border-spacing: 0; font-size: 0.8rem; }
 .board th, .board td { padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: middle; white-space: nowrap; }
-.board thead th { font-size: 0.74rem; color: var(--ink-2); font-weight: 600; background: var(--surface); position: sticky; top: 0; z-index: 1; }
-.board thead tr.groups th { font-family: var(--font-mono); font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); border-bottom: 0; }
-.board th.group-start, .board td.group-start { border-left: 2px solid var(--line-strong); }
+/* Column headers wrap (up to 110 px) and sit on the bottom line, so RUN aligns with the stage names. */
+.board thead th { font-family: var(--font-mono); font-size: 10px; line-height: 1.35; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--surface); position: sticky; top: 0; z-index: 1; white-space: normal; max-width: 110px; vertical-align: bottom; text-align: left; }
+.board thead tr.groups th { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-2); border-bottom: 0; max-width: none; padding-top: 8px; padding-bottom: 2px; }
+.board thead tr:not(.groups) th { padding-top: 2px; }
+.board th.group-start, .board td.group-start { border-left: 1px solid var(--line-strong); }
 .board th[scope="row"] { position: sticky; left: 0; background: var(--surface); z-index: 2; text-align: left; font-weight: 500; }
 .board .cell-btn { font: inherit; background: none; border: 0; padding: 0; cursor: pointer; color: inherit; }
 .board .cell-btn:focus-visible .status { outline: 2px solid var(--accent); outline-offset: 1px; }

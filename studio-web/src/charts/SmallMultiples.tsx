@@ -13,10 +13,11 @@ export type SmallMultiplesProps<T> = FrameOptions & {
   minPanelWidth?: number;
 };
 
-export function SmallMultiples<T>({ items, panelTitle, renderPanel, table, minPanelWidth = 220, ...frame }: SmallMultiplesProps<T>) {
+export function SmallMultiples<T>({ items, panelTitle, renderPanel, table, minPanelWidth = 320, ...frame }: SmallMultiplesProps<T>) {
+  // auto-fit (not auto-fill): empty tracks collapse, so a few panels share the card's full width.
   return (
     <ChartFrame {...frame} table={table}>
-      <div className="small-multiples" style={{ gridTemplateColumns: `repeat(auto-fill, minmax(min(${minPanelWidth}px, 100%), 1fr))` }}>
+      <div className="small-multiples" style={{ gridTemplateColumns: `repeat(auto-fit, minmax(min(${Math.max(140, minPanelWidth)}px, 100%), 1fr))` }}>
         {items.map((it, i) => (
           <div className="panel" key={i}>
             <h4>{panelTitle(it)}</h4>

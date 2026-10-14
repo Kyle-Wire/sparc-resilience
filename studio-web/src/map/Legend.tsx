@@ -1,8 +1,10 @@
-// Map legend (SPEC §6.3, §6.5): the colour ramp with domain ticks and units, cooler/warmer
-// labels on diverging layers, category swatches for categorical layers, an embedded brushable
-// histogram of the layer, and the layer summary (n, mean, p10/median/p90 or class shares).
+// Map legend (SPEC §6.3, §6.5): the colour ramp (a rounded 6px strip) with mono domain ticks
+// and units, "← cooler · warmer →" labels on diverging layers, category swatches for
+// categorical layers, an embedded brushable histogram of the layer, and the layer summary
+// (n, mean, p10/median/p90 or class shares).
 import { useMemo } from "react";
 import type { LayerMeta } from "../api/types";
+import { MeasureWidth } from "../charts/ChartFrame";
 import { Histogram, histogram } from "../charts/Histogram";
 import { fmtInt, fmtNum, fmtPct, fmtSigned, unitLabel } from "../theme/format";
 import { catColors, heatColors, rampColor } from "../theme/palette";
@@ -31,6 +33,9 @@ export function categorySwatches(meta: LayerMeta, dark: boolean, nCat?: number):
   if (labels.length > 4) return labels.map((l, k) => ({ label: l, color: rampColor("seq", k / (labels.length - 1), dark) }));
   return labels.map((l, k) => ({ label: l, color: k === 0 ? gray : colors[k - 1] }));
 }
+
+/** Ramp ticks: mono 10px, muted (the brand's numeric label style). */
+const TICKS = { fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--muted)", letterSpacing: "0.02em" } as const;
 
 const TEMP_UNITS = new Set(["°F", "°C", "K"]);
 
@@ -86,12 +91,20 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
   return (
     <div className="stack" style={{ gap: 8 }}>
       <div className="legend-ramp">
-        <svg viewBox={`0 0 ${steps} 6`} preserveAspectRatio="none" role="img" aria-label={`Colour scale from ${f(domain.lo)} to ${f(domain.hi)} ${u}`} style={{ height: 14 }}>
-          {Array.from({ length: steps }, (_, i) => (
-            <rect key={i} x={i} width={1.05} height={6} fill={rampColor(domain.kind === "div" ? "div" : "seq", i / (steps - 1), dark)} />
-          ))}
-        </svg>
-        <div className="legend-ticks">
+        <div style={{ height: 6, borderRadius: 3, overflow: "hidden" }}>
+          <svg
+            viewBox={`0 0 ${steps} 6`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={`Colour scale from ${f(domain.lo)} to ${f(domain.hi)} ${u}`}
+            style={{ height: 6 }}
+          >
+            {Array.from({ length: steps }, (_, i) => (
+              <rect key={i} x={i} width={1.05} height={6} fill={rampColor(domain.kind === "div" ? "div" : "seq", i / (steps - 1), dark)} />
+            ))}
+          </svg>
+        </div>
+        <div className="legend-ticks" style={TICKS}>
           <span>≤ {f(domain.lo)}</span>
           {domain.kind === "div" && domain.center !== null ? <span>{f(domain.center)}</span> : null}
           <span>
@@ -99,9 +112,15 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
           </span>
         </div>
         {domain.kind === "div" ? (
-          <div className="legend-ticks">
-            <span>{ends[0]}</span>
-            <span>{ends[1]}</span>
+          <div className="legend-ticks" style={TICKS}>
+            <span>
+              <span aria-hidden="true">← </span>
+              {ends[0]}
+            </span>
+            <span>
+              {ends[1]}
+              <span aria-hidden="true"> →</span>
+            </span>
           </div>
         ) : null}
         {domain.zeroBlank ? <p className="cap">Cells at or below zero are shown as no data.</p> : null}
@@ -109,19 +128,26 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
         {meta.sign_note ? <p className="cap">{meta.sign_note}</p> : null}
       </div>
       {!compact && bins ? (
-        <Histogram
-          bare
-          title={`${meta.label} distribution`}
-          bins={bins}
-          xLabel={meta.label}
-          unit={u}
-          decimals={d}
-          height={120}
-          width={300}
-          ramp={{ kind: domain.kind === "div" ? "div" : "seq", lo: domain.lo, hi: domain.hi, center: domain.center ?? 0 }}
-          brush={brush ?? null}
-          onBrush={onBrush}
-        />
+        bins.counts.some((c) => c > 0) ? (
+          // Measured, so the plot is drawn at its real width and its text stays at the 11 px chart size
+          // (a fixed 300-wide viewBox stretched to the legend scaled the labels up).
+          <MeasureWidth>
+            <Histogram
+              bare
+              title={`${meta.label} distribution`}
+              bins={bins}
+              xLabel={meta.label}
+              unit={u}
+              decimals={d}
+              height={120}
+              ramp={{ kind: domain.kind === "div" ? "div" : "seq", lo: domain.lo, hi: domain.hi, center: domain.center ?? 0 }}
+              brush={brush ?? null}
+              onBrush={onBrush}
+            />
+          </MeasureWidth>
+        ) : (
+          <p className="cap">No cells with a value to chart.</p>
+        )
       ) : null}
       {summary ? (
         <dl className="kv" aria-label="Layer summary">

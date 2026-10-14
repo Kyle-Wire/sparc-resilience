@@ -310,7 +310,7 @@ export default function Compare() {
             {[c.a, c.b].map((r, i) => (
               <Block key={r.id} title={`${i ? "B" : "A"}: ${r.label || r.id}`} actions={<Link to={`/r/${encodeURIComponent(r.id)}`}>Open</Link>}>
                 <p className="cap">
-                  <Badge tone="accent">{modeLabel(r.mode, r.coarse_m)}</Badge> {r.status} · {fmtDateTime(r.created_utc)} · {r.n_points ?? "?"} cells{" "}
+                  <Badge tone="mode">{modeLabel(r.mode, r.coarse_m)}</Badge> {r.status} · {fmtDateTime(r.created_utc)} · {r.n_points ?? "?"} cells{" "}
                   {r.demo ? <Badge tone="demo">DEMO</Badge> : null}
                 </p>
               </Block>

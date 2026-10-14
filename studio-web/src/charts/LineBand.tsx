@@ -81,12 +81,13 @@ function ribbon(xs: number[], lo: (number | null)[], hi: (number | null)[], sx: 
   return parts;
 }
 
-const CAT = ["var(--s1)", "var(--s2)", "var(--s3)"];
+/** The six categorical series colours (--s1…--s6); a seventh series wraps to --s1. */
+export const CAT = ["var(--s1)", "var(--s2)", "var(--s3)", "var(--s4)", "var(--s5)", "var(--s6)"];
 
 /** Series colours: explicit, else grey for muted, else the next categorical colour. */
 export function seriesColors(series: { color?: string; muted?: boolean }[]): string[] {
   let k = 0;
-  return series.map((s) => s.color ?? (s.muted ? "var(--gray-mark)" : CAT[k++ % 3]));
+  return series.map((s) => s.color ?? (s.muted ? "var(--gray-mark)" : CAT[k++ % CAT.length]));
 }
 
 export function lineBandTable(p: Pick<LineBandProps, "series" | "xLabel" | "yLabel" | "xUnit" | "yUnit">): ChartTable {

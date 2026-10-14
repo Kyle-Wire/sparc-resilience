@@ -16,6 +16,7 @@ import { copyText } from "../../components/ui/download";
 import { Link } from "../../router";
 import { toast } from "../../stores/ui";
 import { fmtDateTime, fmtDuration, fmtInt, fmtNum } from "../../theme/format";
+import { stageTone } from "../../theme/palette";
 import { Block, FlagList, KpiTiles, Section, ViewPage, useRid } from "./common";
 import { OUTPUT_STATE_TEXT, outputStateStatus, producedByText } from "./format";
 
@@ -28,7 +29,7 @@ function Header({ detail }: { detail: RunDetail }) {
       title={h.name || run.label || run.id}
       actions={
         <>
-          <Badge tone="accent">{modeLabel(run.mode, run.coarse_m)}</Badge>
+          <Badge tone="mode">{modeLabel(run.mode, run.coarse_m)}</Badge>
           {h.demo ? (
             <Badge tone="demo" title="Synthetic demo data at a fictional location">
               DEMO
@@ -127,7 +128,11 @@ function StageTimingBar({ timings }: { timings: Timing[] }) {
         unit="s"
         decimals={1}
         height={90}
-        series={timings.map((t) => ({ id: t.stage, label: t.label, values: [t.seconds], muted: t.state === "skipped" || t.state === "cached" || t.state === "not_run" }))}
+        series={timings.map((t, i) => {
+          const muted = t.state === "skipped" || t.state === "cached" || t.state === "not_run";
+          // Each stage keeps its stage-number badge colour: the brand ramp sampled once across all stages (no repeats).
+          return { id: t.stage, label: t.label, values: [t.seconds], muted, color: muted ? undefined : stageTone(i, timings.length) };
+        })}
         caption={caption}
       />
       {skipped.length ? (
@@ -169,14 +174,16 @@ function OutputsGrid({ outputs, rid }: { outputs: OutputCell[]; rid: string }) {
           <p className="eyebrow">{g}</p>
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }} className="stack">
             {list.map((o) => (
-              <li key={o.id} className="row" style={{ justifyContent: "space-between", gap: 6 }} data-output={o.id} data-state={o.state}>
-                <span title={`Produced by ${producedByText(o.produced_by)}`}>
+              <li key={o.id} className="output-row" data-output={o.id} data-state={o.state}>
+                <span className="output-label" title={`Produced by ${producedByText(o.produced_by)}`}>
                   <Link to={outputHref(rid, o.view)}>{o.label}</Link>
                 </span>
-                <span className="row" style={{ gap: 4 }}>
-                  <StatusChip status={outputStateStatus(o.state)} text={OUTPUT_STATE_TEXT[o.state] ?? o.state} />
-                  {o.state === "missing" && o.action ? <ActionButton action={o.action} size="small" variant="default" /> : null}
-                </span>
+                <StatusChip status={outputStateStatus(o.state)} text={OUTPUT_STATE_TEXT[o.state] ?? o.state} />
+                {o.state === "missing" && o.action ? (
+                  <span className="output-action">
+                    <ActionButton action={o.action} size="small" variant="default" />
+                  </span>
+                ) : null}
               </li>
             ))}
           </ul>
@@ -231,9 +238,9 @@ export default function Overview() {
                   {studies.length ? (
                     <ul className="row" style={{ listStyle: "none", padding: 0, margin: 0 }} aria-label="Study status">
                       {studies.map((st) => (
-                        <li key={st.kind} className="chip" title={st.headline ?? undefined}>
+                        <li key={st.kind} className="chip study-chip" title={st.headline ?? undefined}>
                           <strong>{st.kind}</strong> <StatusChip status={STUDY_STATUS[st.state] ?? st.state} />
-                          {st.headline ? <span className="cap">{st.headline}</span> : null}
+                          {st.headline ? <span className="chip-note">{st.headline}</span> : null}
                         </li>
                       ))}
                     </ul>

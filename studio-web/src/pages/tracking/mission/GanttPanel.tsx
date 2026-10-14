@@ -55,7 +55,12 @@ export function GanttPanel({
     return { from: st.started_ts, to: st.ended_ts ?? nowS };
   }, [zoom, state.stages, nowS]);
   const rows = useMemo(() => ganttRows(spans, zoomWin), [spans, zoomWin]);
-  if (!rows.length) return <p className="mc-note">The timeline starts with the first stage.</p>;
+  if (!rows.length)
+    return (
+      <div className="card">
+        <p className="mc-note">The timeline starts with the first stage.</p>
+      </div>
+    );
   const running = rows.some((r) => r.end === null);
   const markers = [
     ...state.checkpoints.filter((c) => c.ts !== null).map((c) => ({ t: c.ts as number, kind: "checkpoint" as const, label: `${c.action}: ${c.done.join(", ") || "—"}` })),

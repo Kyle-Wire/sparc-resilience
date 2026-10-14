@@ -56,7 +56,10 @@ function Plot(p: DotRangeProps) {
   const ctx = useChart();
   const auto = useChartWidth(640);
   const W = p.width ?? auto;
-  const M = { top: 8, right: 20, bottom: 44, left: 170 };
+  // Row labels get the room they need (≈ 6.5 px a character), up to 170 px, so narrow small-multiple
+  // panels with a short label keep a usable plot width.
+  const longest = Math.max(0, ...p.rows.map((r) => r.label.length));
+  const M = { top: 8, right: 20, bottom: 44, left: Math.min(170, Math.max(56, Math.round(longest * 6.5) + 16)) };
   const H = M.top + M.bottom + p.rows.length * 28;
   const vals = p.rows.flatMap((r) => [r.est, r.lo, r.hi, r.lo2, r.hi2, r.check?.est, r.check?.lo, r.check?.hi, ...(r.strip ?? [])]);
   const e = extent(vals) ?? [0, 1];

@@ -10,6 +10,7 @@ import { invalidate, mutate } from "../../api/resource";
 import { Badge, DemoBadge } from "../../components/ui/Badge";
 import { Button } from "../../components/ui/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
+import { StageNum } from "../../components/ui/StageRail";
 import { Tabs } from "../../components/ui/Tabs";
 import { useProject } from "../../layouts/resources";
 import { Link, navigate, useRoute } from "../../router";
@@ -205,6 +206,9 @@ export default function Setup() {
   const issues = draft?.issues ?? [];
   const errors = issues.filter((i) => i.level === "error").length;
   const warns = issues.filter((i) => i.level === "warn").length;
+  // Numbered steps on the brand rail, filled up to the last complete step.
+  const dots = draft ? STEPS.map((s) => stepDot(s.id, readiness, draft.raw, issues)) : [];
+  const lastOk = dots.lastIndexOf("ok");
 
   return (
     <div className="stack setup-page">
@@ -232,28 +236,33 @@ export default function Setup() {
         </p>
       ) : (
         <CfgProvider value={{ pid, draft, issues }}>
-          <Tabs
-            label="Setup steps"
-            value={step}
-            onChange={(id) => {
-              focusTabAfterMount = document.activeElement?.getAttribute("role") === "tab";
-              navigate(`/p/${encodeURIComponent(pid)}/setup/${id}`);
-            }}
-            items={STEPS.map((s) => {
-              const dot = stepDot(s.id, readiness, draft.raw, issues);
-              return {
-                id: s.id,
-                label: (
-                  <span className="step-tab" data-step-dot={dot}>
-                    <Dot state={dot} />
-                    {s.label}
-                  </span>
-                ),
-              };
-            })}
-          >
-            {STEP_VIEW[step]()}
-          </Tabs>
+          <div className="stage-tabs">
+            <Tabs
+              label="Setup steps"
+              value={step}
+              onChange={(id) => {
+                focusTabAfterMount = document.activeElement?.getAttribute("role") === "tab";
+                navigate(`/p/${encodeURIComponent(pid)}/setup/${id}`);
+              }}
+              items={STEPS.map((s, i) => {
+                const dot = dots[i];
+                return {
+                  id: s.id,
+                  label: (
+                    <>
+                      <StageNum index={i} status={dot === "ok" ? "done" : undefined} filled={i < lastOk} />
+                      <span className="step-tab" data-step-dot={dot}>
+                        <Dot state={dot} />
+                        {s.label}
+                      </span>
+                    </>
+                  ),
+                };
+              })}
+            >
+              {STEP_VIEW[step]()}
+            </Tabs>
+          </div>
           <SaveBar pid={pid} />
         </CfgProvider>
       )}

@@ -32,7 +32,7 @@ import {
 function ink(fill: string): string {
   if (!fill.startsWith("#")) return "var(--ink)";
   const [r, g, b] = hexToRgb01(fill);
-  return 0.299 * r + 0.587 * g + 0.114 * b < 0.45 ? "#ffffff" : "#0b0b0b";
+  return 0.299 * r + 0.587 * g + 0.114 * b < 0.45 ? "#ffffff" : "#1a1416";
 }
 
 /** Fold × model grid: seconds in each cell, colour by held-out RMSE (lighter = lower error). */

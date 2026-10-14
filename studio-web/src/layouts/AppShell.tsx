@@ -1,7 +1,8 @@
 // The shell on every page (SPEC §3.1): sidebar (project switcher, project nav declared by
 // route modules, Activity, Settings), top bar (breadcrumb, active-run chip, job tray, engine
 // dot, connection pill, command palette, theme toggle), toasts, the aria-live job announcer
-// and the browser tab title mirroring the most important running job.
+// and the browser tab title mirroring the most important running job. Brand styling (ramp
+// strip, gradient mark, textured sidebar) lives in ./shell.css.
 import { useEffect, useMemo, type ReactNode } from "react";
 import type { Project, RunSummary } from "../api/types";
 import { CommandPalette } from "../components/ui/CommandPalette";
@@ -17,6 +18,7 @@ import { activeJobs, connectJobs, tabTitle, useJobs } from "../stores/jobs";
 import { useUi, type Command, type ThemePref } from "../stores/ui";
 import { fmtDate, fmtDateTime, fmtNum, fmtPct } from "../theme/format";
 import { useProject, useProjects, useRecentRuns, useRunDetail } from "./resources";
+import "./shell.css";
 
 const THEMES: { value: ThemePref; icon: IconName; label: string }[] = [
   { value: "system", icon: "monitor", label: "Theme: system" },
@@ -159,7 +161,7 @@ export function ActiveRunChip({ projectRuns, run, activeRunId }: { projectRuns: 
     <span className="row hide-narrow" style={{ gap: 6 }}>
       {current ? (
         <>
-          <Badge tone="accent">{modeLabel(current.mode, current.coarse_m)}</Badge>
+          <Badge tone="mode">{modeLabel(current.mode, current.coarse_m)}</Badge>
           {current.demo ? <Badge tone="demo">DEMO</Badge> : null}
           <span className="cap num" title="Held-out R²">
             R² {fmtNum(current.r2, 3)}
@@ -274,12 +276,13 @@ export function AppShell({ children, pageTitle, fullWidth }: { children: ReactNo
       <a className="skip-link" href="#main">
         Skip to content
       </a>
+      <div className="shell-ramp" aria-hidden="true" />
       <aside className="shell-sidebar" data-open={sidebarOpen} aria-label="Sidebar">
         <Link to="/" className="shell-brand">
-          <span className="logo" aria-hidden="true">
-            S
+          <span className="logo" aria-hidden="true" />
+          <span className="shell-wordmark">
+            <b>SPARC</b> <span>Studio</span>
           </span>
-          SPARC Studio
         </Link>
         <ProjectSwitcher projectId={context.projectId} />
         <ProjectNav registry={registry} project={project} />

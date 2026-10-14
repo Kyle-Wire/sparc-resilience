@@ -4,6 +4,7 @@ import { Axis, BandAxis, axisTitle } from "./Axis";
 import { ChartFrame, markProps, useChart, useChartWidth, type ChartTable, type FrameOptions } from "./ChartFrame";
 import { seriesColors } from "./LineBand";
 import { bandScale, extent, linearScale, niceDomain } from "./scales";
+import { useId } from "react";
 import { fmtNum } from "../theme/format";
 
 export type BarSeries = {
@@ -14,6 +15,8 @@ export type BarSeries = {
   hi?: (number | null)[];
   color?: string;
   muted?: boolean;
+  /** Draw the segment with grey diagonal hatching (a category that must not reuse a series colour). */
+  hatch?: boolean;
 };
 
 export type BarsProps = FrameOptions & {
@@ -54,6 +57,10 @@ function Plot(p: BarsProps) {
   const ctx = useChart();
   const horiz = (p.orientation ?? "h") === "h";
   const mode = p.mode ?? "grouped";
+  // Stacked segments get a 1px surface seam so neighbouring colours read as separate marks.
+  const seam = mode !== "grouped";
+  const hatchId = `bars-hatch-${useId().replace(/:/g, "")}`;
+  const hatched = new Set(p.series.filter((s) => s.hatch).map((s) => s.id));
   const n = p.categories.length;
   const auto = useChartWidth(640);
   const W = p.width ?? auto;
@@ -116,6 +123,14 @@ function Plot(p: BarsProps) {
   const unit = mode === "percent" ? "%" : p.unit;
   return (
     <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="group" aria-label={p.title}>
+      {hatched.size ? (
+        <defs>
+          <pattern id={hatchId} width={5} height={5} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+            <rect width={5} height={5} style={{ fill: "var(--surface)" }} />
+            <line x1={0} y1={0} x2={0} y2={5} style={{ stroke: "var(--gray-mark)" }} strokeWidth={2.4} />
+          </pattern>
+        </defs>
+      ) : null}
       {horiz ? (
         <>
           <Axis scale={vs} orient="bottom" at={H - M.bottom} grid={H - M.top - M.bottom} title={axisTitle(mode === "percent" ? `Share of ${p.valueLabel}` : p.valueLabel, unit)} />
@@ -140,8 +155,8 @@ function Plot(p: BarsProps) {
             <rect
               {...geom}
               rx={2}
-              style={{ fill: r.color, stroke: hl ? "var(--ink)" : undefined }}
-              strokeWidth={hl ? 1.5 : 0}
+              style={{ fill: hatched.has(r.sid) ? `url(#${hatchId})` : r.color, stroke: hl ? "var(--ink)" : seam ? "var(--surface)" : undefined }}
+              strokeWidth={hl ? 1.5 : seam ? 1 : 0}
               {...markProps(ctx, label, p.onBarClick ? () => p.onBarClick!(r.cat, r.sid) : undefined)}
             />
             {r.lo !== undefined && r.lo !== null && r.hi !== undefined && r.hi !== null ? (
@@ -166,7 +181,7 @@ export function Bars(props: BarsProps) {
       <>
         {props.series.map((s, i) => (
           <span key={s.id}>
-            <i className="box" style={{ background: colors[i] }} />
+            <i className="box" style={s.hatch ? { background: `repeating-linear-gradient(45deg, ${colors[i]} 0 2px, transparent 2px 4px)`, boxShadow: `inset 0 0 0 1px ${colors[i]}` } : { background: colors[i] }} />
             {s.label}
           </span>
         ))}

@@ -143,8 +143,8 @@ describe("project overview", () => {
         <ProjectOverview />
       </ProjectLayout>,
     );
-    await waitFor(() => container.querySelector("ul.spine"), 5000, "spine");
-    const items = [...container.querySelectorAll("ul.spine > li")];
+    await waitFor(() => container.querySelector("ol.readiness-rail"), 5000, "spine");
+    const items = [...container.querySelectorAll("ol.readiness-rail > li")];
     expect(items.map((li) => li.querySelector(".status")!.textContent)).toEqual(["ok", "check", "missing", "n/a"]);
     for (const li of items) expect(li.querySelector(".status svg")).not.toBeNull();
     expect(items[2].querySelector("button")!.textContent).toBe("Fetch layers");

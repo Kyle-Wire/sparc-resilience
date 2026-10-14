@@ -95,6 +95,7 @@ function Effects({ lever }: { lever: ResponseLever }) {
     <div className="stack">
       {e ? (
         <Table
+          title="Own vs footprint effect"
           caption="Own vs footprint effect"
           csvName="own-vs-footprint"
           rowKey={(r) => r.id}
@@ -200,6 +201,7 @@ function Literature({ lit, lever, leverUnit }: { lit: NonNullable<ResponseSectio
         caption={mine.length ? literatureCaption(mine[0], rows, per, unit, leverUnit) : undefined}
       />
       <Table
+        title="Published values"
         caption="Published values"
         csvName="literature"
         rowKey={(r) => r.key}
@@ -253,7 +255,10 @@ export default function Response() {
                           id: x.key,
                           label: x.label,
                           values: [L.shapes?.[x.key] ?? null],
-                          muted: x.key === "insufficient",
+                          // one look per category: s1/s2/s3 for the fitted shapes, hatched grey for a knee past the
+                          // tested doses (the default cycle would reuse s1), solid grey for too few doses
+                          muted: x.key === "insufficient" || x.key === "censored",
+                          hatch: x.key === "censored",
                         }))}
                         valueLabel="cells"
                         decimals={0}

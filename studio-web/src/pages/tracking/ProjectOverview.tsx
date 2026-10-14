@@ -7,6 +7,7 @@ import { Badge, DemoBadge, modeLabel } from "../../components/ui/Badge";
 import { Card } from "../../components/ui/Card";
 import { ActionButton, EmptyState } from "../../components/ui/EmptyState";
 import { JobStrip } from "../../components/ui/JobStrip";
+import { StageRail, type StageStatus } from "../../components/ui/StageRail";
 import { StatusChip } from "../../components/ui/StatusChip";
 import { Table, type Column } from "../../components/ui/Table";
 import { useProjectContext } from "../../layouts/ProjectLayout";
@@ -18,11 +19,11 @@ import { StatusBoard } from "./StatusBoard";
 import "./tracking.css";
 
 /** Readiness state → chip status word and text (icon + text, never colour alone). */
-const READY_CHIP: Record<ReadinessRow["state"], { status: string; text: string }> = {
-  ok: { status: "done", text: "ok" },
-  warn: { status: "stale", text: "check" },
-  missing: { status: "missing", text: "missing" },
-  "n/a": { status: "not_requested", text: "n/a" },
+const READY_CHIP: Record<ReadinessRow["state"], { status: string; text: string; rail: StageStatus }> = {
+  ok: { status: "done", text: "ok", rail: "done" },
+  warn: { status: "stale", text: "check", rail: "todo" },
+  missing: { status: "missing", text: "missing", rail: "todo" },
+  "n/a": { status: "not_requested", text: "n/a", rail: "skipped" },
 };
 
 export type Cta = { label: string; to: string; hint: string };
@@ -40,30 +41,35 @@ export function primaryCta(detail: Pick<ProjectDetail, "project" | "readiness" |
   return { label: "Launch run", to: `/p/${pid}/launch`, hint: "No finished run with a checkpoint yet." };
 }
 
+/** The readiness spine on the numbered stage rail, filled up to the last ready step. */
 function Spine({ rows }: { rows: ReadinessRow[] }) {
   return (
-    <ul className="spine" aria-label="Readiness">
-      {rows.map((r) => {
+    <StageRail
+      className="readiness-rail"
+      label="Readiness"
+      stages={rows.map((r) => {
         const chip = READY_CHIP[r.state] ?? READY_CHIP.missing;
-        return (
-          <li key={r.key}>
+        return {
+          id: r.key,
+          status: chip.rail,
+          label: (
             <span className="row" style={{ gap: 8 }}>
               <StatusChip status={chip.status} text={chip.text} />
               <b>{r.label}</b>
             </span>
-            <span className="cap">{r.detail}</span>
-            <span>{r.action ? <ActionButton action={r.action} size="small" variant={r.state === "missing" ? "primary" : "default"} /> : null}</span>
-          </li>
-        );
+          ),
+          meta: r.detail,
+          aside: r.action ? <ActionButton action={r.action} size="small" variant={r.state === "missing" ? "primary" : "default"} /> : null,
+        };
       })}
-    </ul>
+    />
   );
 }
 
 const RUN_COLS: Column<RunSummary>[] = [
   { key: "status", label: "Status", value: (r) => r.status, render: (r) => <StatusChip status={r.status} /> },
   { key: "label", label: "Run", value: (r) => r.label ?? r.id, render: (r) => <Link to={`/r/${encodeURIComponent(r.id)}`}>{r.label || r.id}</Link> },
-  { key: "mode", label: "Mode", value: (r) => r.mode, render: (r) => <Badge tone="accent">{modeLabel(r.mode, r.coarse_m)}</Badge> },
+  { key: "mode", label: "Mode", value: (r) => r.mode, render: (r) => <Badge tone="mode">{modeLabel(r.mode, r.coarse_m)}</Badge> },
   { key: "created", label: "Started", value: (r) => r.created_utc, render: (r) => fmtDate(r.created_utc) },
   { key: "duration", label: "Duration", align: "right", value: (r) => r.duration_s, render: (r) => fmtDuration(r.duration_s) },
   { key: "r2", label: "R²", align: "right", value: (r) => r.r2, render: (r) => fmtNum(r.r2, 3) },
@@ -98,7 +104,7 @@ export default function ProjectOverview() {
           <span className="cap">{cta.hint}</span>
         </div>
       </header>
-      <div className="grid2">
+      <div className="grid2" style={{ alignItems: "start" }}>
         <Card title="Readiness" eyebrow={`${p.readiness_score.done} of ${p.readiness_score.total} ready`}>
           {detail.readiness.length ? <Spine rows={detail.readiness} /> : <p className="cap">No readiness checks reported.</p>}
         </Card>
