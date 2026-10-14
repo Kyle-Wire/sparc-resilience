@@ -56,27 +56,30 @@ export function LayerPicker({ groups, value, onChange, label = "Layer" }: LayerP
         </select>
       )}
       <input type="search" aria-label="Search layers" placeholder="Search layers…" value={q} onChange={(e) => setQ(e.target.value)} style={{ width: "12em" }} />
-      <label className="cap" htmlFor={id}>
-        {label}
-      </label>
-      <select id={id} value={value ?? ""} onChange={(e) => onChange(e.target.value)} style={{ maxWidth: "22em" }}>
-        {value && !matches.some((m) => m.layers.some((l) => l.key === value)) ? <option value={value}>{findLayer(groups, value)?.label ?? value}</option> : null}
-        {matches.length === 1
-          ? matches[0].layers.map((l) => (
-              <option key={l.key} value={l.key}>
-                {l.label}
-              </option>
-            ))
-          : matches.map((m) => (
-              <optgroup key={m.group.id} label={m.group.label}>
-                {m.layers.map((l) => (
-                  <option key={l.key} value={l.key}>
-                    {l.label}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-      </select>
+      {/* the label and its select wrap together, never the label alone at the end of a row */}
+      <span className="map-layer-pick">
+        <label className="cap" htmlFor={id}>
+          {label}
+        </label>
+        <select id={id} value={value ?? ""} onChange={(e) => onChange(e.target.value)} style={{ maxWidth: "22em" }}>
+          {value && !matches.some((m) => m.layers.some((l) => l.key === value)) ? <option value={value}>{findLayer(groups, value)?.label ?? value}</option> : null}
+          {matches.length === 1
+            ? matches[0].layers.map((l) => (
+                <option key={l.key} value={l.key}>
+                  {l.label}
+                </option>
+              ))
+            : matches.map((m) => (
+                <optgroup key={m.group.id} label={m.group.label}>
+                  {m.layers.map((l) => (
+                    <option key={l.key} value={l.key}>
+                      {l.label}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+        </select>
+      </span>
     </div>
   );
 }

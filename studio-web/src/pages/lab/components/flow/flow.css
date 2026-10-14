@@ -1,0 +1,114 @@
+/* Design step flow (phase 3): the insides of steps 01 What to change · 02 Where · 03 How much and
+   the collapsed change sentence. The section and heading skeleton (.lab-step, .lab-step-head) is in
+   lab.css. Prefixes: .flow-step- (step internals) and .lab-flow- (controls shared by the steps).
+   Tokens only, so the dark theme follows. Cooling is never shown in crimson. */
+
+.flow-step { gap: 10px; }
+.flow-step > .cap { margin: 0; }
+.lab-step-head > .stage-num { flex: none; }
+/* The step numbers are neutral (an ink outline, filled ink once the step is done): the ramp colours
+   of the stage rail would put crimson and amber next to Run full model, the page's one crimson
+   element. StageNum sets its ramp colour inline, so the override needs !important. */
+.lab-step-head > .stage-num { --stage-c: var(--ink) !important; --stage-next: var(--ink) !important; }
+.lab-step-head > .stage-num[data-tone][data-status] { background: var(--surface); border-color: var(--line-strong); color: var(--ink-2); box-shadow: none; }
+.lab-step-head > .stage-num[data-tone][data-status="done"] { background: var(--ink); border-color: var(--ink); color: var(--page); }
+
+/* ---- shared: a single choice as wrapping pills (role="radiogroup") */
+.lab-flow-choices { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.lab-flow-choices > button {
+  font: inherit; font-size: 12.5px; font-weight: 500; line-height: 16px; padding: 5px 11px; min-height: 28px;
+  border-radius: 999px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2);
+  cursor: pointer; text-align: left; transition: background-color 0.12s, border-color 0.12s, color 0.12s;
+}
+.lab-flow-choices > button:hover:not(:disabled) { color: var(--ink); border-color: color-mix(in srgb, var(--ink) 35%, var(--line-strong)); }
+.lab-flow-choices > button[aria-checked="true"] { background: var(--ink); border-color: var(--ink); color: var(--page); }
+.lab-flow-choices > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.lab-flow-choices > button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* a quiet text link (Custom filter…, Switch to a simple amount) */
+.flow-step-link {
+  justify-self: start; font: inherit; font-size: 12.5px; color: var(--ink-2); background: none; border: 0; padding: 2px 0;
+  cursor: pointer; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px;
+}
+.flow-step-link:hover { color: var(--ink); text-decoration-color: currentColor; }
+.flow-step-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+
+/* ---- 01 lever cards */
+.flow-step-levers { display: grid; gap: 6px; }
+.flow-step-lever.card {
+  font: inherit; color: var(--ink); text-align: left; cursor: pointer; width: 100%; margin: 0;
+  grid-template-columns: 30px minmax(0, 1fr) auto; align-items: start; column-gap: 10px; row-gap: 0;
+  transition: border-color 0.12s, box-shadow 0.12s, background-color 0.12s;
+}
+.flow-step-lever.card:hover { border-color: color-mix(in srgb, var(--ink) 35%, var(--line-strong)); }
+.flow-step-lever.card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.flow-step-lever.card[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.flow-step-lever-icon {
+  width: 30px; height: 30px; display: grid; place-items: center; border-radius: var(--radius-sm);
+  background: var(--chip); color: var(--ink-2);
+}
+.flow-step-lever[aria-pressed="true"] .flow-step-lever-icon { background: var(--ink); color: var(--page); }
+.flow-step-lever-text { display: grid; gap: 2px; min-width: 0; }
+.flow-step-lever-text > strong { font-size: 13.5px; font-weight: 650; line-height: 1.3; letter-spacing: -0.005em; }
+.flow-step-lever-text > .cap { line-height: 1.35; }
+/* the trust dot: how reliable the quick estimate is for this lever (good · rough · none) */
+.flow-step-trust {
+  width: 10px; height: 10px; margin-top: 4px; border-radius: 50%; flex: none; cursor: help;
+  background: var(--gray-mark); box-shadow: 0 0 0 2px var(--surface);
+}
+.flow-step-trust[data-tone="good"] { background: var(--good); }
+.flow-step-trust[data-tone="warn"] {
+  background: repeating-linear-gradient(135deg, var(--warning) 0 2px, color-mix(in srgb, var(--warning) 45%, var(--surface)) 2px 4px);
+}
+.flow-step-trust[data-tone="neutral"] { background: transparent; box-shadow: inset 0 0 0 1.5px var(--gray-mark), 0 0 0 2px var(--surface); }
+
+/* ---- 02 where */
+.flow-step-areas { padding-left: 2px; }
+.flow-step-areas .chip { cursor: pointer; font-family: var(--font-body); font-size: 12px; letter-spacing: 0; text-transform: none; padding: 3px 10px; border-color: var(--line-strong); background: var(--surface); }
+.flow-step-areas .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--page); }
+.flow-step-areas .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.flow-step-inline { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 13px; color: var(--ink-2); }
+.flow-step-inline .numfield input { width: 4.5em; }
+.flow-step-detail { display: grid; gap: 6px; padding: 2px 0 2px 10px; border-left: 2px solid var(--line-strong); }
+.flow-step-detail > .cap { margin: 0; }
+.flow-step-detail > .btn { justify-self: start; }
+.flow-step-pending { color: var(--warn-ink); }
+.flow-step-applies { color: var(--ink-2); }
+.flow-step-custom { min-width: 0; }
+
+/* ---- 03 how much */
+.flow-step-hint { margin: 0; }
+.flow-step-amount { display: grid; gap: 6px; min-width: 0; }
+.flow-step-amount-label { font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.flow-step-amount-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; min-width: 0; }
+.flow-step-range { width: 100%; min-width: 0; height: 20px; margin: 0; accent-color: var(--ink); background: transparent; cursor: pointer; }
+.flow-step-range:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.flow-step-amount-row .numfield input { width: 5.5em; }
+.flow-step-doses { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.flow-step-doses > .cap { margin-right: 2px; }
+/* typical amounts read as plain words ("10 pts"), not as the mono uppercase tag style of .chip */
+.flow-step-doses > .chip {
+  cursor: pointer; font-family: var(--font-body); font-size: 12px; font-weight: 500; letter-spacing: 0; text-transform: none;
+  padding: 3px 10px; border-color: var(--line-strong); background: var(--surface); font-variant-numeric: tabular-nums;
+}
+.flow-step-doses > .chip:hover { color: var(--ink); border-color: var(--line-strong); }
+.flow-step-doses > .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--page); }
+.flow-step-doses > .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* the live "how much fits" sentence: the only per-change compile numbers before running */
+.flow-step-fit {
+  margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); border-left: 3px solid var(--good);
+  background: var(--good-bg); color: var(--ink); font-size: 13px; line-height: 1.45; transition: opacity 0.15s;
+}
+.flow-step-fit[data-tone="clipped"] { border-left-color: var(--warning); background: var(--warn-bg); }
+.flow-step-fit[data-tone="nothing"] { border-left-color: var(--gray-mark); background: var(--chip); }
+.flow-step-fit[aria-busy="true"] { opacity: 0.65; }
+.flow-step-blocked { display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--crit-bg); color: var(--crit-ink); font-size: 12.5px; line-height: 1.45; }
+.flow-step-blocked ul { margin: 0; padding-left: 1.1em; }
+
+/* ---- a change collapsed to one sentence */
+.flow-step-sentence { display: grid; grid-template-columns: 26px minmax(0, 1fr) auto; gap: 8px; align-items: start; min-width: 0; }
+.flow-step-sentence-icon { width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--radius-sm); background: var(--chip); color: var(--ink-2); }
+.flow-step-sentence-text { margin: 3px 0 0; font-size: 13px; line-height: 1.45; color: var(--ink); overflow-wrap: anywhere; }
+.flow-step-sentence-flag { color: var(--warn-ink); }
+.flow-step-sentence-actions { display: inline-flex; gap: 2px; }

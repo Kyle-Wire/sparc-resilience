@@ -1,0 +1,85 @@
+/* The quick estimate and the run block (Design page right pane, phase 3), and the map's hatch key.
+   Prefix .qe-. Built on the foundation tokens (tokens.css) and classes (.card, .kicker, .pill, .btn.accent). */
+
+/* ---- the quick-estimate card */
+.qe { gap: 12px; }
+.qe-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 16px; }
+.qe-spin { width: 12px; height: 12px; color: var(--muted); }
+
+/* the big number "About −0.42 °F" over its caption; the citywide figure under it. The <dt> comes first
+   in the markup (screen readers read "where you made changes: About −0.42 °F") and second on screen. */
+.qe-hero { margin: 0; display: grid; gap: 6px; }
+.qe-hero dt, .qe-hero dd { margin: 0; }
+.qe-hero-main { display: flex; flex-direction: column-reverse; gap: 2px; }
+.qe-hero-main > dt { font-size: 13px; color: var(--ink-2); }
+.qe-big { font-family: var(--font-display); font-size: 1.95rem; font-weight: 800; line-height: 1.05; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--ink); overflow-wrap: anywhere; }
+.qe-hero:not([data-numeric]) .qe-big { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.01em; color: var(--ink-2); }
+/* cooling is never crimson: the brand's cool ramp end; warming the warm one (large text, ≥ 3:1) */
+.qe-hero[data-tone="cool"] .qe-big { color: var(--cool-2); }
+.qe-hero[data-tone="warm"] .qe-big { color: var(--warm-2); }
+/* the full model has the firm answer: the quick estimate steps back (smaller, muted) */
+.qe-hero[data-superseded] .qe-big { font-size: 1.2rem; font-weight: 700; letter-spacing: -0.01em; color: var(--ink-2); }
+.qe-hero-city { display: flex; flex-direction: row-reverse; justify-content: flex-end; align-items: baseline; gap: 5px; font-size: 13px; }
+.qe-hero-city > dd { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.qe-hero-city > dt { color: var(--muted); }
+
+/* the three facts: label over value, hairline rules */
+.qe-facts { margin: 0; display: grid; border-top: 1px solid var(--line); }
+.qe-fact { display: grid; gap: 1px; padding: 7px 0; border-bottom: 1px solid var(--line); min-width: 0; }
+.qe-fact > dt { font-size: 11.5px; color: var(--muted); }
+.qe-fact > dd { margin: 0; font-size: 13.5px; line-height: 1.4; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.qe-info { vertical-align: -2px; color: var(--muted); cursor: help; }
+.qe-info > span[tabindex] { display: inline-flex; border-radius: 50%; }
+.qe-info > span[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.qe-flag { cursor: help; vertical-align: 1px; }
+
+/* the plain trust line: a dot (reliable), a warning dot (rough) or the map's hatch (hatched) */
+.qe-trust { display: grid; grid-template-columns: 14px minmax(0, 1fr); gap: 8px; align-items: start; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--surface-2); }
+.qe-trust[data-tone="good"] { background: var(--good-bg); }
+.qe-trust[data-tone="rough"], .qe-trust[data-tone="hatched"] { background: var(--warn-bg); }
+.qe-trust-text > p { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink); }
+.qe-trust-mark { width: 10px; height: 10px; margin: 4px 2px 0; border-radius: 50%; background: var(--good); }
+.qe-trust[data-tone="rough"] .qe-trust-mark { background: var(--warning); }
+.qe-trust[data-tone="hatched"] .qe-trust-mark { width: 14px; height: 14px; margin: 2px 0 0; }
+.qe-reasons { margin: 6px 0 0; padding-left: 1.1em; color: var(--ink-2); }
+.qe-reasons li + li { margin-top: 2px; }
+
+/* the map's hatch, as drawn by GridCanvas: "/" lines 1.2 px wide on a 6 px tile (4.24 px apart) */
+.qe-hatch, .qe-trust[data-tone="hatched"] .qe-trust-mark {
+  display: inline-block; flex: none; width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--line-strong);
+  background: repeating-linear-gradient(135deg, var(--hatch) 0 1.2px, transparent 1.2px 4.24px), var(--surface);
+}
+
+/* calm empty states: no emulator yet, the preview failed, nothing changed yet */
+.qe-empty { display: grid; gap: 8px; justify-items: start; padding: 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); }
+.qe-empty-title { margin: 0; font-weight: 600; color: var(--ink); }
+.qe-empty > .jobstrip { justify-self: stretch; }
+/* the build button fills the box and wraps its label rather than running past the border */
+.qe-empty > .btn { justify-self: stretch; white-space: normal; text-align: center; max-width: 100%; }
+.qe-empty > .btn.small { height: auto; min-height: 28px; }
+.qe-nowrap { white-space: nowrap; }
+.qe-idle { justify-items: stretch; text-align: center; padding: 22px 14px; }
+
+/* ---- the run block: THE primary action, the engine line, why it cannot run yet, the job */
+.qe-run { display: grid; gap: 6px; }
+.qe-run > .btn { width: 100%; min-height: 40px; font-size: 14px; }
+/* the dot sits on the first line when the engine line wraps */
+.qe-engine { display: flex; align-items: flex-start; gap: 6px; margin: 0; }
+.qe-engine-dot { width: 7px; height: 7px; margin-top: 0.45em; border-radius: 50%; background: var(--gray-mark); flex: none; }
+.qe-engine[data-tone="good"] .qe-engine-dot { background: var(--good); }
+.qe-engine[data-tone="busy"] .qe-engine-dot { background: var(--warning); animation: qe-pulse 1.2s ease-in-out infinite; }
+.qe-engine[data-tone="crit"] .qe-engine-dot { background: var(--critical); }
+.qe-engine[data-tone="off"] .qe-engine-dot { background: transparent; box-shadow: inset 0 0 0 1px var(--gray-mark); }
+.qe-why { margin: 0; color: var(--ink-2); }
+@keyframes qe-pulse { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .qe-engine-dot { animation: none !important; } }
+
+/* ---- the map's hatch key (DesignMap side panel): one legend chip, the swatch and what it means */
+.qe-key {
+  display: inline-flex; align-items: center; gap: 7px; justify-self: start; width: max-content; max-width: 100%; margin: 0;
+  padding: 4px 10px 4px 6px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface);
+  font-size: 12.5px; font-weight: 500; line-height: 1.3; color: var(--ink-2); cursor: help;
+}
+
+/* the full-model line under the run button: up to date, or out of date (never the result's number) */
+.qe-result { margin: 2px 0 0; color: var(--ink-2); }

@@ -57,13 +57,13 @@ export function syntheticMeta(l: SyntheticLayer, values: ArrayLike<number> | nul
 }
 
 /** Result layer fields (api.md §7.5) with their labels. */
-export function resultLayerMetas(resId: string, unit: string, realizedVars: string[], leverUnits: Record<string, string> = {}): LayerMeta[] {
+export function resultLayerMetas(resId: string, unit: string, realizedVars: string[], leverUnits: Record<string, string> = {}, leverNames: Record<string, string> = {}): LayerMeta[] {
   const base = `res:${resId}`;
   const list: SyntheticLayer[] = [
-    { key: `${base}:delta`, label: "Exact ΔT", unit, sign_note: "negative = cooler", desc: "Exact engine change per cell (mean over the fold models)." },
-    { key: `${base}:delta_sd`, label: "ΔT spread across folds", unit, scale: "seq", desc: "Standard deviation of the per-fold changes." },
-    { key: `${base}:extrapolation`, label: "Extrapolation score", unit: "", scale: "seq", desc: "Above 1: the edited inputs are outside the observed conditions (hatched)." },
-    ...realizedVars.map((v): SyntheticLayer => ({ key: `${base}:realized_${v}`, label: `Realised change: ${v}`, unit: leverUnits[v] ?? "", desc: "The change the engine actually applied after clamping." })),
+    { key: `${base}:delta`, label: "Temperature change (full model)", unit, sign_note: "negative = cooler", desc: "The full model's estimate of the temperature change in each place." },
+    { key: `${base}:delta_sd`, label: "Spread between model runs", unit, scale: "seq", desc: "How much the model's repeat runs disagree in each place; more spread means less sure." },
+    { key: `${base}:extrapolation`, label: "Beyond measured conditions", unit: "", scale: "seq", desc: "Places where the change goes beyond anything measured in this city (hatched)." },
+    ...realizedVars.map((v): SyntheticLayer => ({ key: `${base}:realized_${v}`, label: `What changed: ${leverNames[v] ?? v}`, unit: leverUnits[v] ?? "", desc: "The change the full model actually applied, after keeping it within realistic limits." })),
   ];
   return list.map((l) => syntheticMeta({ ...l, group: "result" }, null));
 }

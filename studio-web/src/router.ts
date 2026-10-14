@@ -80,6 +80,9 @@ export type RouteDef = {
   projectNav?: ProjectNavDef;
   /** Use the full content width (Mission Control, Map, Lab). */
   fullWidth?: boolean;
+  /** The page shows the scenario engine's state in its own words (the Lab's Design page): the top
+   *  bar's engine dot is hidden there, so the two never disagree. */
+  hideEngine?: boolean;
 };
 
 export type RouteModule = { routes?: RouteDef[] };

@@ -3,23 +3,71 @@
 // Each card renders its params_schema (numbers, choices, flags, a lever, and the list of
 // [lon, lat] sites of "Around sites", typed or loaded from a CSV of uploaded points); missing
 // required parameters keep Create disabled. Requirements the run lacks come back as
-// `422 template_unavailable` with `detail.missing` and are shown on the card.
-import { useRef, useState } from "react";
+// `422 template_unavailable` with `detail.missing` and are shown on the card, in plain words; a
+// requirement the run is known to lack (no lever with that role, no map coordinates, no people
+// layers) shows before trying. A run that meets them says nothing about them. Titles and descriptions
+// are the server's, reworded for a planner where the client knows the template (PLAIN_TITLE,
+// PLAIN_DESC): the server's titles carry placeholders and model terms ("Shade the hottest X%",
+// "Prioritise by footprint"). Each card is compact (title and one line) and opens with a quiet "Start
+// from this"; three show, the rest behind "More examples", so the examples never outweigh step 01.
+import { useId, useRef, useState } from "react";
 import { ApiError, errorMessage } from "../../../api/client";
-import { scenarioFromTemplate, useTemplates, type Lever, type Scenario, type ScenarioTemplate, type TemplateParamSchema } from "../../../api/lab";
+import { scenarioFromTemplate, useTemplates, type Lever, type Scenario, type ScenarioTemplate, type TemplateParamSchema, type TemplateRequirement } from "../../../api/lab";
 import { Button } from "../../../components/ui/Button";
 import { NumberField } from "../../../components/ui/NumberField";
 import { toast } from "../../../stores/ui";
 import { fmtInt } from "../../../theme/format";
 import { parseSites } from "../model/library";
+import { LAB_WORDS } from "../model/words";
 
-const REQ_TEXT: Record<string, string> = {
-  layers: "people & land-cover layers",
-  canopy_role: "a canopy role",
-  impervious_role: "an impervious role",
-  albedo_role: "an albedo role",
-  crs: "a CRS",
+/** What each requirement means for a planner (the data the example needs). */
+export const REQ_TEXT: Record<string, string> = {
+  layers: "people and land-cover data",
+  canopy_role: "tree-cover data",
+  impervious_role: "paving data",
+  albedo_role: "roof & surface data",
+  crs: "map coordinates",
 };
+
+/** The examples' titles in plain words, by template id (the server's label otherwise). */
+export const PLAIN_TITLE: Record<string, string> = {
+  cool_roofs: "Cool roofs where it's most built up",
+  shade_hottest: "Shade the hottest places",
+  fill_plantable: "Plant the open ground",
+  depave: "Less paving where it's heaviest",
+  footprint_priority: "Trees where they cool most",
+  around_sites: "Changes around chosen sites",
+  configured_package: "Start from this run's planned changes",
+};
+
+/** A template's title for a planner. */
+export const templateTitle = (t: Pick<ScenarioTemplate, "id" | "label">): string => PLAIN_TITLE[t.id] ?? t.label;
+
+/** The examples' descriptions in plain words, by template id (the server's text otherwise). */
+export const PLAIN_DESC: Record<string, string> = {
+  cool_roofs: "Make roofs and pavements lighter where buildings and paving cover at least half the ground.",
+  shade_hottest: "Add tree canopy in the hottest places, by measured temperature.",
+  fill_plantable: "Plant trees on a share of the open ground that can take them, plus a little of the paving.",
+  depave: "Take paving out of the most paved places, down to a level you choose.",
+  footprint_priority: "Add tree canopy where each new tree cools the surrounding neighbourhood the most.",
+  around_sites: "Make a change within a set distance of places you list, such as schools or bus stops.",
+  configured_package: "Start from the set of changes saved in this run's settings, as changes you can edit.",
+};
+
+/** What this run is known to have (unknown when absent): a requirement shows only when it is known to be missing. */
+export type TemplateContext = { hasCrs?: boolean; hasLayers?: boolean };
+
+/** Requirements of a template the run is known to lack (levers by role, map coordinates, people layers). */
+export function knownMissing(t: Pick<ScenarioTemplate, "requires">, levers: readonly Pick<Lever, "role">[], ctx: TemplateContext = {}): TemplateRequirement[] {
+  return t.requires.filter((r) => {
+    if (r === "crs") return ctx.hasCrs === false;
+    if (r === "layers") return ctx.hasLayers === false;
+    const role = r.replace(/_role$/, "");
+    return levers.length > 0 && !levers.some((l) => l.role === role);
+  });
+}
+
+const reqList = (reqs: readonly string[]) => reqs.map((r) => REQ_TEXT[r] ?? r.replace(/_/g, " ")).join(", ");
 
 /** Default parameter values from a template's schema. */
 export function templateDefaults(t: ScenarioTemplate): Record<string, unknown> {
@@ -142,12 +190,13 @@ function ParamField({ name, schema, value, onChange, levers }: { name: string; s
   );
 }
 
-function TemplateCard({ t, pid, rid, levers, onCreated }: { t: ScenarioTemplate; pid: string | null; rid: string; levers: Lever[]; onCreated: (s: Scenario) => void }) {
+function TemplateCard({ t, pid, rid, levers, context, onCreated }: { t: ScenarioTemplate; pid: string | null; rid: string; levers: Lever[]; context?: TemplateContext; onCreated: (s: Scenario) => void }) {
   const [open, setOpen] = useState(false);
   const [params, setParams] = useState<Record<string, unknown>>(() => templateDefaults(t));
   const [busy, setBusy] = useState(false);
   const [missing, setMissing] = useState<string[] | null>(null);
   const needed = missingParams(t, params);
+  const lacking = missing ?? knownMissing(t, levers, context);
   const titleOf = (k: string) => t.params_schema.properties?.[k]?.title ?? k.replace(/_/g, " ");
   const apply = async () => {
     if (!pid || needed.length) return;
@@ -156,23 +205,24 @@ function TemplateCard({ t, pid, rid, levers, onCreated }: { t: ScenarioTemplate;
       onCreated(await scenarioFromTemplate(pid, t.id, params, rid));
     } catch (e) {
       if (e instanceof ApiError && e.code === "template_unavailable") setMissing(Array.isArray(e.detail?.missing) ? (e.detail!.missing as string[]) : [e.message]);
-      else toast("error", `Could not start "${t.label}"`, { body: errorMessage(e) });
+      else toast("error", `Could not start "${templateTitle(t)}"`, { body: errorMessage(e) });
     } finally {
       setBusy(false);
     }
   };
+  const desc = PLAIN_DESC[t.id] ?? t.desc;
   return (
-    <article className="template card tight" data-template={t.id}>
-      <header>
-        <div>
-          <h3>{t.label}</h3>
-          <p className="cap">{t.desc}</p>
-        </div>
+    <article className="template card tight" data-template={t.id} data-open={open || undefined}>
+      <header className="template-head">
+        <h3>{templateTitle(t)}</h3>
+        {/* one line on the compact card (the whole sentence in its tooltip); in full once opened */}
+        <p className="cap template-desc" title={open ? undefined : desc}>
+          {desc}
+        </p>
       </header>
-      {t.requires.length ? <p className="cap">Needs {t.requires.map((r) => REQ_TEXT[r] ?? r).join(", ")}.</p> : null}
-      {missing ? (
-        <p className="callout" data-tone="crit">
-          This run lacks {missing.map((m) => REQ_TEXT[m] ?? m).join(", ")}.
+      {lacking.length ? (
+        <p className={missing ? "callout" : "cap"} data-tone={missing ? "crit" : undefined} data-unavailable="true">
+          Not available for this run: it needs {reqList(lacking)}.
         </p>
       ) : null}
       {open ? (
@@ -191,24 +241,52 @@ function TemplateCard({ t, pid, rid, levers, onCreated }: { t: ScenarioTemplate;
           </div>
         </div>
       ) : (
-        <Button size="small" onClick={() => setOpen(true)} disabled={!pid} title={pid ? undefined : "Open the run from its project to create scenarios"}>
-          Use template
+        <Button
+          size="small"
+          variant="ghost"
+          className="template-start"
+          onClick={() => setOpen(true)}
+          disabled={!pid}
+          title={pid ? undefined : "Open the run from its project to create scenarios"}
+          aria-label={`Start from this: ${templateTitle(t)}`}
+        >
+          Start from this
         </Button>
       )}
     </article>
   );
 }
 
-export function TemplateGallery({ pid, rid, levers = [], onCreated }: { pid: string | null; rid: string; levers?: Lever[]; onCreated: (s: Scenario) => void }) {
+/** Examples shown before "More examples". */
+export const EXAMPLES_SHOWN = 3;
+
+/**
+ * The examples ("Start from an example"): compact cards (title and one line), the first
+ * EXAMPLES_SHOWN of them with the ones this run can use first (server order otherwise), the rest
+ * behind "More examples (N)". Each card opens its own form with "Start from this".
+ */
+export function TemplateGallery({ pid, rid, levers = [], context, onCreated }: { pid: string | null; rid: string; levers?: Lever[]; context?: TemplateContext; onCreated: (s: Scenario) => void }) {
   const { data, error } = useTemplates();
-  if (error) return <p className="cap">Templates are unavailable: {errorMessage(error)}</p>;
-  if (!data) return <p className="cap">Loading templates…</p>;
+  const [all, setAll] = useState(false);
+  const listId = useId();
+  if (error) return <p className="cap">The examples are unavailable: {errorMessage(error)}</p>;
+  if (!data) return <p className="cap">Loading the examples…</p>;
+  const usable = (t: ScenarioTemplate) => knownMissing(t, levers, context).length === 0;
+  const ordered = [...data.filter(usable), ...data.filter((t) => !usable(t))];
+  const shown = all ? ordered : ordered.slice(0, EXAMPLES_SHOWN);
+  const more = ordered.length - EXAMPLES_SHOWN;
   return (
-    <section className="templates stack" aria-label="Templates" style={{ gap: 8 }}>
-      <p className="eyebrow">Start from a planning action</p>
-      {data.map((t) => (
-        <TemplateCard key={t.id} t={t} pid={pid} rid={rid} levers={levers} onCreated={onCreated} />
-      ))}
+    <section className="templates stack" aria-label="Templates" style={{ gap: 6 }}>
+      <div className="stack" id={listId} style={{ gap: 6 }}>
+        {shown.map((t) => (
+          <TemplateCard key={t.id} t={t} pid={pid} rid={rid} levers={levers} context={context} onCreated={onCreated} />
+        ))}
+      </div>
+      {more > 0 ? (
+        <Button size="small" variant="ghost" className="templates-more" icon={all ? "chevronUp" : "chevronDown"} aria-expanded={all} aria-controls={listId} onClick={() => setAll((v) => !v)}>
+          {all ? LAB_WORDS.fewerExamples : LAB_WORDS.moreExamples(more)}
+        </Button>
+      ) : null}
     </section>
   );
 }

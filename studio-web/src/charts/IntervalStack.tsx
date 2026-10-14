@@ -54,7 +54,8 @@ function Plot(p: IntervalStackProps) {
               {r.label.length > 26 ? r.label.slice(0, 25) + "…" : r.label}
             </text>
             {layers.map((l, k) => {
-              const thick = 4 + (k / Math.max(1, n - 1)) * 10;
+              // a row of one interval draws it as a clear bar; stacked ones go narrow-dark-thick to wide-light-thin
+              const thick = n === 1 ? 12 : 4 + (k / Math.max(1, n - 1)) * 10;
               const label = `${r.label}, ${l.label}: ${fmtSigned(l.lo, d)} to ${fmtSigned(l.hi, d)}${p.unit ? " " + p.unit : ""}${excludesZero(l) ? ", excludes zero" : ", includes zero"}`;
               return (
                 <rect
@@ -64,7 +65,7 @@ function Plot(p: IntervalStackProps) {
                   y={cy - thick / 2}
                   height={thick}
                   rx={2}
-                  style={{ fill: "var(--s1)", fillOpacity: 0.18 + (0.55 * k) / Math.max(1, n - 1) }}
+                  style={{ fill: "var(--s1)", fillOpacity: n === 1 ? 0.5 : 0.18 + (0.55 * k) / Math.max(1, n - 1) }}
                   {...markProps(ctx, label)}
                 />
               );
@@ -88,7 +89,7 @@ function Plot(p: IntervalStackProps) {
 
 export function IntervalStack(props: IntervalStackProps) {
   const names = [...new Set(props.rows.flatMap((r) => r.layers.map((l) => l.label)))];
-  const legend = props.legend ?? <span>from darkest to lightest: {names.join(" → ")} · black tick = estimate · "excludes 0" when the widest interval does</span>;
+  const legend = props.legend ?? <span>from darkest to lightest: {names.join(" → ")} · tick = estimate · "excludes 0" when the widest interval does</span>;
   return (
     <ChartFrame {...props} legend={legend} table={intervalTable(props)}>
       <Plot {...props} />

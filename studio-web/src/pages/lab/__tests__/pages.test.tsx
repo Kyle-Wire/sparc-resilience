@@ -31,6 +31,13 @@ function job(id: string, kind: string): Job {
 
 let fetchMock: ReturnType<typeof mockFetch> | null = null;
 
+/** Open the Design page's "Advanced options" (it renders the full scenario editor only while open; it stays open across scenarios). */
+async function openAdvanced(container: HTMLElement) {
+  const details = await waitFor(() => container.querySelector<HTMLDetailsElement>("details.lab-advanced"), 8000, "advanced options");
+  if (!details.open) click(details.querySelector("summary")!);
+  return details;
+}
+
 beforeEach(() => {
   clearResources();
   forgetDrafts();
@@ -123,17 +130,18 @@ describe("Design workbench", () => {
     fetchMock = mockFetch(routes);
     navigate(`/r/${RID}/lab/s/sc_a`, { replace: true });
     const { container } = render(<Design />);
+    await openAdvanced(container);
     const name = await waitFor(() => container.querySelector<HTMLInputElement>(".scenario-editor input"), 8000, "editor");
     expect(name.value).toBe("Downtown cool corridor");
 
-    // live preview and compile
-    await waitFor(() => previews > 0 && byText(container, ".map-side dd", "3"), 8000, "preview summary");
+    // live preview (the quick estimate pane) and compile (Advanced options)
+    await waitFor(() => previews > 0 && container.querySelector('[aria-label="Preview"] [data-n-edited="3"]'), 8000, "preview summary");
     await waitFor(() => byText(container, ".compile-panel dd", "35"), 8000, "compile people");
     expect(byText(container, ".edit-issues li", "within 1 sd")).not.toBeNull();
     // the inspector shows the plain-language card for the latest exact result
-    await waitFor(() => byText(container, ".plain-result .headline", "Cools the edited area by 0.62 °F"), 8000, "inspector");
+    await waitFor(() => byText(container, ".plain-result .headline", "Cools the places you changed"), 8000, "inspector");
     expect(container.querySelector(".plain-result")!.textContent).toContain("Confident it cools.");
-    expect(container.querySelector(".plain-result")!.textContent).toContain("partly outside observed conditions (23% of edited cells)");
+    expect(container.querySelector(".plain-result")!.textContent).toContain("partly beyond the conditions measured in this city (23% of the places you changed)");
     expect(byText(container, ".badge", "DEMO")).not.toBeNull();
 
     // edit the content: autosave on blur gets 409 conflict_revision, forks and continues
@@ -182,6 +190,7 @@ describe("Design workbench", () => {
     });
     navigate(`/r/${RID}/lab/s/sc_t`, { replace: true });
     const { container } = render(<Design />);
+    await openAdvanced(container);
     await waitFor(() => container.querySelector<HTMLInputElement>(".scenario-editor input")?.value === "Shade the hottest 10%", 8000, "editor");
     await waitFor(() => sent.preview.length > 0, 8000, "preview request");
     await waitFor(() => byText(container, ".compile-panel dd", "12"), 8000, "compile people");
@@ -189,8 +198,180 @@ describe("Design workbench", () => {
     expect((sent.compile.at(-1) as unknown[]).length).toBe(1);
     expect(container.textContent).not.toContain("not a selection");
     expect(container.textContent).not.toContain("Add an edit to compile it");
-    const run = byText(container, "button", "Run exact") as HTMLButtonElement;
+    const run = byText(container, "button", "Run full model") as HTMLButtonElement;
     expect(run.disabled).toBe(false);
+  }, 30000);
+});
+
+describe("Design step flow (layout contract)", () => {
+  const compileBody = {
+    content_hash: "h",
+    portable: true,
+    levers: { Pct_Canopy: { n_cells: 3, mean_requested: 10, total_requested: 30, predicted_mean_realised: 9.2, clipped_share: 0.08, est_cost: 27.6 } },
+    union_cells: 3,
+    people: 35,
+    warnings: [],
+    est_exact_s: 120,
+    emulator: { usable: true, hatched: false, reasons: [] },
+  };
+  const routes = (): Record<string, MockHandler> => ({
+    ...runRoutes(),
+    "GET /api/scenarios/sc_a": { body: scenario("sc_a") },
+    [`POST /api/runs/${RID}/preview`]: (_u, init) => previewBody(JSON.parse(String(init.body)).request_seq as number, [-0.6, -0.5, -0.4, 0, 0, 0, -0.1], [1, 1, 1, 0, 0, 0, 0]),
+    [`POST /api/runs/${RID}/compile`]: { body: compileBody },
+  });
+  async function closeAdvanced(container: HTMLElement) {
+    const details = await waitFor(() => container.querySelector<HTMLDetailsElement>("details.lab-advanced"), 8000, "advanced options");
+    if (details.open) click(details.querySelector("summary")!);
+    await flush(2);
+  }
+
+  it("shows the active change's three steps, one quick-estimate region and one Run full model button; ids never clash with Advanced options", async () => {
+    fetchMock = mockFetch(routes());
+    navigate(`/r/${RID}/lab/s/sc_a`, { replace: true });
+    const { container } = render(<Design />);
+    await closeAdvanced(container);
+    expect(container.querySelector(".scenario-editor")).toBeNull(); // Advanced options renders only while open
+    const row = await waitFor(() => container.querySelector("article.edit-row[data-active]"), 8000, "active change");
+    expect(row.querySelectorAll(".stage-num").length).toBe(3); // 01 02 03
+    expect(row.querySelector("#edit-0-amount")).not.toBeNull();
+    expect(row.querySelector('[data-lever="Pct_Canopy"]')!.getAttribute("aria-pressed")).toBe("true");
+    // the typical amounts are chips only: no slider ticks bunched at its low end
+    expect(row.querySelector("datalist")).toBeNull();
+    expect(row.querySelector('input[type="range"]')!.hasAttribute("list")).toBe(false);
+    await waitFor(() => container.querySelector('[aria-label="Preview"] [data-n-edited="3"]'), 8000, "quick estimate");
+    expect(container.querySelectorAll('[aria-label="Preview"]').length).toBe(1);
+    await waitFor(() => container.querySelector("[data-compile-sentence]"), 8000, "compile sentence");
+    const runs = [...container.querySelectorAll("button")].filter((b) => b.textContent?.startsWith("Run full model"));
+    expect(runs.length).toBe(1);
+    expect(runs[0].classList.contains("accent")).toBe(true);
+    expect(runs[0].textContent).toContain("2 min");
+    // opening Advanced options hands the edit-* ids to the scenario editor: still exactly one #edit-0-amount
+    await openAdvanced(container);
+    await waitFor(() => container.querySelector(".scenario-editor"), 8000, "editor");
+    expect(container.querySelectorAll("#edit-0-amount").length).toBe(1);
+    expect(container.querySelector("article.edit-row[data-active] #change-0-amount")).not.toBeNull();
+    await closeAdvanced(container);
+    // Done collapses the change to its sentence; "Add another change" opens a new one
+    click(byText(container.querySelector("article.edit-row[data-active]")!, "button", "Done"));
+    expect(container.querySelector("article.edit-row[data-active]")).toBeNull();
+    expect(container.querySelector("article.edit-row .lab-edit-sentence")).not.toBeNull();
+    click(byText(container, "button", "Add another change"));
+    expect(container.querySelector('article.edit-row[data-pending="true"]')).not.toBeNull();
+  }, 30000);
+
+  it("starts a new scenario from a lever card", async () => {
+    fetchMock = mockFetch(routes());
+    navigate(`/r/${RID}/lab`, { replace: true });
+    const { container } = render(<Design />);
+    await closeAdvanced(container);
+    const pending = await waitFor(() => container.querySelector('article.edit-row[data-pending="true"]'), 8000, "first change");
+    expect(pending.querySelector("#edit-0-amount")).toBeNull(); // nothing to size before a lever is picked
+    click(pending.querySelector('[data-lever="Albedo"]'));
+    const row = await waitFor(() => container.querySelector("article.edit-row[data-active]:not([data-pending])"), 8000, "created change");
+    expect(row.querySelector('[data-lever="Albedo"]')!.getAttribute("aria-pressed")).toBe("true");
+    expect(row.querySelector("#edit-0-amount")).not.toBeNull();
+  }, 30000);
+
+  it("walks the whole flow: empty → lever → where → how much → quick estimate → Run full model → the answer card", async () => {
+    let saved: ReturnType<typeof scenario> | null = null;
+    let ran = 0;
+    const base = result("res_9", { scenario: { id: "sc_new", revision: 1, name: "Downtown cool corridor" } });
+    const exactSummary = { ...base.summary, scenario_id: "sc_new", created_utc: "2026-10-02T09:00:00Z" };
+    const res = { ...base, summary: exactSummary };
+    fetchMock = mockFetch({
+      ...routes(),
+      [`POST /api/projects/${PID}/scenarios`]: (_u, init) => {
+        saved = scenario("sc_new", { doc: JSON.parse(String(init.body)).doc });
+        return { status: 201, body: saved };
+      },
+      "GET /api/scenarios/sc_new": () => ({ body: ran ? { ...saved!, status: "exact", results: [exactSummary] } : saved! }),
+      "PATCH /api/scenarios/sc_new": (_u, init) => {
+        saved = { ...saved!, doc: JSON.parse(String(init.body)).doc };
+        return { body: saved };
+      },
+      "POST /api/scenarios/sc_new/run": () => {
+        ran++;
+        return { body: { cached: exactSummary, job: null } };
+      },
+      "GET /api/results/res_9": { body: res },
+    });
+    // the newly finished result is scrolled into view (jsdom has no scrollIntoView: record the calls)
+    const scrolled: string[] = [];
+    const scrollIntoView = vi.fn(function (this: HTMLElement) {
+      scrolled.push(this.className);
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { value: scrollIntoView, configurable: true, writable: true });
+    navigate(`/r/${RID}/lab`, { replace: true });
+    const { container } = render(<Design />);
+    await closeAdvanced(container);
+    const mapHeading = () => container.querySelector(".lab-map .map-side .card h3")?.textContent ?? null;
+
+    // empty: the examples and a disabled Run full model that says why; the map shows where the city is hot
+    const pending = await waitFor(() => container.querySelector('article.edit-row[data-pending="true"]'), 8000, "first change");
+    const run0 = byText(container, "button", "Run full model") as HTMLButtonElement;
+    expect(run0.disabled).toBe(true);
+    expect(container.querySelector("[data-run-why]")!.textContent).toMatch(/Make a change first/);
+    await waitFor(() => mapHeading() === "Observed temperature", 8000, "the observed temperature on the map");
+    expect(container.querySelector(".compare-tray")).toBeNull(); // nothing pinned: no tray bar
+    expect(container.querySelector("[data-full-result]")).toBeNull();
+
+    // 01 what: trees & canopy
+    click(pending.querySelector('[data-lever="Pct_Canopy"]'));
+    const row = await waitFor(() => container.querySelector("article.edit-row[data-active]:not([data-pending])"), 8000, "created change");
+    // 02 where: a neighbourhood (zone 1 first)
+    click(byText(row.querySelector('[data-step="where"]')!, '[role="radio"]', "A neighbourhood"));
+    await waitFor(() => row.querySelector('[data-step="where"][data-preset="neighbourhood"]'), 8000, "neighbourhood preset");
+    // 03 how much: a typical amount
+    click(byText(row.querySelector('[data-step="howmuch"]')!, "button.chip", "20 pts"));
+    expect((row.querySelector("#edit-0-amount") as HTMLInputElement).value).toBe("20");
+
+    // the first autosave creates the scenario and opens it; its doc is what the steps built
+    await waitFor(() => window.location.pathname === `/r/${RID}/lab/s/sc_new`, 8000, "first autosave");
+    expect(saved!.doc.edits).toEqual([expect.objectContaining({ lever: "Pct_Canopy", mode: "add", amount: 20, where: { kind: "zones", values: [1] } })]);
+
+    // the quick estimate and the "how much fits" sentence
+    const pv = await waitFor(() => container.querySelector('[aria-label="Preview"][data-trust]'), 8000, "quick estimate");
+    await waitFor(() => pv.querySelector('[data-n-edited="3"]') && pv.querySelector("[data-edited-mean]"), 8000, "preview summary");
+    expect(pv.querySelector(".qe-big")!.textContent).toBe("About −0.50 °F");
+    // the map switches to the quick estimate with the first change
+    await waitFor(() => mapHeading() === "Quick estimate: temperature change", 8000, "the quick estimate on the map");
+    await waitFor(() => container.querySelector("[data-compile-sentence]"), 8000, "compile sentence");
+
+    // Run full model → the answer card (a cached result here)
+    const run = await waitFor(() => {
+      const b = byText(container, "button", "Run full model") as HTMLButtonElement | null;
+      return b && !b.disabled ? b : null;
+    }, 8000, "run enabled");
+    click(run);
+    await waitFor(() => ran === 1, 8000, "exact run requested");
+    const headline = await waitFor(() => container.querySelector(".result-inspector .plain-result .headline"), 8000, "answer card");
+    expect(headline.textContent).toBe("Cools the places you changed");
+    // it comes into view; with nothing new to run, the run pane points to it (no accent, no second number)
+    await waitFor(() => scrolled.some((c) => c.includes("answer-card")), 8000, "the answer card scrolled into view");
+    const line = await waitFor(() => container.querySelector('[data-full-result="current"]'), 8000, "the result line");
+    expect(line.textContent).toBe("Full model is up to date for these changes.");
+    expect(line.textContent).not.toContain("0.62");
+    const runPane = container.querySelector('[aria-label="Full model"]')!;
+    expect(runPane.querySelector(".btn.accent")).toBeNull();
+    expect([...runPane.querySelectorAll("button")].some((b) => b.textContent?.startsWith("Run full model"))).toBe(false);
+    // the quick estimate steps back: muted, "before the full model"
+    const pane = container.querySelector('[aria-label="Preview"]')!;
+    expect(pane.getAttribute("data-superseded")).toBe("true");
+    expect(pane.querySelector(".kicker")!.textContent).toBe("Quick estimate (before the full model)");
+    scrolled.length = 0;
+    click(byText(runPane, "button", "See full model result"));
+    expect(scrolled.some((c) => c.includes("answer-card"))).toBe(true);
+    expect(document.activeElement?.classList.contains("answer-card")).toBe(true);
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    const card = container.querySelector(".answer-card")!;
+    expect(card.getAttribute("data-tone")).toBe("cool");
+    expect(card.querySelector(".answer-chip")!.textContent).toBe("Confident it cools");
+    expect([...container.querySelectorAll("details.rv-section")].map((d) => (d as HTMLElement).dataset.section)).toEqual(["where", "heat", "future", "changed", "sure", "tech"]);
+
+    // Done collapses the change to its sentence
+    click(byText(container.querySelector("article.edit-row[data-active]")!, "button", "Done"));
+    expect(container.querySelector(".lab-edit-sentence")!.textContent).toContain("tree canopy in zone 1");
   }, 30000);
 });
 

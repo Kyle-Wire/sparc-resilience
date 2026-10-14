@@ -1,0 +1,122 @@
+/* The full-model result on the Design page (phase 3): the answer card (.answer-) and the accordion
+   under it (.rv-). Tokens only (tokens.css), so the dark theme follows. Cooling is the brand's cool
+   ramp end, warming the warm one, "might be no real effect" neutral: cooling is never crimson. */
+
+/* ---------------------------------------------------------------- the answer card */
+.answer-card { --answer-tone: var(--ink); }
+.answer-card[data-tone="cool"] { --answer-tone: var(--cool-2); }
+.answer-card[data-tone="warm"] { --answer-tone: var(--warm-2); }
+.answer-card > .vcard-head { flex-wrap: wrap; }
+.answer-card .vcard-meta { min-width: 0; }
+.answer-card .vcard-meta > span:not(.badge) + span:not(.badge)::before { content: "·"; margin-right: 4px; color: var(--muted); }
+.answer-body.plain-result { gap: 14px; }
+
+.answer-card .answer-headline { margin: 0; font-size: 1.12rem; font-weight: 650; line-height: 1.35; letter-spacing: -0.01em; color: var(--ink); max-width: 62ch; }
+
+/* the big number with its caption, the confidence chip, and the likely-range strip beside them */
+.answer-hero { display: grid; grid-template-columns: minmax(0, auto) minmax(200px, 1fr); gap: 10px 24px; align-items: center; }
+@media (max-width: 720px) { .answer-hero { grid-template-columns: minmax(0, 1fr); } }
+.answer-number { display: grid; gap: 4px; justify-items: start; min-width: 0; }
+.answer-big { margin: 0; font-family: var(--font-display); font-size: 2.4rem; font-weight: 800; line-height: 1; letter-spacing: -0.025em; font-variant-numeric: tabular-nums; color: var(--answer-tone); overflow-wrap: anywhere; }
+.answer-where { font-size: 13px; color: var(--ink-2); }
+
+/* confidence chip: a .pill in the result's tone (never the crimson accent) */
+.answer-chip { margin-top: 4px; }
+.answer-chip[data-conf="cool"] { color: var(--cool-2); background: color-mix(in srgb, var(--cool-1) 28%, transparent); }
+.answer-chip[data-conf="warm"] { color: var(--warm-3); background: color-mix(in srgb, var(--warm-1) 32%, transparent); }
+.answer-chip[data-conf="neutral"] { color: var(--ink-2); background: var(--chip); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.answer-chip::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.answer-chip[data-conf="neutral"]::before { background: linear-gradient(90deg, var(--cool-2) 50%, var(--warm-2) 50%); }
+
+/* the likely-range strip (SVG): a zero line, the range bar, the estimate dot */
+.answer-strip { display: block; width: 100%; max-width: 440px; height: auto; overflow: visible; }
+.answer-strip text { font-family: var(--font-mono); font-size: 9.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.answer-strip .answer-strip-end { fill: var(--ink-2); }
+.answer-strip .answer-strip-label { fill: var(--ink-2); letter-spacing: 0.04em; }
+.answer-strip-axis { stroke: var(--line-strong); stroke-width: 1; }
+.answer-strip-zero { stroke: var(--ink); stroke-width: 1.5; }
+.answer-strip-bar { fill: var(--line-strong); }
+.answer-strip-bar[data-side="cool"] { fill: var(--cool-1); }
+.answer-strip-bar[data-side="warm"] { fill: var(--warm-1); }
+.answer-strip-dot { fill: var(--ink-2); stroke: var(--surface); stroke-width: 2; }
+.answer-strip[data-tone="cool"] .answer-strip-dot { fill: var(--cool-2); }
+.answer-strip[data-tone="warm"] .answer-strip-dot { fill: var(--warm-2); }
+/* dark themes: the light ramp ends sink into the dark surface (about 1.5:1), so the bar mixes the
+   brighter end with the surface instead (≥ 3:1 against --surface) */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .answer-strip-bar[data-side="cool"] { fill: color-mix(in srgb, var(--cool-2) 62%, var(--surface)); }
+  :root:not([data-theme="light"]) .answer-strip-bar[data-side="warm"] { fill: color-mix(in srgb, var(--warm-2) 70%, var(--surface)); }
+}
+:root[data-theme="dark"] .answer-strip-bar[data-side="cool"] { fill: color-mix(in srgb, var(--cool-2) 62%, var(--surface)); }
+:root[data-theme="dark"] .answer-strip-bar[data-side="warm"] { fill: color-mix(in srgb, var(--warm-2) 70%, var(--surface)); }
+/* "might be no real effect": the bar crosses the zero line, cool on one side and warm on the other,
+   with a hairline outline so the crossing reads even where the two tints are close */
+.answer-strip[data-straddles="true"] .answer-strip-bar { stroke: var(--line-strong); stroke-width: 0.75; }
+
+/* up to four facts: label over value, hairline rules */
+/* (.answer-card raises specificity over base.css's `.plain-result dl`, the e2e class the body keeps) */
+.answer-card .answer-facts { margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(170px, 100%), 1fr)); gap: 0 16px; align-items: stretch; font-size: inherit; border-top: 1px solid var(--line); }
+.answer-fact { display: grid; gap: 2px; align-content: start; padding: 10px 0; min-width: 0; border-bottom: 1px solid var(--line); }
+.answer-fact > dt { font-size: 11.5px; color: var(--muted); }
+.answer-fact > dd { margin: 0; min-width: 0; }
+.answer-fact-value { font-size: 1.12rem; font-weight: 700; line-height: 1.25; color: var(--ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.answer-fact-note { font-size: 12px; line-height: 1.4; color: var(--muted); }
+.answer-fact .btn { justify-self: start; margin-top: 2px; }
+.answer-fact-value > .answer-fact-pending { font-size: 0.95rem; font-weight: 500; color: var(--ink-2); }
+
+/* "Keep in mind" and "What it buys" */
+.answer-notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr)); gap: 12px 24px; }
+.answer-notes > section { display: grid; gap: 4px; align-content: start; min-width: 0; }
+.answer-notes .kicker { margin: 0; }
+.answer-notes ul { margin: 0; padding-left: 1.1em; font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+.answer-notes li + li { margin-top: 2px; }
+.answer-notes li::first-letter { text-transform: uppercase; }
+
+.answer-actions { padding-top: 2px; }
+
+/* ---------------------------------------------------------------- the accordion */
+.rv { gap: 14px; }
+/* the chart cards in the accordion take a neutral top rule: crimson marks only the primary action,
+   and it would sit right beside the cooling data (the answer card sets its own tone) */
+.rv .vcard:not(.answer-card) { --vcard-accent: var(--line-strong); }
+.rv-sections { display: grid; border: 1px solid var(--line-strong); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
+.rv-section + .rv-section { border-top: 1px solid var(--line); }
+.rv-section > summary {
+  list-style: none; cursor: pointer; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 12px; align-items: center;
+  padding: 12px 16px; min-height: 44px;
+}
+.rv-section > summary::-webkit-details-marker { display: none; }
+.rv-section > summary:hover { background: var(--surface-2); }
+.rv-section > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.rv-section-title { font-size: 14px; font-weight: 650; color: var(--ink); }
+.rv-section-teaser { grid-column: 1; font-size: 12px; color: var(--muted); }
+.rv-section-chev { grid-column: 2; grid-row: 1 / span 2; color: var(--muted); transition: transform 0.15s; }
+.rv-section[open] > summary .rv-section-chev { transform: rotate(180deg); }
+.rv-section-body { display: grid; gap: 14px; padding: 4px 16px 18px; min-width: 0; }
+.rv-section-body > * { min-width: 0; }
+.rv-lead { margin: 0; font-size: 14px; line-height: 1.45; color: var(--ink); max-width: 72ch; }
+.rv-lead strong { font-variant-numeric: tabular-nums; }
+.rv-layers { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.rv-list { margin: 0; padding-left: 1.1em; font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+.rv-list li + li { margin-top: 2px; }
+.rv-prompt { display: grid; gap: 8px; justify-items: start; padding: 14px; border: 1px dashed var(--line-strong); border-radius: var(--radius-sm); }
+.rv-prompt > p { margin: 0; }
+.rv-prompt[data-busy] { border-style: solid; border-color: var(--line); }
+.rv-prompt .spinner { width: 14px; height: 14px; color: var(--muted); }
+.rv-causal { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.rv-causal > a.pill { text-decoration: none; }
+.rv-causal > a.pill:hover { text-decoration: underline; }
+.rv-causal > a.pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.rv-tech { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; font-size: 13px; align-items: baseline; }
+.rv-tech dt { color: var(--muted); font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+.rv-tech dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+@media (max-width: 560px) { .rv-tech { grid-template-columns: minmax(0, 1fr); } .rv-tech dd { margin-bottom: 6px; } }
+
+/* "see How sure are we": a quiet text link inside a Keep in mind line; the card takes focus when revealed */
+.answer-link { font: inherit; color: var(--ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: var(--line-strong); text-underline-offset: 3px; }
+.answer-link:hover { text-decoration-color: currentColor; }
+.answer-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+.answer-card:focus { outline: none; }
+.answer-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.answer-card { scroll-margin-top: calc(var(--topbar-h, 52px) + 12px); }
+.rv-section { scroll-margin-top: calc(var(--topbar-h, 52px) + 12px); }

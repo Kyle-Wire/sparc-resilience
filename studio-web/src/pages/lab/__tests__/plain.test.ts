@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import type { Result } from "../../../api/lab";
 import type { Likely } from "../../../api/types";
 import { CONFIDENCE_TEXT, confidenceOf } from "../../../components/ui/PlainResult";
-import { buysLines, cityLine, concentrationCaption, confidenceWord, extrapolationQualifier, headline, interval95, perCostText, plainWording, withRange } from "../model/plain";
+import { answerHeadlineText, buysLines, cityLine, concentrationCaption, confidenceWord, extrapolationQualifier, headline, interval95, perCostText, plainServerBuys, plainWording, withRange } from "../model/plain";
 
 const L = (estimate: number, lo: number | null, hi: number | null, se: number | null = null): Likely => ({ estimate, lo, hi, se, confidence: "unknown", phrase: "" });
 
@@ -56,9 +56,12 @@ describe("qualifiers and headline", () => {
     expect(extrapolationQualifier(0.2)).toBeNull();
     expect(extrapolationQualifier(0.19)).toBeNull();
     expect(extrapolationQualifier(null)).toBeNull();
-    expect(extrapolationQualifier(0.23)).toBe("partly outside observed conditions (23% of edited cells)");
+    expect(extrapolationQualifier(0.23)).toBe("partly beyond the conditions measured in this city (23% of the places you changed)");
+    // above half: "mostly", never "partly"
+    expect(extrapolationQualifier(0.5)).toBe("partly beyond the conditions measured in this city (50% of the places you changed)");
+    expect(extrapolationQualifier(0.73)).toBe("mostly beyond the conditions measured in this city (73% of the places you changed)");
     const w = plainWording({ edited: L(-0.62, -0.8, -0.44), city: L(-0.021, -0.03, -0.012), unit: "degF", fracExtrapolatedEdited: 0.23 });
-    expect(w.qualifiers).toEqual(["partly outside observed conditions (23% of edited cells)"]);
+    expect(w.qualifiers).toEqual(["partly beyond the conditions measured in this city (23% of the places you changed)"]);
     expect(plainWording({ edited: L(-0.62, -0.8, -0.44), city: L(-0.021, -0.03, -0.012), unit: "degF", fracExtrapolatedEdited: 0.2 }).qualifiers).toEqual([]);
   });
 
@@ -67,13 +70,24 @@ describe("qualifiers and headline", () => {
     expect(w.headline).toBe("Cools the edited area by 0.62 °F (likely range 0.44–0.80 °F).");
     expect(w.city).toBe("City-wide: 0.021 °F cooler.");
     expect(w.confidence).toBe("Confident it cools");
-    expect(w.qualifiers).toEqual(["independent causal check disagrees", "preview only — not verified"]);
+    expect(w.qualifiers).toEqual(["A separate cross-check gives a different answer — see How sure are we", "preview only — not verified"]);
     expect(headline(L(0.3, 0.1, 0.5), "degF", "the city")).toBe("Warms the city by 0.30 °F (likely range 0.10–0.50 °F).");
     expect(cityLine(L(0.004, null, null), "degF")).toBe("City-wide: 0.004 °F warmer.");
     const cityOnly = plainWording({ edited: null, city: L(-0.1, -0.2, 0.05), unit: "degF", fracExtrapolatedEdited: null });
     expect(cityOnly.headline).toMatch(/^Cools the city by 0\.10 °F/);
     expect(cityOnly.confidence).toBe("Could be zero");
     expect(cityOnly.city).toBe("");
+  });
+
+  it("writes the answer card's headline without numbers (the big number and the strip carry them)", () => {
+    expect(answerHeadlineText(L(-0.62, -0.8, -0.44), "the places you changed")).toBe("Cools the places you changed");
+    expect(answerHeadlineText(L(0.3, 0.1, 0.5), "the whole city")).toBe("Warms the whole city");
+    expect(answerHeadlineText(L(-0.1, -0.2, 0.05), "the city")).toBe("May cool the city");
+    expect(answerHeadlineText(L(0.1, -0.2, 0.3), "the city")).toBe("May warm the city");
+    expect(answerHeadlineText(L(-0.1, null, null), "the city")).toBe("Cools the city");
+    expect(answerHeadlineText(L(0, null, null), "the city")).toBe("Leaves the city unchanged");
+    expect(answerHeadlineText(L(Number.NaN, null, null), "the city")).toBe("No estimate for the city");
+    expect(/\d/.test(answerHeadlineText(L(-0.62, -0.8, -0.44), "the places you changed"))).toBe(false);
   });
 
   it("states what the scenario buys", () => {
@@ -97,8 +111,15 @@ describe("qualifiers and headline", () => {
       },
     } as Pick<Result, "cost" | "impacts">;
     expect(buysLines(r, "degF")).toEqual([
-      "100 residents moved below 90 °F today, 400 by mid-century (SSP2-4.5).",
-      "Offsets 41% of SSP245 2041-2060 median warming.",
+      "100 fewer residents feel an air temperature of 90 °F or more today; 400 fewer by mid-century (moderate emissions).",
+      "Cancels out about 41% of the warming expected by 2041–2060 (moderate emissions).",
+      "0.400 °F·cells of cooling per 1,000 cost units.",
+    ]);
+    // no pathway codes, no bare "below 90 °F" (that reads as the heat index of the card's Extreme caution fact)
+    expect(buysLines(r, "degF").join(" ")).not.toMatch(/ssp|rcp|median|below 90/i);
+    // the card leaves the residents line out when it shows its own residents fact
+    expect(buysLines(r, "degF", { residents: false })).toEqual([
+      "Cancels out about 41% of the warming expected by 2041–2060 (moderate emissions).",
       "0.400 °F·cells of cooling per 1,000 cost units.",
     ]);
   });
@@ -109,6 +130,18 @@ describe("qualifiers and headline", () => {
     expect(buysLines(warm, "degF")).toEqual(["611.700 °F·cells of warming per 1,000 cost units."]);
     expect(perCostText(-0.6117, "degF", "1k")).toBe("611.700 °F·cells of warming per 1k");
     expect(perCostText(0.6117, "degF", "1k")).toBe("611.700 °F·cells of cooling per 1k");
+  });
+
+  it("words the server's own lines plainly until the impacts are in", () => {
+    // sparc/studio/engine/stats.py buys_lines
+    expect(
+      plainServerBuys([
+        "Moves 2,880 residents below 90 °F today",
+        "Moves 2,880 residents below 90 °F mid-century (SSP2-4.5 2041-2060)",
+        "0.40 °F·cells of cooling per 1,000 cost units",
+        "Offsets 31% of the city's SSP2-4.5 2041-2060 median warming",
+      ]),
+    ).toEqual(["Cancels out about 31% of the warming expected by 2041–2060 (moderate emissions)."]);
   });
 });
 

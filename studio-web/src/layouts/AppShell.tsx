@@ -420,7 +420,8 @@ export function AppShell({ children, pageTitle, fullWidth }: { children: ReactNo
           <span className="spacer" />
           {project ? <ActiveRunChip projectRuns={projectDetail?.runs ?? []} run={run} activeRunId={project.active_run_id} /> : null}
           <JobTray />
-          <EngineDot runId={context.runId} />
+          {/* the Lab's Design page says the engine state under its Run button (its own words) */}
+          {route.route?.hideEngine ? null : <EngineDot runId={context.runId} />}
           <ConnectionPill />
           <IconButton icon="search" label="Command palette (Ctrl+K)" onClick={() => setPaletteOpen(true)} />
           <ThemeToggle />

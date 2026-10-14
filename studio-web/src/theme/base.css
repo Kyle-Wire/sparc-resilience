@@ -472,9 +472,16 @@ details.table-view[open] summary { margin-bottom: 8px; }
 .mapview > .stack { grid-template-columns: minmax(0, 1fr); }
 @media (max-width: 860px) { .mapview { grid-template-columns: minmax(0, 1fr); } }
 .map-controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* the layer select and its label wrap as one */
+.map-layer-pick { display: inline-flex; flex-wrap: nowrap; align-items: center; gap: 6px; white-space: nowrap; min-width: 0; max-width: 100%; }
+.map-layer-pick > select { min-width: 0; }
+.map-tools button { display: inline-flex; align-items: center; gap: 4px; }
+.map-tools button > svg { flex: none; }
 /* Empty canvas (no-data holes, outside the extent) is a faint hatch on the page colour, so cells
    near a diverging ramp's neutral midpoint never read as empty. */
-.map-stage { position: relative; background: repeating-linear-gradient(45deg, var(--nodata) 0 1px, transparent 1px 6px), var(--page); border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; min-height: 280px; touch-action: none; }
+/* No data (outside the study area, holes in the grid): a quiet dot stipple. The diagonal hatch is kept
+   for rough or beyond-measured places only (GridCanvas, [data-hatch-key]), so it never means "no data". */
+.map-stage { position: relative; background: radial-gradient(circle, var(--nodata) 1.1px, transparent 1.5px) 0 0 / 6px 6px, var(--page); border: 1px solid var(--line-strong); border-radius: var(--radius); overflow: hidden; min-height: 280px; touch-action: none; }
 .map-stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .map-stage canvas { display: block; image-rendering: pixelated; }
 .map-stage .map-overlay { position: absolute; inset: 0; pointer-events: none; overflow: visible; }

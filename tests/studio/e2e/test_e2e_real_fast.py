@@ -7,8 +7,9 @@ nothing to reuse and starts over. The test therefore cancels twice: during S2–
 within 30 s, then resumed), and once more after that checkpoint, whose resume shows the stages
 it covers as cached before it succeeds.
 
-The Lab part draws a +10 canopy circle (emulator preview), runs it exactly (fold ticks,
-plain-language card with the likely range), saves and forks it, compares it with a configured
+The Lab part walks the Design step flow (01 trees & canopy, 02 a circle drawn on the map, 03 add
+10: the quick estimate), runs the full model (fold ticks, the answer card with the likely range),
+names and forks it, compares it with a configured
 scenario (paired SE), explores the climate with a changed threshold, moves the budget slider of
 a plan (the Pareto curve and the planned totals change) and verifies the plan, then exports a
 decision pack and a GeoTIFF.
@@ -17,11 +18,12 @@ decision pack and a GeoTIFF.
 from __future__ import annotations
 
 import io
+import json
 import re
 import time
 import zipfile
 
-from .conftest import StudioPage, dd_of, drag_on, rail_states, wait_for
+from .conftest import RUN_FULL_MODEL, StudioPage, dd_of, drag_on, lab_advanced, lab_open_engine, lab_pick_lever, rail_states, wait_for
 
 N_POINTS = 48
 CHECKPOINT_KEY = {"S1": "S3", "S2_S3": "S3", "baselines": "baselines", "S4": "S4", "S5": "S5", "climate": "climate",
@@ -90,58 +92,61 @@ def test_e2e_real_fast(studio_server, studio_page):
     assert all(_rail(page).get(s) == "cached" for s in reused)
     sp.shot("run succeeded")
 
-    # -- the Lab: build the emulator, load the engine ---------------------------------------------------
+    # -- the Lab: build the quick estimate (emulator), load the model (engine) ---------------------------
     sp.goto(f"/r/{rid}/lab")
-    page.get_by_role("button", name=re.compile(r"^Build emulator")).click()
+    build = page.get_by_role("region", name="Preview", exact=True).get_by_role("button", name=re.compile(r"^Build quick estimate"))
+    build.click()
     wait_for(lambda: server.get("/api/jobs", params={"kind": "post.emulator", "limit": 1})["items"], 30, "the emulator job")
     emulator = server.wait_job(_newest_job(server, "post.emulator")["id"], timeout=300)
     assert emulator["status"] == "succeeded", emulator
-    wait_for(lambda: not page.get_by_role("button", name=re.compile(r"^Build emulator")).count(), 60,
-             "the Lab to see the emulator")
-    page.get_by_role("button", name="Open engine").click()
+    wait_for(lambda: not page.locator("[data-no-emulator]").count(), 60, "the Lab to see the emulator")
+    lab_open_engine(page)                                     # Advanced options › Model › Open engine
     wait_for(lambda: server.get(f"/api/runs/{rid}/engine")["state"] == "ready", 300, "the engine to load", interval=0.5)
-    page.get_by_text("engine ready").first.wait_for()
+    page.locator("[data-engine=ready]").get_by_text("Model ready").wait_for()
     sp.shot("lab engine ready")
 
-    # -- draw a circle with +10 canopy → preview --------------------------------------------------------
-    page.get_by_role("button", name="Add edit").click()
+    # -- 01 trees & canopy · 02 draw a circle on the map · 03 add 10 → quick estimate ---------------------
+    lab_pick_lever(page, "Trees & canopy")
     page.wait_for_url(re.compile(r"/lab/s/sc_[a-z0-9]+"))      # the first autosave creates the scenario
     sid = re.search(r"/lab/s/(sc_[a-z0-9]+)", page.url).group(1)
     page.wait_for_timeout(500)
+    row = page.locator("article.edit-row").first
+    row.get_by_role("radiogroup", name="Where", exact=True).get_by_role("radio", name="Draw on the map").click()
     stage = page.locator(".map-stage[role=application]").first
     stage.scroll_into_view_if_needed()
-    page.get_by_role("button", name="Select a circle").click()
+    page.get_by_role("button", name="Circle: select a circle").click()
     drag_on(page, stage, (0.5, 0.5), (0.63, 0.5))
-    row = page.locator("article.edit-row").first
-    row.get_by_text(re.compile(r"^Map: Circle")).wait_for()
-    row.get_by_role("button", name="Use", exact=True).click()
+    row.get_by_text("Applies in the area drawn on the map.").wait_for()   # the drawing becomes the place
     amount = row.locator("#edit-0-amount")
     amount.fill("10")
     amount.press("Tab")
     n_all = server.get(f"/api/runs/{rid}/grid")["n"]
 
-    def circle_count():
-        if "circle" not in row.locator(".sel-desc").inner_text().lower():
-            return None
-        m = re.match(r"([\d,]+) cells", row.get_by_test_id("sel-count").inner_text())
-        n = m and int(m.group(1).replace(",", ""))
-        return n if n and n != n_all else None     # the all-cells count until the circle is counted
+    def saved_circle():
+        edits = server.get(f"/api/scenarios/{sid}")["doc"]["edits"]
+        return edits and (edits[0].get("where") or {}).get("kind") == "circle" and edits[0].get("amount") == 10 and edits
 
-    n_circle = wait_for(circle_count, 30, "the circle's cell count")
+    edits = wait_for(saved_circle, 30, "the autosave of the circle")
+    resp = server.http.post(f"/api/runs/{rid}/preview", json={"edits": edits, "request_seq": 10_000})
+    assert resp.status_code == 200, resp.text
+    n_circle = json.loads(resp.headers["X-SPARC-Summary"])["n_edited"]
     assert 0 < n_circle < n_all
     preview = page.get_by_role("region", name="Preview", exact=True)
-    edited = dd_of(preview, "Edited cells")
-    wait_for(lambda: edited.count() and edited.inner_text().strip() == f"{n_circle:,}", 60, "the preview of the circle")
-    cooled = dd_of(preview, "Mean in edited cells").inner_text()
-    assert cooled.startswith("−"), f"a +10 canopy circle should cool in the preview: {cooled}"
+    area = preview.locator("[data-n-edited]")                 # "Area changed" (the count rides on data-n-edited)
+    wait_for(lambda: area.count() and area.get_attribute("data-n-edited") == str(n_circle), 60, "the preview of the circle")
+    assert re.search(r"\d", dd_of(preview, "Area changed").inner_text())
+    cooled = dd_of(preview, "where you made changes").inner_text()
+    assert cooled.startswith("About −"), f"a +10 canopy circle should cool in the preview: {cooled}"
     sp.shot("preview of the circle")
 
-    # name it (the draft autosaves)
+    # name it (Advanced options › scenario details; the draft autosaves)
+    lab_advanced(page, True)
     page.get_by_label("Name", exact=True).fill("Circle +10 canopy")
     wait_for(lambda: server.get(f"/api/scenarios/{sid}")["doc"]["name"] == "Circle +10 canopy", 30, "the autosave")
+    lab_advanced(page, False)
 
-    # -- Run exact → fold ticks → plain-language card ---------------------------------------------------
-    page.get_by_role("button", name="Run exact").click()
+    # -- Run full model → fold ticks → the answer card ---------------------------------------------------
+    page.get_by_role("button", name=RUN_FULL_MODEL).click()
     wait_for(lambda: server.get("/api/jobs", params={"kind": "engine.scenario", "limit": 1})["items"], 30, "the exact job")
     exact = _newest_job(server, "engine.scenario")
     exact = server.wait_job(exact["id"], timeout=300)
@@ -153,7 +158,10 @@ def test_e2e_real_fast(studio_server, studio_page):
     headline = page.locator(".result-inspector .plain-result .headline")
     headline.wait_for(timeout=60_000)
     text = headline.inner_text()
-    assert re.search(r"^Cools the edited area by .+ \(likely range .+\)\.$", text), text
+    # the headline is numberless (the big number and the likely-range strip carry the figures)
+    assert re.search(r"^(Cools|May cool) the (places you changed|whole city)$", text), text
+    card = page.locator(".answer-card")
+    assert card.get_attribute("data-tone") in ("cool", "neutral"), card.get_attribute("data-tone")
     sp.shot("exact result plain card")
     results = [r for r in server.get(f"/api/scenarios/{sid}")["results"] if r["run_id"] == rid and r["kind"] == "exact"]
     assert results and results[-1]["has_folds"]
@@ -207,7 +215,7 @@ def test_e2e_real_fast(studio_server, studio_page):
     wait_for(lambda: re.search(r"\d", benefit.inner_text()), 60, "the plan preview")
     pareto = page.get_by_role("figure").filter(has=page.get_by_text("Benefit vs budget")).first
     before = (benefit.inner_text(), pareto.inner_html())
-    slider = page.get_by_label(re.compile(r"^Budget"))
+    slider = page.get_by_role("slider", name=re.compile(r"^Budget"))
     lo, hi = float(slider.get_attribute("min") or 0), float(slider.get_attribute("max"))
     slider.fill(str(round(lo + 0.5 * (hi - lo))))
     wait_for(lambda: (benefit.inner_text(), pareto.inner_html()) != before and benefit.inner_text() != before[0], 60,
@@ -224,7 +232,7 @@ def test_e2e_real_fast(studio_server, studio_page):
 
     # -- decision pack of the exact result -------------------------------------------------------------
     sp.goto(f"/r/{rid}/lab/s/{sid}")
-    page.get_by_role("button", name="Decision pack").click()
+    page.get_by_role("button", name="Export decision pack").click()
     wait_for(lambda: server.get(f"/api/projects/{pid}/exports"), 30, "the export record")
     pack = next(e for e in server.get(f"/api/projects/{pid}/exports") if e["kind"] == "decision_pack")
     wait_for(lambda: server.get(f"/api/exports/{pack['id']}")["status"] in ("ready", "failed"), 300, "the decision pack")

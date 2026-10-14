@@ -135,7 +135,7 @@ describe("MapView", () => {
     await flush(2);
     expect(container.querySelector('[aria-label="Pinned cell"]')!.textContent).toContain("row 0");
     // rect tool
-    click(container.querySelector('button[aria-label="Select a rectangle"]'));
+    click(container.querySelector('button[aria-label="Box: select a rectangle"]'));
     expect(container.querySelector('[role="application"]')!.getAttribute("data-tool")).toBe("rect");
     fire("pointerdown", at(0, 0));
     fire("pointermove", at(2, 2));

@@ -157,7 +157,9 @@ def test_keyboard_shell(site, studio_page):
     page.keyboard.press("Control+k")
     dialog = page.get_by_role("dialog")
     dialog.wait_for()
-    assert page.evaluate("document.querySelector('[role=dialog]').contains(document.activeElement)")
+    # the palette moves focus into itself once mounted (a frame after it appears on a cold page)
+    wait_for(lambda: page.evaluate("document.querySelector('[role=dialog]').contains(document.activeElement)"), 5,
+             "focus inside the command palette")
     sp.shot("command palette")
     page.keyboard.press("Escape")
     dialog.wait_for(state="detached")

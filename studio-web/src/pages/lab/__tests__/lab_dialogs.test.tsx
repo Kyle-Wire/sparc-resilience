@@ -9,9 +9,10 @@ import type { Job, SelectionSpec } from "../../../api/types";
 import { byText, click, flush, mockFetch, render, typeInto, waitFor } from "../../../test/render";
 import { AcrossRunsPanel, bandNote, latestAcross } from "../components/AcrossRuns";
 import { DeleteScenarioDialog } from "../components/Dialogs";
-import { ResultInspector } from "../components/ResultInspector";
+import { ResultView } from "../components/result/ResultView";
+import { dewPointText, humidityNote } from "../components/ResultInspector";
 import { SelectionBuilder } from "../components/SelectionBuilder";
-import { TemplateGallery } from "../components/TemplateGallery";
+import { PLAIN_TITLE, TemplateGallery } from "../components/TemplateGallery";
 import { makeGrid } from "../../../map/grid";
 import { L, LEVERS, PID, RID, gridMeta, result, scenario } from "../__fixtures__/lab";
 
@@ -79,7 +80,11 @@ describe("Around sites template", () => {
     });
     const onCreated = vi.fn();
     const { container } = render(<TemplateGallery pid={PID} rid={RID} levers={LEVERS} onCreated={onCreated} />);
-    click(await waitFor(() => byText(container, "button", "Use template"), 5000, "card"));
+    const start = await waitFor(() => byText(container, "button", "Start from this"), 5000, "card");
+    // a plain title instead of the server's label, and a quiet start button (not a full-width default one)
+    expect(container.querySelector(".template h3")!.textContent).toBe(PLAIN_TITLE.around_sites);
+    expect(start.classList.contains("ghost")).toBe(true);
+    click(start);
     const create = byText(container, "button", "Create scenario")!;
     expect((create as HTMLButtonElement).disabled).toBe(true); // sites are required
     expect(container.textContent).toContain("Needed: sites [lon, lat]");
@@ -208,27 +213,39 @@ describe("Check across runs output", () => {
   });
 });
 
-describe("Result inspector cost", () => {
-  it("calls a negative cooling_per_cost warming in the plain card and the Cost KPI", async () => {
+/** Open one accordion item of the result view (its body renders on first open). */
+function openSection(container: HTMLElement, id: string): HTMLElement {
+  const details = container.querySelector<HTMLDetailsElement>(`details.rv-section[data-section="${id}"]`);
+  if (!details) throw new Error(`no result section ${id}`);
+  if (!details.open) click(details.querySelector("summary"));
+  return details;
+}
+
+describe("Result view cost", () => {
+  it("calls a negative cooling_per_cost warming in the cost-per-degree fact, never 'cooling per'", async () => {
     // A canopy-loss scenario warms the city: cost_table's cooling_per_cost (positive = cooler) is negative.
     const warm = result("res_w", {
       city: L(0.84, 0.7, 0.98, 0.07),
       summary: { ...result("res_w").summary, city: L(0.84, 0.7, 0.98, 0.07), edited: L(1.9, 1.6, 2.2, 0.15) },
+      spec: { costs: { Pct_Canopy: { per_unit: 10 } } },
       cost: { total: 100, per_lever: { Pct_Canopy: 100 }, cooling_per_cost: -0.6117 },
       plain: { headline: "", confidence: "", qualifiers: [], buys: ["-611.73 °F·cells of cooling per 1,000 cost units"] },
     });
-    fetchMock = mockFetch({ "GET /api/results/res_w": { body: warm } });
-    const { container } = render(<ResultInspector rid={RID} resId="res_w" pid={PID} unit="degF" nFolds={3} />);
-    await waitFor(() => container.querySelector(".plain-result"), 5000, "inspector");
+    fetchMock = mockFetch({ "GET /api/results/res_w": { body: warm }, [`GET /api/runs/${RID}/levers`]: { body: LEVERS } });
+    const { container } = render(<ResultView rid={RID} resId="res_w" pid={PID} unit="degF" nFolds={3} />);
+    const per = await waitFor(() => container.querySelector('.answer-fact[data-fact="per"]'), 5000, "cost per degree");
+    expect(per.textContent).toContain("Cost per °F");
+    expect(per.textContent).toContain("No cooling to buy");
+    expect(per.textContent).toContain("warms on balance");
+    expect(container.querySelector(".answer-card")!.getAttribute("data-tone")).toBe("warm");
     const text = container.textContent ?? "";
-    expect(text).toContain("What it buys: 611.700 °F·cells of warming per 1,000 cost units.");
-    expect(text).toContain("611.700 °F·cells of warming per 1k");
     expect(text).not.toContain("of cooling per");
+    expect(text).not.toContain("cost units");
   });
 });
 
-describe("Result inspector heat risk", () => {
-  it("leads the impacts with the design's NWS heat-risk change, before → after per case", async () => {
+describe("Result view heat risk", () => {
+  it("shows today's NWS heat-risk change under Heat risk & people and the futures under Against future warming", async () => {
     const c = (ec: number, dg: number, hi: number) => ({ counts: {}, ec_or_worse: ec, danger_or_worse: dg, mean_hi: hi, max_hi: hi + 5 });
     const impacts = {
       thresholds: [90],
@@ -251,14 +268,37 @@ describe("Result inspector heat risk", () => {
         ],
       },
     };
-    fetchMock = mockFetch({ "GET /api/results/res_h": { body: result("res_h", { impacts }) } });
-    const { container } = render(<ResultInspector rid={RID} resId="res_h" pid={PID} unit="degF" nFolds={3} />);
-    await waitFor(() => container.querySelector('[aria-label="Heat risk"]'), 5000, "heat risk");
-    const text = container.querySelector('[aria-label="Heat risk"]')!.textContent ?? "";
-    expect(text).toContain("moves 33k residents out of Extreme caution or worse");
-    expect(text).toContain("36,669 → 3,728");
-    expect(text).toContain("Campaign afternoon");
-    expect(text).toContain("constant RH");
-    expect(text).toContain("16.7 °C");
+    fetchMock = mockFetch({ "GET /api/results/res_h": { body: result("res_h", { impacts }) }, [`GET /api/runs/${RID}/levers`]: { body: LEVERS } });
+    const { container } = render(<ResultView rid={RID} resId="res_h" pid={PID} unit="degF" nFolds={3} />);
+    // the card's fact: residents moved out of Extreme caution today (shown only there)
+    const fact = await waitFor(() => container.querySelector('.answer-fact[data-fact="heat"]'), 5000, "heat fact");
+    expect(fact.textContent).toContain("Residents out of Extreme caution");
+    expect(fact.textContent).toContain("32,941");
+    // today: before → after, no "moved out" column (that is the card's number)
+    openSection(container, "heat");
+    const today = await waitFor(() => container.querySelector('[aria-label="Heat risk"]'), 5000, "heat risk");
+    const t = today.textContent ?? "";
+    expect(t).toContain("36,669 → 3,728");
+    expect(t).toContain("Measured hot afternoon");
+    // the dew point in the page's unit, the source in plain words (16.7 °C ≈ 62 °F)
+    expect(t).toContain("Humidity: as measured (dew point 62 °F).");
+    expect(t).not.toContain("°C");
+    // the unit as runs state it
+    expect(["degF", "°F", "F"].map((u) => dewPointText(18, u))).toEqual(["64 °F", "64 °F", "64 °F"]);
+    expect(dewPointText(18, "degC")).toBe("18 °C");
+    expect(humidityNote({ dewpoint_C: 18, source: "campaign" }, "degF")).toBe("Humidity: as measured in the field survey (dew point 64 °F).");
+    expect(humidityNote({ dewpoint_C: 18, source: "station" }, "degF")).toBe("Humidity: as measured at the weather station (dew point 64 °F).");
+    expect(t).not.toContain("32,941");
+    expect(t).not.toContain("same relative humidity");
+    // the futures
+    openSection(container, "future");
+    const future = await waitFor(() => container.querySelector('[aria-label="Heat risk in future climates"]'), 5000, "future heat risk");
+    // the future in plain words; the pathway code only in the cell's tooltip
+    expect(future.textContent).toContain("Mid-century, moderate emissions (2041–2060)");
+    expect(future.textContent).not.toMatch(/SSP|ssp/);
+    expect(future.querySelector('td [title="SSP2-4.5 2041-2060"]')!.textContent).toBe("Mid-century, moderate emissions (2041–2060)");
+    expect(future.textContent).toContain("same relative humidity as today (upper)");
+    expect(future.textContent).toContain("23,000");
+    expect((container.textContent ?? "").split("32,941").length - 1).toBe(1);
   });
 });

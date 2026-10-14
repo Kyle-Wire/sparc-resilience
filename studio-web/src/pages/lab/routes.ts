@@ -31,6 +31,7 @@ export const routes: RouteDef[] = [
     component: Design,
     title: "Scenario Lab",
     fullWidth: true,
+    hideEngine: true,
     runTab: { id: "lab", label: "Scenario Lab", order: 50, views: ["lab", "scenarios", "budget"] },
     projectNav: {
       id: "lab",
@@ -45,7 +46,7 @@ export const routes: RouteDef[] = [
       disabledReason: labDisabledReason,
     },
   },
-  { path: "/r/:rid/lab/s/:sid", component: Design, title: "Scenario", fullWidth: true },
+  { path: "/r/:rid/lab/s/:sid", component: Design, title: "Scenario", fullWidth: true, hideEngine: true },
   { path: "/r/:rid/lab/library", component: lazy(() => import("./Library")), title: "Scenario library", fullWidth: true },
   { path: "/r/:rid/lab/plans", component: Plans, title: "Budget plans", fullWidth: true },
   { path: "/r/:rid/lab/plans/:plid", component: Plans, title: "Budget plan", fullWidth: true },

@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from .conftest import ROOT, StudioPage, dd_of, visit_run_pages, wait_for
+from .conftest import RUN_FULL_MODEL, ROOT, StudioPage, dd_of, lab_open_engine, lab_pick_lever, visit_run_pages, wait_for
 
 pytestmark = pytest.mark.slow
 RUN = "providence_uhi_fast"
@@ -85,11 +85,11 @@ def test_e2e_providence(studio_server, studio_page, tmp_path):
 
     # -- the engine opens; one exact scenario -----------------------------------------------------------
     sp.goto(f"/r/{rid}/lab")
-    page.get_by_role("button", name="Open engine").click()
+    lab_open_engine(page)
     engine = wait_for(lambda: (e := server.get(f"/api/runs/{rid}/engine"))["state"] in ("ready", "error") and e, 1200,
                       "the engine to load", interval=1)
     assert engine["state"] == "ready", engine
-    page.get_by_role("button", name="Add edit").click()
+    lab_pick_lever(page)                                       # step 01 creates the change (whole city)
     page.wait_for_url(re.compile(r"/lab/s/sc_[a-z0-9]+"))
     sid = re.search(r"/lab/s/(sc_[a-z0-9]+)", page.url).group(1)
     row = page.locator("article.edit-row").first
@@ -99,8 +99,8 @@ def test_e2e_providence(studio_server, studio_page, tmp_path):
 
     # -- the emulator preview the page shows is the server's preview of the same edits ----------------
     preview = page.get_by_role("region", name="Preview", exact=True)
-    shown_n = dd_of(preview, "Edited cells")
-    wait_for(lambda: shown_n.count() and re.search(r"\d", shown_n.inner_text()), 120, "the preview")
+    area = preview.locator("[data-n-edited]")                 # "Area changed" (the count rides on data-n-edited)
+    wait_for(lambda: area.count() and int(area.get_attribute("data-n-edited")) > 0, 120, "the preview")
     wait_for(lambda: server.get(f"/api/scenarios/{sid}")["doc"]["edits"]
              and server.get(f"/api/scenarios/{sid}")["doc"]["edits"][0].get("amount") == 10, 30, "the autosave")
     edits = server.get(f"/api/scenarios/{sid}")["doc"]["edits"]
@@ -112,12 +112,17 @@ def test_e2e_providence(studio_server, studio_page, tmp_path):
     assert int(edited.sum()) == summary["n_edited"]
     assert float(np.nanmean(arrays["delta"])) == pytest.approx(summary["mean"], abs=1e-6)
     assert float(np.nanmean(arrays["delta"][edited])) == pytest.approx(summary["edited_mean"], abs=1e-6)
-    assert shown_n.inner_text().strip() == f"{summary['n_edited']:,}"
-    shown_mean = dd_of(preview, "Mean in edited cells").inner_text().replace("−", "-")
-    assert float(re.search(r"-?\d+\.\d+", shown_mean).group(0)) == pytest.approx(summary["edited_mean"], abs=6e-4)
+    assert int(area.get_attribute("data-n-edited")) == summary["n_edited"]
+    # the big number "About −0.42 °F" (where you made changes) carries the full-precision mean
+    shown_mean = preview.locator("[data-edited-mean]")
+    wait_for(lambda: float(shown_mean.get_attribute("data-edited-mean")) == pytest.approx(summary["edited_mean"], abs=1e-6),
+             30, "the preview of the saved edits")
+    big = dd_of(preview, "where you made changes").inner_text().replace("−", "-")
+    if abs(summary["edited_mean"]) >= 0.005:                   # below that it reads "No noticeable change"
+        assert float(re.search(r"-?\d+(\.\d+)?", big).group(0)) == pytest.approx(summary["edited_mean"], abs=0.051)
     sp.shot("providence preview")
 
-    page.get_by_role("button", name="Run exact").click()
+    page.get_by_role("button", name=RUN_FULL_MODEL).click()
     headline = page.locator(".result-inspector .plain-result .headline")
     headline.wait_for(timeout=1_200_000)
     assert "likely range" in headline.inner_text()

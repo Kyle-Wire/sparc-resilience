@@ -1,11 +1,15 @@
 // Centre pane of the Design workbench (SPEC §7.5, §12.5): the map kit's MapView in Design mode.
-// - "Preview ΔT" is the emulator's linear preview (always labelled; hatched when the preview
-//   is unreliable at this scale); the edited cells are tinted.
+// - "Quick estimate: temperature change" is the emulator's linear preview (always labelled;
+//   hatched when the preview is unreliable at this scale); the edited cells are tinted.
 // - The brush paints the chosen lever's Float32 edit array, clamped against the lever's exact
 //   Float32 inputs (strokes overwrite, never accumulate); erase sets cells back to 0.
 // - Exact result layers (ΔT, spread, extrapolation with hatching above 1, realised changes)
-//   and the whole run catalogue are one click away.
+//   are one click away.
 // - Rect / circle / polygon / zone and hex picks become a selection offered to the edits.
+// Planner chrome by default (phase 3): the planner's layer groups only (Design, Temperature,
+// Planner & people, Full model result), the ramp-only legend, no compare / opacity / lock-scale
+// controls, and the Brush and Pick settings only while step 02 "Draw on the map" is chosen (or that
+// tool is in use). Expert mode (Advanced options) shows the whole run catalogue and every control.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore } from "zustand";
 import { getResultLayer, type Lever, type PreviewResult, type ResultField } from "../../../api/lab";
@@ -17,11 +21,15 @@ import { runLayerLoader, type LayerValues } from "../../../map/data";
 import type { GridData } from "../../../map/grid";
 import { BRUSH_RADII_M, type BrushSettings } from "../../../map/tools/brush";
 import type { PickMode } from "../../../map/tools/pick";
+import type { ToolId } from "../../../map/tools/types";
 import { fmtInt, fmtPct, fmtSigned, unitLabel } from "../../../theme/format";
 import { applySupportRule, leverBounds } from "../model/brush";
 import { BRUSH_LABEL, type DraftStore } from "../model/draft";
 import { resultLayerMetas, syntheticMeta, withGroup } from "../model/layers";
+import { HATCH_KEY } from "../model/quick";
+import { leverUnitWord, leverWords } from "../model/words";
 import { TrustBadge } from "./TrustBadge";
+import "./flow/quick.css";
 
 export const PREVIEW_KEY = "lab:preview";
 
@@ -40,6 +48,17 @@ function resultLayer(resId: string, field: ResultField): Promise<Float32Array> {
   return p;
 }
 export const brushKey = (lever: string) => `lab:brush:${lever}`;
+
+/** Layer groups a planner sees on the Design map (expert mode shows the whole run catalogue). */
+export const PLANNER_GROUPS: readonly string[] = ["design", "temperature", "planner", "result"];
+
+/** The planner's groups, plus the group of the layer on show (a `?layer=` link may name any layer). */
+export function plannerGroups(groups: readonly LayerGroup[], current: string | null): LayerGroup[] {
+  return groups.filter((g) => PLANNER_GROUPS.includes(g.id) || (current !== null && g.layers.some((l) => l.key === current)));
+}
+
+/** Plain words of the map's Pick setting (the pick tool picks a zone or a hexagon of this size). */
+export const PICK_WORDS = { zone: "Neighbourhood", hex250: "Small blocks (250 m)", hex500: "Large blocks (500 m)" } as const;
 
 export type DesignMapProps = {
   rid: string;
@@ -60,6 +79,12 @@ export type DesignMapProps = {
   onLayerChange: (key: string) => void;
   onBrushChange: () => void;
   onSelection: (e: MapSelectionEvent) => void;
+  /** Render the "Preview" summary card in the map's side panel (default true). The Design step
+   *  flow passes false: its own preview pane carries the quick estimate. */
+  showPreviewCard?: boolean;
+  /** Step 02 "Draw on the map" is chosen: show the Brush and Pick settings (they also show while
+   *  the Paint or Pick area tool is in use, and always in expert mode). Default true. */
+  drawing?: boolean;
 };
 
 export function DesignMap(p: DesignMapProps) {
@@ -72,6 +97,8 @@ export function DesignMap(p: DesignMapProps) {
   const [pick, setPick] = useState<PickMode>({ by: "zone" });
   const [base, setBase] = useState<{ lever: string; values: Float32Array } | null>(null);
   const [hatchMask, setHatchMask] = useState<Uint8Array | null>(null);
+  const [tool, setTool] = useState<ToolId>("pan");
+  const expert = useStore(store, (s) => !!s.doc.options?.expert);
   const lever = levers.find((l) => l.var === brushLever) ?? levers[0];
   // A brush edit saved in an earlier session is a per-cell blob edit of the doc; new strokes
   // become a second one and add to it (the saved strokes cannot be re-opened for painting).
@@ -127,9 +154,9 @@ export function DesignMap(p: DesignMapProps) {
       syntheticMeta(
         {
           key: PREVIEW_KEY,
-          label: "Preview ΔT (emulator, linear)",
+          label: "Quick estimate: temperature change",
           unit,
-          desc: "Linear emulator preview: it never saturates or clips to support. Run exact for decisions.",
+          desc: "Purple = cooler, orange = warmer. A quick guide — run the full model for a firm answer.",
           sign_note: "negative = cooler",
         },
         preview?.delta ?? null,
@@ -137,19 +164,21 @@ export function DesignMap(p: DesignMapProps) {
     );
     for (const l of new Set([...store.brushLayers.levers(), ...(lever ? [lever.var] : [])])) {
       const lv = levers.find((x) => x.var === l);
-      layers.push(syntheticMeta({ key: brushKey(l), label: `Brush edit: ${lv?.label ?? l}`, unit: lv?.unit ?? "", desc: "Per-cell change painted with the brush." }, store.brushLayers.array(l)));
+      layers.push(syntheticMeta({ key: brushKey(l), label: `Painted: ${leverWords(lv, l).name}`, unit: lv?.unit ?? "", desc: "The change painted place by place with the brush (a per-cell edit)." }, store.brushLayers.array(l)));
     }
-    return { id: "design", label: "Design", layers };
+    // "Your changes", not "Design": the page's own sub-tab is called Design
+    return { id: "design", label: "Your changes", layers };
     // brushTick / brushState: the brush layers' values change with strokes, undo and redo
   }, [preview, unit, store, lever, levers, p.brushTick, p.brushState]);
 
   const resultGroup = useMemo<LayerGroup | null>(() => {
     if (!p.resultId) return null;
     const units = Object.fromEntries(levers.map((l) => [l.var, l.unit]));
-    return { id: "result", label: "Exact result", layers: resultLayerMetas(p.resultId, unit, p.realizedVars, units) };
+    const names = Object.fromEntries(levers.map((l) => [l.var, leverWords(l).name]));
+    return { id: "result", label: "Full model result", layers: resultLayerMetas(p.resultId, unit, p.realizedVars, units, names) };
   }, [p.resultId, p.realizedVars, levers, unit]);
 
-  const groups = useMemo(() => withGroup(withGroup(p.groups, resultGroup), designGroup), [p.groups, resultGroup, designGroup]);
+  const allGroups = useMemo(() => withGroup(withGroup(p.groups, resultGroup), designGroup), [p.groups, resultGroup, designGroup]);
 
   const previewRef = useRef(preview);
   previewRef.current = preview;
@@ -167,6 +196,7 @@ export function DesignMap(p: DesignMapProps) {
   // Hatching: extrapolated cells (score > 1) on result layers; the edited cells when the
   // preview is flagged unreliable at this scale.
   const current = p.layerKey ?? PREVIEW_KEY;
+  const groups = useMemo(() => (expert ? allGroups : plannerGroups(allGroups, current)), [expert, allGroups, current]);
   useEffect(() => {
     let live = true;
     const m = /^res:([^:]+):/.exec(current);
@@ -186,9 +216,26 @@ export function DesignMap(p: DesignMapProps) {
     };
   }, [current, preview]);
 
+  // Map key for the hatching (the legend shows the colour ramp only): rough quick estimate on the
+  // preview layer, beyond measured conditions on a full-model layer.
+  const hatchShown = useMemo(() => !!hatchMask && hatchMask.some((v) => v === 1), [hatchMask]);
+  const hatchKey = hatchShown ? HATCH_KEY[/^res:/.test(current) ? "result" : "preview"] : null;
+
   const s = preview?.summary;
+  const drawing = p.drawing ?? true;
+  const showBrush = drawing || expert || tool === "brush";
+  const showPick = drawing || expert || tool === "pick";
+  const unitWord = leverUnitWord(lever);
   const side = (
     <>
+      {hatchKey ? (
+        // one line: the hatch swatch and what it means (the right pane carries the trust message)
+        <p className="qe-key" role="note" aria-label="Map key" data-hatch-key="true" title={hatchKey.note}>
+          <span className="qe-hatch" aria-hidden="true" />
+          {hatchKey.label}
+        </p>
+      ) : null}
+      {p.showPreviewCard === false ? null : (
       <section className="card" aria-label="Preview">
         <header>
           <h3>Preview</h3>
@@ -221,48 +268,57 @@ export function DesignMap(p: DesignMapProps) {
         ) : null}
         <p className="cap">Preview is linear: it never saturates or clips to support.</p>
       </section>
-      <section className="card" aria-label="Brush">
-        <h3>Brush</h3>
-        {lever ? (
-          <div className="stack" style={{ gap: 6 }}>
-            <select aria-label="Brush lever" value={lever.var} onChange={(e) => setBrushLever(e.target.value)}>
-              {levers.map((l) => (
-                <option key={l.var} value={l.var}>
-                  {l.label}
-                </option>
-              ))}
-            </select>
-            <Seg<"add" | "erase"> label="Brush mode" size="small" value={mode} onChange={setMode} options={[{ value: "add", label: "Add" }, { value: "erase", label: "Erase" }]} />
-            {mode === "add" ? <NumberField label="Brush change" unit={lever.unit} value={amount} onChange={(v) => setAmount(v)} /> : null}
-            <Seg<number> label="Brush radius" size="small" value={radius} onChange={setRadius} options={BRUSH_RADII_M.map((r) => ({ value: r, label: `${r} m` }))} />
-            <p className="cap">
-              {base?.lever === lever.var ? "Choose the brush tool above the map and paint. Repainting replaces, never adds up." : leverMeta ? "Loading the lever's inputs…" : "This lever's input layer is not in the run catalogue."}
-            </p>
-            {savedBrush >= 0 ? (
-              <p className="cap" data-saved-brush="true">
-                Edit {savedBrush + 1} holds this lever's brush strokes from an earlier session. New strokes are saved as another per-cell edit and add to it; remove edit {savedBrush + 1} to start over.
+      )}
+      {showBrush ? (
+        <section className="card" aria-label="Brush">
+          <h3>Brush</h3>
+          {lever ? (
+            <div className="stack" style={{ gap: 6 }}>
+              <select aria-label="Brush lever" value={lever.var} onChange={(e) => setBrushLever(e.target.value)}>
+                {levers.map((l) => (
+                  <option key={l.var} value={l.var}>
+                    {leverWords(l).name}
+                  </option>
+                ))}
+              </select>
+              <Seg<"add" | "erase"> label="Brush mode" size="small" value={mode} onChange={setMode} options={[{ value: "add", label: "Add" }, { value: "erase", label: "Erase" }]} />
+              {mode === "add" ? <NumberField label="Brush change" unit={unitWord || null} value={amount} onChange={(v) => setAmount(v)} /> : null}
+              <Seg<number> label="Brush radius" size="small" value={radius} onChange={setRadius} options={BRUSH_RADII_M.map((r) => ({ value: r, label: `${r} m` }))} />
+              <p className="cap">
+                {base?.lever === lever.var
+                  ? "Choose Paint above the map and paint. Painting a place again replaces the amount, it never adds up."
+                  : leverMeta
+                    ? "Loading today's values for this change…"
+                    : "This change cannot be painted: its map layer is not in this run."}
               </p>
-            ) : null}
-          </div>
-        ) : (
-          <p className="cap">No actionable levers.</p>
-        )}
-      </section>
-      <section className="card" aria-label="Pick">
-        <h3>Pick</h3>
-        <Seg<string>
-          label="Pick by"
-          size="small"
-          value={pick.by === "zone" ? "zone" : String(pick.size_m)}
-          onChange={(v) => setPick(v === "zone" ? { by: "zone" } : { by: "hex", size_m: Number(v) as 250 | 500 })}
-          options={[
-            { value: "zone", label: "Zone", disabled: !grid.meta.zones.length },
-            { value: "250", label: "Hex 250 m" },
-            { value: "500", label: "Hex 500 m" },
-          ]}
-        />
-        <p className="cap">Shift-click adds to a pick. Picks and drawn shapes are offered to the edits on the left.</p>
-      </section>
+              {savedBrush >= 0 ? (
+                <p className="cap" data-saved-brush="true">
+                  Change {savedBrush + 1} holds the painting of {leverWords(lever).name.toLowerCase()} from an earlier session. New painting is saved as another change and adds to it; remove change {savedBrush + 1} to start over.
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="cap">Nothing in this run can be painted.</p>
+          )}
+        </section>
+      ) : null}
+      {showPick ? (
+        <section className="card" aria-label="Pick">
+          <h3>Pick</h3>
+          <Seg<string>
+            label="Pick by"
+            size="small"
+            value={pick.by === "zone" ? "zone" : String(pick.size_m)}
+            onChange={(v) => setPick(v === "zone" ? { by: "zone" } : { by: "hex", size_m: Number(v) as 250 | 500 })}
+            options={[
+              { value: "zone", label: PICK_WORDS.zone, disabled: !grid.meta.zones.length },
+              { value: "250", label: PICK_WORDS.hex250 },
+              { value: "500", label: PICK_WORDS.hex500 },
+            ]}
+          />
+          <p className="cap">Choose Pick area above the map, then click the map. Shift-click adds to a pick. What you draw or pick can be used as the place of a change.</p>
+        </section>
+      ) : null}
     </>
   );
 
@@ -276,9 +332,12 @@ export function DesignMap(p: DesignMapProps) {
       selection={p.tint ?? preview?.edited ?? null}
       hatch={hatchMask}
       tools={["pan", "brush", "rect", "circle", "polygon", "pick"]}
+      onToolChange={setTool}
       brush={brush}
       pickMode={pick}
       onSelection={p.onSelection}
+      simple={!expert}
+      compactLegend={!expert}
       sidePanel={side}
       height={560}
       title="Scenario design"

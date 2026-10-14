@@ -18,7 +18,7 @@ export type LegendProps = {
   /** Brushed display-value range on the histogram. */
   brush?: [number, number] | null;
   onBrush?: (range: [number, number] | null) => void;
-  /** Hide the histogram (compact legends). */
+  /** Compact legend: no histogram, and no sign note on a diverging ramp (its end words say it). */
   compact?: boolean;
 };
 
@@ -125,7 +125,8 @@ export function Legend({ meta, domain, dark, values, brush, onBrush, compact }: 
         ) : null}
         {domain.zeroBlank ? <p className="cap">Cells at or below zero are shown as no data.</p> : null}
         {meta.mult && meta.mult !== 1 ? <p className="cap">Values are shown × {fmtNum(meta.mult, 2)}.</p> : null}
-        {meta.sign_note ? <p className="cap">{meta.sign_note}</p> : null}
+        {/* a compact diverging legend's end words ("← cooler · warmer →") already give the sign */}
+        {meta.sign_note && !(compact && domain.kind === "div") ? <p className="cap">{meta.sign_note}</p> : null}
       </div>
       {!compact && bins ? (
         bins.counts.some((c) => c > 0) ? (

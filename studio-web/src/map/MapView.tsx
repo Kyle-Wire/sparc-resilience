@@ -5,6 +5,7 @@
 // loader (run hub and Lab use map/data.ts; the setup preview uses project preview binaries).
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { LayerGroup, LayerMeta, SelectionSpec } from "../api/types";
+import { Icon } from "../components/ui/Icon";
 import { IconButton } from "../components/ui/IconButton";
 import { NumberField } from "../components/ui/NumberField";
 import { Seg } from "../components/ui/Seg";
@@ -63,15 +64,25 @@ export type MapViewProps = {
   title?: string;
   /** Hide the side column (legend etc.), e.g. for small embedded maps. */
   noSide?: boolean;
+  /** Planner chrome: no compare modes (Single / Swipe / Side by side / Difference), opacity or Lock scale. */
+  simple?: boolean;
+  /** The legend card shows the colour ramp only: no histogram, layer summary or Range fields. */
+  compactLegend?: boolean;
+  /** Called when the map tool changes (e.g. to show the brush settings while painting). */
+  onToolChange?: (tool: ToolId) => void;
 };
 
-const TOOL_INFO: Record<ToolId, { icon: IconName; label: string }> = {
-  pan: { icon: "hand", label: "Pan and pick (drag to move, click to pin a cell)" },
-  brush: { icon: "brush", label: "Brush edits" },
-  rect: { icon: "square", label: "Select a rectangle" },
-  circle: { icon: "circle", label: "Select a circle" },
-  polygon: { icon: "polygon", label: "Select a polygon (double-click or Enter to close)" },
-  pick: { icon: "target", label: "Pick a zone or hexagon" },
+/**
+ * Each map tool: its icon, the short plain word on the button and the longer description (the
+ * button's accessible name and tooltip; it starts with the short word, so the visible label is in the name).
+ */
+export const TOOL_INFO: Record<ToolId, { icon: IconName; short: string; label: string }> = {
+  pan: { icon: "hand", short: "Move", label: "Move the map (drag to move, click to pin a place)" },
+  brush: { icon: "brush", short: "Paint", label: "Paint the change onto the map" },
+  rect: { icon: "square", short: "Box", label: "Box: select a rectangle" },
+  circle: { icon: "circle", short: "Circle", label: "Circle: select a circle" },
+  polygon: { icon: "polygon", short: "Shape", label: "Shape: select a polygon (double-click or Enter to close)" },
+  pick: { icon: "target", short: "Pick area", label: "Pick area: pick a neighbourhood or a block" },
 };
 
 function useLayerValues(meta: LayerMeta | null, load: (m: LayerMeta) => Promise<LayerValues>) {
@@ -108,7 +119,8 @@ export function MapView(props: MapViewProps) {
   const layerKey = props.layerKey !== undefined ? props.layerKey ?? firstKey : innerKey ?? firstKey;
   const setLayer = (k: string) => (props.onLayerChange ? props.onLayerChange(k) : setInnerKey(k));
   const [innerMode, setInnerMode] = useState<CompareMode>("none");
-  const mode = props.compareMode ?? innerMode;
+  // Simple (planner) chrome has no compare controls, so it always shows one layer.
+  const mode: CompareMode = props.simple ? "none" : props.compareMode ?? innerMode;
   const setMode = (m: CompareMode) => (props.onCompareModeChange ? props.onCompareModeChange(m) : setInnerMode(m));
   const [innerCmp, setInnerCmp] = useState<string | null>(null);
   const cmpKey = props.compareKey !== undefined ? props.compareKey : innerCmp;
@@ -117,7 +129,12 @@ export function MapView(props: MapViewProps) {
   const [opacity, setOpacity] = useState(1);
   const [lock, setLock] = useState<Domain | null>(null);
   const [manual, setManual] = useState<[number, number] | null>(null);
-  const [toolId, setToolId] = useState<ToolId>("pan");
+  const [chosenTool, setToolId] = useState<ToolId>("pan");
+  const tools = props.tools ?? ["pan"];
+  // A tool the caller no longer offers (the toolbar changed) falls back to moving the map.
+  const toolId: ToolId = tools.includes(chosenTool) ? chosenTool : "pan";
+  const onToolChange = props.onToolChange;
+  useEffect(() => onToolChange?.(toolId), [toolId, onToolChange]);
   const [pinned, setPinned] = useState<number | null>(null);
   const [hoverRow, setHoverRow] = useState(-1);
   const [brushRange, setBrushRange] = useState<[number, number] | null>(null);
@@ -266,7 +283,6 @@ export function MapView(props: MapViewProps) {
     }
   };
 
-  const tools = props.tools ?? ["pan"];
   const scale = view.state.scale;
   const overlay = props.overlays?.length ? <Overlay grid={grid} features={props.overlays} scale={scale} /> : null;
   const chrome = (size: { w: number; h: number }) => <MapChrome grid={grid} scale={scale} size={size} />;
@@ -293,14 +309,16 @@ export function MapView(props: MapViewProps) {
         <LayerPicker groups={groups} value={layerKey} onChange={setLayer} label={mode === "none" ? "Layer" : "Layer A"} />
         <div className="map-controls">
           {tools.length > 1 ? (
-            <div className="seg small" role="group" aria-label="Map tool">
+            <div className="seg small map-tools" role="group" aria-label="Map tool">
               {tools.map((t) => (
                 <button key={t} type="button" aria-pressed={toolId === t} title={TOOL_INFO[t].label} aria-label={TOOL_INFO[t].label} onClick={() => setToolId(t)} disabled={t === "brush" && !props.brush}>
-                  {t}
+                  <Icon name={TOOL_INFO[t].icon} size={14} />
+                  {TOOL_INFO[t].short}
                 </button>
               ))}
             </div>
           ) : null}
+          {props.simple ? null : (
           <Seg<CompareMode>
             label="Compare"
             size="small"
@@ -316,6 +334,7 @@ export function MapView(props: MapViewProps) {
               { value: "diff", label: "Difference", disabled: props.allowDiff === false, title: props.allowDiff === false ? "Difference needs the same grid" : "B − A" },
             ]}
           />
+          )}
           {mode !== "none" ? (
             <label className="row cap">
               Layer B
@@ -333,13 +352,17 @@ export function MapView(props: MapViewProps) {
               </select>
             </label>
           ) : null}
-          <label className="row cap">
-            Opacity
-            <input type="range" min={0.2} max={1} step={0.05} value={opacity} onChange={(e) => setOpacity(Number(e.target.value))} aria-label="Layer opacity" style={{ width: 80 }} />
-          </label>
-          <button type="button" className="btn small ghost" aria-pressed={!!lock} onClick={() => setLock(lock ? null : domain)} title="Keep the current colour scale when switching layers">
-            {lock ? "Scale locked" : "Lock scale"}
-          </button>
+          {props.simple ? null : (
+            <>
+              <label className="row cap">
+                Opacity
+                <input type="range" min={0.2} max={1} step={0.05} value={opacity} onChange={(e) => setOpacity(Number(e.target.value))} aria-label="Layer opacity" style={{ width: 80 }} />
+              </label>
+              <button type="button" className="btn small ghost" aria-pressed={!!lock} onClick={() => setLock(lock ? null : domain)} title="Keep the current colour scale when switching layers">
+                {lock ? "Scale locked" : "Lock scale"}
+              </button>
+            </>
+          )}
           <IconButton icon="image" label="Export map as PNG (4×, with legend)" size="small" onClick={() => void exportPng()} />
           <IconButton icon="target" label="Fit map" size="small" onClick={() => (canvasHandle.current ? canvasHandle.current.fit() : view.fit(grid.nx, grid.ny, 640, H))} />
         </div>
@@ -386,17 +409,18 @@ export function MapView(props: MapViewProps) {
       {props.noSide ? null : (
         <div className="map-side">
           {showMeta && showDomain ? (
-            <section className="card">
+            <section className="card" data-compact-legend={props.compactLegend || undefined}>
               <h3>{showMeta.label}</h3>
               {showMeta.desc ? <p className="cap">{showMeta.desc}</p> : null}
               <Legend
                 meta={showMeta}
                 domain={showDomain}
                 dark={dark}
-                values={showValues}
+                values={props.compactLegend ? null : showValues}
+                compact={props.compactLegend}
                 brush={brushRange}
                 onBrush={
-                  props.onSelection && showValues && mode !== "diff"
+                  !props.compactLegend && props.onSelection && showValues && mode !== "diff"
                     ? (r) => {
                         setBrushRange(r);
                         if (!r) {
@@ -416,7 +440,7 @@ export function MapView(props: MapViewProps) {
                     : undefined
                 }
               />
-              {showDomain.kind !== "cat" ? (
+              {showDomain.kind !== "cat" && !props.compactLegend ? (
                 <div className="row cap">
                   Range
                   <NumberField label="Range minimum" placeholder={fmtNum(showDomain.lo, showMeta.decimals)} value={manual?.[0] ?? null} nullable onChange={(v) => setManual(v === null ? null : [v, manual?.[1] ?? showDomain.hi])} />

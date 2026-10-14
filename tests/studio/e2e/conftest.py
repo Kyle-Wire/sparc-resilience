@@ -369,6 +369,38 @@ def dd_of(scope, term: str):
     return scope.locator("dt", has_text=re.compile(rf"^\s*{re.escape(term)}\s*$")).first.locator("xpath=following-sibling::dd[1]")
 
 
+# The Scenario Lab Design page (phase 3 step flow): 01 What to change (lever cards) → 02 Where
+# (presets) → 03 How much (`#edit-<i>-amount`), the quick estimate (region "Preview"), the one primary
+# button "Run full model (≈ N min)", and one "Advanced options" disclosure for everything rare (the
+# scenario name, all modes, the model/engine controls).
+RUN_FULL_MODEL = re.compile(r"^Run full model")
+
+
+def lab_pick_lever(page, name: str = "Trees & canopy"):
+    """Step 01: press the lever card called ``name`` (else the first card, as "Add edit" took the
+    first lever). On a change not started yet this creates it."""
+    cards = page.get_by_role("group", name="What to change").first.get_by_role("button")
+    cards.first.wait_for()
+    named = cards.filter(has=page.get_by_text(name, exact=True))
+    (named if named.count() else cards).first.click()
+
+
+def lab_advanced(page, open_: bool) -> None:
+    """Open or close the Design page's "Advanced options" disclosure (its content renders only while open)."""
+    details = page.locator("details.lab-advanced").first
+    details.wait_for()
+    if (details.get_attribute("open") is not None) != open_:
+        details.locator("> summary").click()
+    wait_for(lambda: (details.get_attribute("open") is not None) == open_, 10, "Advanced options to toggle")
+
+
+def lab_open_engine(page) -> None:
+    """Load the run's model ("Open engine" lives under Advanced options › Model), then close the disclosure."""
+    lab_advanced(page, True)
+    page.get_by_role("button", name="Open engine").click()
+    lab_advanced(page, False)
+
+
 def wait_view_ready(page, what: str, timeout: float = 60) -> None:
     """Wait until a page under ``main`` has rendered its view (a heading below the page title, or an
     empty state) and finished loading (no spinner). An error state is a ``role=alert`` the caller checks."""

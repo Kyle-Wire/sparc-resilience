@@ -1,26 +1,17 @@
-// Exact result inspector (SPEC §7.7): the plain-language card (headline, likely range,
-// confidence, qualifiers, what it buys) with an expert toggle (SE, jackknife, n, method);
-// region table; ring-profile spill chart; realised vs requested and mediator moves; cost;
-// causal check; the uncertainty IntervalStack; impacts (exposure today and in the futures,
-// equity quintiles, hot days with the fetch action, climate offset); preview vs exact;
-// result layers on the map; DEMO badge and the stale banner. Exports the decision pack.
-import { useState } from "react";
-import { ApiError, errorMessage } from "../../../api/client";
-import { mutate } from "../../../api/resource";
-import { exportPack, postImpacts, useResult, type Impacts, type Result } from "../../../api/lab";
-import { Bars, DotRange, Gauge, IntervalStack, RingProfile, type IntervalLayer, type Ring } from "../../../charts";
-import { Badge } from "../../../components/ui/Badge";
-import { Button } from "../../../components/ui/Button";
-import { ActionButton, EmptyState } from "../../../components/ui/EmptyState";
-import { Kpi, KpiRow } from "../../../components/ui/Kpi";
-import { PlainResult } from "../../../components/ui/PlainResult";
+// Pieces of the full-model result (phase 3). The old one-page inspector became result/ResultView
+// (the accordion) + result/AnswerCard; this module keeps the pure helpers (spillRings,
+// uncertaintyLayers, tested in library.test.ts), the props type ResultView still takes, and the
+// impacts pieces the accordion lays out: heat risk by NWS category, residents at or above each
+// temperature, who benefits (equity quintiles), hot days, and the share of future warming offset.
+// Rows are split by case so that today's lines show in "Heat risk & people" and the futures in
+// "Against future warming", each once.
+import type { Impacts, Result } from "../../../api/lab";
+import { Bars, Gauge, type IntervalLayer, type Ring } from "../../../charts";
+import { ActionButton } from "../../../components/ui/EmptyState";
 import { Table } from "../../../components/ui/Table";
-import { useJobs } from "../../../stores/jobs";
-import { toast } from "../../../stores/ui";
-import { fmtDateTime, fmtInt, fmtNum, fmtPct, fmtSigned, fmtSignedValue, unitLabel } from "../../../theme/format";
-import { buysLines, cityLine, concentrationCaption, perCostText, plainWording, withRange } from "../model/plain";
-import { useTray } from "../model/tray";
-import { AcrossRunsPanel } from "./AcrossRuns";
+import { fmtInt, fmtNum, fmtPct, fmtSigned, unitLabel } from "../../../theme/format";
+import { concentrationCaption } from "../model/plain";
+import { emissionsWord, futureCaseLabel, futureLabel, humiditySourceWord, periodWord } from "../model/words";
 
 /** Spill rings for the chart: ring 0 (r_m = 0) is the edited set; ring k spans (r_{k−1}, r_k]. */
 export function spillRings(rings: Result["spill"]["rings"]): Ring[] {
@@ -45,168 +36,16 @@ export function uncertaintyLayers(u: NonNullable<Result["uncertainty"]>): Interv
   return out;
 }
 
-const HUMIDITY_LABEL: Record<string, string> = { observed: "campaign", constant_dewpoint: "constant dewpoint", constant_rh: "constant RH" };
+/** Plain labels of the uncertainty layers (by `IntervalLayer.id`). */
+export const UNCERTAINTY_PLAIN: Record<string, string> = {
+  estimation: "Model fit (the likely range)",
+  specification: "Across model versions and runs",
+  attribution: "Simulation check",
+  causal: "Independent cause-and-effect check",
+  envelope: "All sources together",
+};
 
-/** Heat risk of the design (NWS heat index): residents at Extreme caution or worse and at Danger or worse,
- *  before → after, on the campaign afternoon and in each future under both humidity assumptions. */
-function HeatRisk({ heat }: { heat: NonNullable<Impacts["heat"]> }) {
-  const today = heat.rows[0];
-  const who = heat.measure === "people" ? "Residents" : "Cells";
-  const n = (v: number) => fmtInt(Math.round(v));
-  return (
-    <section className="card stack" aria-label="Heat risk" style={{ gap: 8 }}>
-      <h4 style={{ margin: 0 }}>Heat risk (NWS heat index)</h4>
-      <p style={{ margin: 0, fontWeight: 600 }}>
-        {heat.headline}
-      </p>
-      {today ? (
-        <KpiRow label="Heat risk key numbers">
-          <Kpi label={`${who} at Extreme caution or worse`} value={`${n(today.before.ec_or_worse)} → ${n(today.after.ec_or_worse)}`} tone={today.ec_avoided > 0 ? "good" : today.ec_avoided < 0 ? "crit" : undefined} />
-          <Kpi label={`${who} at Danger or worse`} value={`${n(today.before.danger_or_worse)} → ${n(today.after.danger_or_worse)}`} />
-          <Kpi label="Heat index felt" value={fmtSigned(today.mean_hi_change, 2)} unit="°F" tone={today.mean_hi_change < 0 ? "good" : today.mean_hi_change > 0 ? "crit" : undefined} />
-        </KpiRow>
-      ) : null}
-      <Table
-        caption={`${who} by NWS heat-risk category, before → after the design`}
-        csvName="heat-risk"
-        rowKey={(r, i) => `${r.case}-${r.humidity}-${i}`}
-        columns={[
-          { key: "case", label: "Case", value: (r) => (r.case === "today" ? "Campaign afternoon" : r.case) },
-          { key: "hum", label: "Humidity", value: (r) => HUMIDITY_LABEL[r.humidity] ?? r.humidity },
-          {
-            key: "ec",
-            label: "Extreme caution or worse",
-            align: "right",
-            value: (r) => r.after.ec_or_worse,
-            render: (r) => `${n(r.before.ec_or_worse)} → ${n(r.after.ec_or_worse)}`,
-          },
-          { key: "eca", label: "Moved out", align: "right", value: (r) => r.ec_avoided, render: (r) => n(r.ec_avoided) },
-          {
-            key: "dg",
-            label: "Danger or worse",
-            align: "right",
-            value: (r) => r.after.danger_or_worse,
-            render: (r) => `${n(r.before.danger_or_worse)} → ${n(r.after.danger_or_worse)}`,
-          },
-          { key: "dhi", label: "Heat index felt", unit: "°F", align: "right", value: (r) => r.mean_hi_change, render: (r) => fmtSigned(r.mean_hi_change, 2) },
-        ]}
-        rows={heat.rows}
-      />
-      <p className="cap">
-        Dewpoint {fmtNum(heat.dewpoint_C, 1)} °C ({heat.source ?? "campaign"}). Extreme caution is a heat index of 90 °F or more (heat cramps and exhaustion possible); Danger 103 °F or
-        more. Futures add each pathway&apos;s median warming under constant dewpoint (lower) and constant relative humidity (upper).
-      </p>
-    </section>
-  );
-}
-
-function ImpactsBlock({ resId, impacts, unit, onImpacts }: { resId: string; impacts: Impacts | null; unit: string; onImpacts: (i: Impacts) => void }) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ApiError | Error | null>(null);
-  const u = unitLabel(unit);
-  const compute = async () => {
-    setBusy(true);
-    try {
-      onImpacts(await postImpacts(resId, {}));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e : new Error(String(e)));
-    } finally {
-      setBusy(false);
-    }
-  };
-  if (!impacts) {
-    return (
-      <section className="card">
-        <h3>Impacts</h3>
-        {error ? <EmptyState error={error} /> : <p className="cap">Residents at or above each threshold today and in the futures, equity by group, hot days avoided and the climate offset.</p>}
-        <Button busy={busy} onClick={() => void compute()}>
-          Compute impacts
-        </Button>
-      </section>
-    );
-  }
-  const thresholds = impacts.thresholds;
-  const tKey = (rec: Record<string, number>, t: number) => Object.keys(rec).find((k) => Number(k) === t) ?? String(t);
-  const equityGroups = Object.entries(impacts.equity);
-  return (
-    <section className="stack" aria-label="Impacts">
-      <h3>Impacts</h3>
-      {impacts.heat ? <HeatRisk heat={impacts.heat} /> : null}
-      <Table
-        caption="Residents at or above each threshold, without and with the scenario"
-        csvName="exposure"
-        rowKey={(r, i) => `${r.case}-${r.adapted}-${i}`}
-        columns={[
-          { key: "case", label: "Case", value: (r) => r.case },
-          { key: "adapted", label: "Scenario", value: (r) => (r.adapted ? "with" : "without") },
-          { key: "mean", label: "Person-mean temperature", unit: u, align: "right", value: (r) => r.person_mean_temp, render: (r) => fmtNum(r.person_mean_temp, 2) },
-          ...thresholds.map((t) => ({
-            key: `ge_${t}`,
-            label: `≥ ${fmtNum(t, 1)} ${u}`,
-            align: "right" as const,
-            value: (r: Impacts["exposure"][number]) => r.people_ge[tKey(r.people_ge, t)] ?? null,
-            render: (r: Impacts["exposure"][number]) => `${fmtInt(Math.round(r.people_ge[tKey(r.people_ge, t)] ?? NaN))} (${fmtPct(r.share_people_ge[tKey(r.share_people_ge, t)] ?? null)})`,
-          })),
-        ]}
-        rows={impacts.exposure}
-      />
-      {equityGroups.length ? (
-        <div className="grid2">
-          {equityGroups.map(([g, e]) => (
-            <Bars
-              key={g}
-              title={`Cooling by ${g.replace(/_/g, " ")} quintile`}
-              units={`${u} (positive = cooler)`}
-              categories={e.quintiles.map((q) => `Q${q.quintile}`)}
-              series={[{ id: "cool", label: "Mean cooling", values: e.quintiles.map((q) => q.mean_cooling) }]}
-              valueLabel="Mean cooling"
-              unit={u}
-              categoryLabel="Quintile (1 = lowest)"
-              caption={concentrationCaption(e.concentration_index, e.resident_mean_cooling, g)}
-            />
-          ))}
-        </div>
-      ) : null}
-      <section className="card">
-        <h4>Hot days</h4>
-        {impacts.hot_days ? (
-          <Table
-            caption={`Person-days avoided (station ${impacts.hot_days.station})`}
-            csvName="hot-days"
-            columns={Object.keys(impacts.hot_days.cases[0] ?? {}).map((k) => ({ key: k, label: k.replace(/_/g, " "), value: (r: Record<string, unknown>) => (typeof r[k] === "number" || typeof r[k] === "string" ? (r[k] as number | string) : null) }))}
-            rows={impacts.hot_days.cases}
-          />
-        ) : impacts.hot_days_action ? (
-          <div className="row">
-            <span className="cap">Hot days need the station's daily history.</span>
-            <ActionButton action={impacts.hot_days_action} size="small" />
-          </div>
-        ) : (
-          <p className="cap">Not available for this run.</p>
-        )}
-      </section>
-      {impacts.climate_offset.length ? (
-        <div className="grid3">
-          {impacts.climate_offset.map((o) => (
-            <Gauge
-              key={`${o.experiment}-${o.period}`}
-              title={`${o.experiment.toUpperCase()} ${o.period}`}
-              label="of median warming offset"
-              value={o.offset_share}
-              min={0}
-              max={Math.max(1, o.offset_share)}
-              ticks={[1]}
-              format={(v) => fmtPct(v)}
-              caption={`Cancels ${fmtPct(o.offset_share)} of ${o.experiment.toUpperCase()} ${o.period} median warming.`}
-            />
-          ))}
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
+/** Props of the result view (formerly the inspector). */
 export type ResultInspectorProps = {
   rid: string;
   resId: string;
@@ -216,221 +55,189 @@ export type ResultInspectorProps = {
   onShowLayer?: (key: string) => void;
 };
 
-export function ResultInspector({ rid, resId, pid, unit, nFolds, onShowLayer }: ResultInspectorProps) {
-  const res = useResult(resId, rid);
-  const pin = useTray((s) => s.pin);
-  const [packBusy, setPackBusy] = useState(false);
-  if (res.error && !res.data) return <EmptyState error={res.error} />;
-  const r = res.data;
-  if (!r) return <p className="cap">Loading the result…</p>;
-  const u = unitLabel(unit);
-  const s = r.summary;
-  // The card computes its confidence from lo/hi; fill them from the SE when absent (SPEC §7.7).
-  const main = withRange(s.edited ?? r.city);
-  const causalDisagrees = r.causal_check ? !r.causal_check.model_within : false;
-  const wording = plainWording({ edited: s.edited, city: r.city, unit, fracExtrapolatedEdited: r.extrapolated_edited ?? s.frac_extrapolated_edited, causalDisagrees, buys: buysLines(r, unit) });
-  const known = new Set(wording.qualifiers.map((q) => q.toLowerCase()));
-  const extraQualifiers = r.plain.qualifiers.filter((q) => !known.has(q.toLowerCase()) && !/outside observed conditions|causal check|preview only/i.test(q));
-  const buys = wording.buys.length ? wording.buys : r.plain.buys;
-  const edited = r.regions.find((g) => g.auto && /edited/i.test(g.name) && !/ring/i.test(g.name));
-  const realized = Object.entries(r.realized);
-  const mediators = Object.entries(r.mediators);
-  const uLayers = r.uncertainty ? uncertaintyLayers(r.uncertainty) : [];
+/** A future-climate case ("SSP2-4.5 2041-2060", "ssp245 2041-2060"); anything else is today. */
+export function isFutureCase(c: string): boolean {
+  return !/^(today|present|obs)/i.test(c) && (/ssp|rcp/i.test(c) || /\b(20[3-9]\d|2100)\b/.test(c));
+}
 
-  const exportDecision = async () => {
-    if (!pid) return;
-    setPackBusy(true);
-    try {
-      const { job } = await exportPack(pid, "decision_pack", { result_id: resId });
-      useJobs.getState().upsert(job);
-      toast("info", "Building the decision pack", { href: `/jobs/${job.id}`, linkLabel: "Track" });
-    } catch (e) {
-      toast("error", "Could not start the decision pack", { body: errorMessage(e) });
-    } finally {
-      setPackBusy(false);
-    }
-  };
+const HUMIDITY_LABEL: Record<string, string> = { observed: "as measured", constant_dewpoint: "same dew point as today (lower)", constant_rh: "same relative humidity as today (upper)" };
 
+/**
+ * A case of the impacts tables in plain words: today's ("Measured hot afternoon" for heat risk,
+ * "Today" for residents by temperature) or a future ("Mid-century, moderate emissions (2041–2060)").
+ * The pathway code (SSP2-4.5…) shows only in the cell's tooltip.
+ */
+export function caseWords(c: string, today = "Today"): string {
+  if (!isFutureCase(c)) return /^(today|present|obs)/i.test(c) ? today : c;
+  return futureCaseLabel(c) ?? c;
+}
+
+const caseCell = (c: string, today?: string) => {
+  const words = caseWords(c, today);
+  return words === c ? c : <span title={c}>{words}</span>;
+};
+
+/** A dew point (°C, as the impacts carry it) in the page's unit: "64 °F" on a °F page. */
+export function dewPointText(dewpointC: number, unit: string): string {
+  if (!Number.isFinite(dewpointC)) return "";
+  // the unit as the run states it ("degF", "°F", "F") or its display form
+  const u = unitLabel(unit).replace(/^deg\s*/i, "°").replace(/^(F|C)$/i, "°$1").toUpperCase();
+  if (u === "°F") return `${fmtNum((dewpointC * 9) / 5 + 32, 0)} °F`;
+  if (u === "K") return `${fmtNum(dewpointC + 273.15, 0)} K`;
+  return `${fmtNum(dewpointC, 0)} °C`;
+}
+
+/** "Humidity: as measured in the field survey (dew point 64 °F)." */
+export function humidityNote(heat: Pick<NonNullable<Impacts["heat"]>, "dewpoint_C" | "source">, unit: string): string {
+  const where = humiditySourceWord(heat.source);
+  const dp = dewPointText(heat.dewpoint_C, unit);
+  return `Humidity: as measured${where ? ` ${where}` : ""}${dp ? ` (dew point ${dp})` : ""}.`;
+}
+
+type HeatRow = NonNullable<Impacts["heat"]>["rows"][number];
+
+/**
+ * Heat risk (NWS heat index) before → after, one row per case and humidity assumption. Today's
+ * table leaves out "moved out" (the answer card's fact); the futures' table keeps it.
+ */
+export function HeatRiskTable({ heat, rows, future, unit = "degF" }: { heat: NonNullable<Impacts["heat"]>; rows: HeatRow[]; future: boolean; unit?: string }) {
+  const who = heat.measure === "people" ? "Residents" : "Places";
+  const n = (v: number) => fmtInt(Math.round(v));
   return (
-    <section className="result-inspector stack" aria-label="Exact result">
-      <header className="row">
-        <h2>Exact result{r.scenario ? `: ${r.scenario.name}` : ""}</h2>
-        {r.demo ? <Badge tone="demo">DEMO</Badge> : null}
-        {r.scenario ? <span className="cap">revision {r.scenario.revision}</span> : null}
-        <span className="cap">{fmtDateTime(s.created_utc)}</span>
-        <span className="spacer" />
-        <Button size="small" icon="pin" onClick={() => (pin(rid, { kind: "result", id: resId }, r.scenario?.name ?? resId) ? toast("success", "Pinned to the compare tray") : toast("warning", "The compare tray holds 4 items"))}>
-          Pin to compare
-        </Button>
-        <Button size="small" icon="download" busy={packBusy} disabled={!pid} onClick={() => void exportDecision()} title="Self-contained brief, maps, tables and GIS files (exact results only)">
-          Decision pack
-        </Button>
-      </header>
-      {r.stale || s.stale ? (
-        <div className="callout" role="status" data-stale="true">
-          <Badge tone="warn">stale</Badge> The run's checkpoint or the core code changed since this result was computed. It stays viewable; run exact again to refresh it.
-        </div>
-      ) : null}
-      {onShowLayer ? (
-        <div className="row" role="group" aria-label="Show result layers on the map">
-          <span className="cap">On the map:</span>
-          <Button size="small" variant="ghost" onClick={() => onShowLayer(`res:${resId}:delta`)}>
-            ΔT
-          </Button>
-          <Button size="small" variant="ghost" onClick={() => onShowLayer(`res:${resId}:delta_sd`)}>
-            Spread
-          </Button>
-          <Button size="small" variant="ghost" onClick={() => onShowLayer(`res:${resId}:extrapolation`)}>
-            Extrapolation
-          </Button>
-          {realized.map(([v]) => (
-            <Button key={v} size="small" variant="ghost" onClick={() => onShowLayer(`res:${resId}:realized_${v}`)}>
-              Realised {v}
-            </Button>
-          ))}
-        </div>
-      ) : null}
-      <div className="grid2">
-        <PlainResult
-          title="In plain words"
-          likely={main}
-          unit={unit}
-          subject={s.edited ? "the edited area" : "the city"}
-          qualifiers={[...(wording.city ? [wording.city] : []), ...wording.qualifiers, ...extraQualifiers, ...buys.map((b) => `What it buys: ${b}`)]}
-          expert={{
-            n: edited?.n_cells ?? null,
-            folds: nFolds,
-            method: "Exact engine on the run's fold models. SE = std over folds of the fold means × √(K−1) (jackknife); likely range = estimate ± 1.96·SE.",
-            extra: [
-              ["City mean", `${fmtSignedValue(r.city.estimate, unit, 4)} ± ${fmtNum(r.city.se, 4)}`],
-              ["Cell spread (p10–p90)", `${fmtSigned(r.p10, 3)} to ${fmtSigned(r.p90, 3)} ${u}`],
-              ["Mean per-cell fold SD", fmtNum(r.mean_delta_sd, 4)],
-              ["Edited cells extrapolated", fmtPct(r.extrapolated_edited)],
-            ],
-          }}
-        />
-        <div className="stack">
-          <KpiRow label="Result summary">
-            <Kpi label="Edited area" value={s.edited ? fmtSigned(s.edited.estimate, 3) : "—"} unit={u} note={s.edited?.phrase} />
-            <Kpi label="City-wide" value={fmtSigned(r.city.estimate, 4)} unit={u} note={cityLine(r.city, unit)} />
-            <Kpi label="Cooling outside the edits" value={fmtPct(r.spill.outside_share)} note="spill beyond the edited cells" />
-            <Kpi label="Cost" value={fmtNum(r.cost.total, 0)} note={r.cost.cooling_per_cost !== null ? perCostText(r.cost.cooling_per_cost, unit, "1k") : undefined} />
-          </KpiRow>
-          {r.preview_vs_exact ? (
-            <p className="cap" data-preview-vs-exact="true">
-              Preview vs exact: mean absolute error {fmtNum(r.preview_vs_exact.mean_abs_err, 4)} {u} ({fmtPct(r.preview_vs_exact.rel_err)} relative).
-            </p>
-          ) : null}
-          {r.warnings.length ? (
-            <ul className="edit-issues">
-              {r.warnings.map((w, i) => (
-                <li key={i} data-level="warn">
-                  {w.message}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="grid2">
-        <RingProfile
-          title="How far the cooling reaches"
-          units={`${u} (negative = cooler)`}
-          rings={spillRings(r.spill.rings)}
-          unit={u}
-          valueLabel="Mean ΔT"
-          caption={`${r.spill.outside_share !== null ? `${fmtPct(r.spill.outside_share)} of the total cooling lands outside the edited cells.` : "No cooling to split between inside and outside."}${Object.keys(r.spill.lever_ranges).length ? ` Influence ranges: ${Object.entries(r.spill.lever_ranges).map(([v, m]) => `${v} ${fmtInt(m)} m`).join(", ")}.` : ""}`}
-        />
-        <Table
-          caption="Regions"
-          csvName="regions"
-          rowKey={(g) => g.name}
-          columns={[
-            { key: "name", label: "Region", value: (g) => g.name, render: (g) => (g.auto ? <em>{g.name}</em> : g.name) },
-            { key: "n", label: "Cells", align: "right", value: (g) => g.n_cells, render: (g) => fmtInt(g.n_cells) },
-            { key: "mean", label: "Mean ΔT", unit: u, align: "right", value: (g) => g.mean?.estimate ?? null, render: (g) => (g.mean ? `${fmtSigned(g.mean.estimate, 3)}${g.mean.se !== null ? ` ± ${fmtNum(1.96 * g.mean.se, 3)}` : ""}` : "—") },
-            { key: "pw", label: "People-weighted", unit: u, align: "right", value: (g) => g.people_weighted, render: (g) => fmtSigned(g.people_weighted, 3) },
-            { key: "total", label: "Total", unit: `${u}·cells`, align: "right", value: (g) => g.total, render: (g) => fmtSigned(g.total, 1) },
-            { key: "c01", label: "Cooled ≥ 0.1", align: "right", value: (g) => g.frac_cooled_01, render: (g) => fmtPct(g.frac_cooled_01) },
-            { key: "c05", label: "Cooled ≥ 0.5", align: "right", value: (g) => g.frac_cooled_05, render: (g) => fmtPct(g.frac_cooled_05) },
-          ]}
-          rows={r.regions}
-        />
-      </div>
-
-      <div className="grid2">
-        <section className="card">
-          <h3>Realised vs requested</h3>
-          {realized.length ? (
-            <Table
-              csvName="realised"
-              rowKey={([v]) => v}
-              columns={[
-                { key: "v", label: "Lever", value: ([v]) => v },
-                { key: "rq", label: "Requested mean", align: "right", value: ([, x]) => x.requested_mean, render: ([, x]) => fmtNum(x.requested_mean, 3) },
-                { key: "rl", label: "Realised mean", align: "right", value: ([, x]) => x.realized_mean, render: ([, x]) => fmtNum(x.realized_mean, 3) },
-                { key: "rqt", label: "Requested total", align: "right", value: ([, x]) => x.requested_total, render: ([, x]) => fmtNum(x.requested_total, 1) },
-                { key: "rlt", label: "Realised total", align: "right", value: ([, x]) => x.realized_total, render: ([, x]) => fmtNum(x.realized_total, 1) },
-                { key: "clip", label: "Clipped", align: "right", value: ([, x]) => x.clipped_share, render: ([, x]) => fmtPct(x.clipped_share) },
-              ]}
-              rows={realized}
-            />
-          ) : (
-            <p className="cap">No lever changes recorded.</p>
-          )}
-          {mediators.length ? (
-            <p className="cap">
-              Mediators: {mediators.map(([v, m]) => `${v} follows ${m.mean_change >= 0 ? "+" : "−"}${fmtNum(Math.abs(m.mean_change), 3)}`).join(" · ")}.
-            </p>
-          ) : null}
-          <p className="cap">
-            Cost {fmtNum(r.cost.total, 0)}
-            {Object.keys(r.cost.per_lever).length ? ` (${Object.entries(r.cost.per_lever).map(([v, c]) => `${v} ${fmtNum(c, 0)}`).join(", ")})` : ""}.
-          </p>
-        </section>
-        {r.causal_check ? (
-          <DotRange
-            title="Causal check"
-            units={`${u} (negative = cooler)`}
-            rows={[
-              {
-                id: "model",
-                label: "City mean (model, exact)",
-                est: r.city.estimate,
-                lo: r.city.lo,
-                hi: r.city.hi,
-                check: { est: r.causal_check.delta, lo: r.causal_check.lo, hi: r.causal_check.hi, label: "independent causal band" },
-              },
-            ]}
-            valueLabel="City-mean ΔT"
-            unit={u}
-            signed
-            rangeLabel="Likely range"
-            caption={r.causal_check.model_within ? "The model's estimate lies inside the independent causal band." : "The model's estimate lies OUTSIDE the independent causal band: treat the size of the effect with caution."}
-          />
-        ) : (
-          <section className="card">
-            <h3>Causal check</h3>
-            <p className="cap">No causal audit for these levers in this run.</p>
-          </section>
-        )}
-      </div>
-
-      {uLayers.length ? (
-        <IntervalStack
-          title="Uncertainty"
-          units={`${u} (negative = cooler)`}
-          rows={[{ id: "city", label: "City mean", estimate: r.city.estimate, layers: uLayers }]}
-          valueLabel="City-mean ΔT"
-          unit={u}
-          caption={`${r.uncertainty?.envelope_excludes_zero ? "The full envelope excludes zero." : "The full envelope includes zero."} Sources: ${r.uncertainty?.sources.join(", ") || "fold jackknife only"}.`}
-        />
-      ) : null}
-
-      {r.scenario ? <AcrossRunsPanel pid={pid} sid={r.scenario.id} unit={unit} contentHash={typeof r.spec.content_hash === "string" ? r.spec.content_hash : null} /> : null}
-
-      <ImpactsBlock resId={resId} impacts={r.impacts} unit={unit} onImpacts={(i) => mutate(`result:${resId}`, (prev: Result | undefined) => (prev ? { ...prev, impacts: i } : prev) as Result)} />
+    <section className="stack" aria-label={future ? "Heat risk in future climates" : "Heat risk"} style={{ gap: 8 }}>
+      <Table
+        title={future ? `${who} at heat risk as the climate warms, before → after` : `${who} at heat risk today, before → after`}
+        csvName={future ? "heat-risk-future" : "heat-risk"}
+        rowKey={(r, i) => `${r.case}-${r.humidity}-${i}`}
+        columns={[
+          { key: "case", label: future ? "Future" : "Case", value: (r) => caseWords(r.case, "Measured hot afternoon"), render: (r) => caseCell(r.case, "Measured hot afternoon") },
+          { key: "hum", label: "Humidity", value: (r) => HUMIDITY_LABEL[r.humidity] ?? r.humidity },
+          {
+            key: "ec",
+            label: "Extreme caution or worse",
+            align: "right",
+            value: (r) => r.after.ec_or_worse,
+            render: (r) => `${n(r.before.ec_or_worse)} → ${n(r.after.ec_or_worse)}`,
+          },
+          ...(future ? [{ key: "eca", label: "Moved out", align: "right" as const, value: (r: HeatRow) => r.ec_avoided, render: (r: HeatRow) => n(r.ec_avoided) }] : []),
+          {
+            key: "dg",
+            label: "Danger or worse",
+            align: "right",
+            value: (r) => r.after.danger_or_worse,
+            render: (r) => `${n(r.before.danger_or_worse)} → ${n(r.after.danger_or_worse)}`,
+          },
+          { key: "dhi", label: "Heat index felt", unit: "°F", align: "right", value: (r) => r.mean_hi_change, render: (r) => fmtSigned(r.mean_hi_change, 2) },
+        ]}
+        rows={rows}
+      />
+      <p className="cap">
+        {future
+          ? "Each future adds the warming the climate models expect (their middle estimate). The air is either as humid as today in absolute terms (the lower figure) or holds today's relative humidity (the upper figure)."
+          : `Extreme caution is a heat index of 90 °F or more (heat cramps and exhaustion possible); Danger is 103 °F or more. ${humidityNote(heat, unit)}`}
+      </p>
     </section>
+  );
+}
+
+type ExposureRow = Impacts["exposure"][number];
+
+/** Residents at or above each temperature threshold, without and with the changes. */
+export function ExposureTable({ impacts, rows, unit, future }: { impacts: Impacts; rows: ExposureRow[]; unit: string; future: boolean }) {
+  const u = unitLabel(unit);
+  const tKey = (rec: Record<string, number>, t: number) => Object.keys(rec).find((k) => Number(k) === t) ?? String(t);
+  return (
+    <Table
+      title={future ? "Residents at or above each temperature in future climates" : "Residents at or above each temperature today"}
+      csvName={future ? "exposure-future" : "exposure"}
+      rowKey={(r, i) => `${r.case}-${r.adapted}-${i}`}
+      columns={[
+        { key: "case", label: future ? "Future" : "Case", value: (r) => caseWords(r.case), render: (r) => caseCell(r.case) },
+        { key: "adapted", label: "Your changes", value: (r) => (r.adapted ? "with" : "without") },
+        { key: "mean", label: "Average felt by residents", unit: u, align: "right", value: (r) => r.person_mean_temp, render: (r) => fmtNum(r.person_mean_temp, 2) },
+        ...impacts.thresholds.map((t) => ({
+          key: `ge_${t}`,
+          label: `≥ ${fmtNum(t, 1)} ${u}`,
+          align: "right" as const,
+          value: (r: ExposureRow) => r.people_ge[tKey(r.people_ge, t)] ?? null,
+          render: (r: ExposureRow) => `${fmtInt(Math.round(r.people_ge[tKey(r.people_ge, t)] ?? NaN))} (${fmtPct(r.share_people_ge[tKey(r.share_people_ge, t)] ?? null)})`,
+        })),
+      ]}
+      rows={rows}
+    />
+  );
+}
+
+/** Who benefits: mean cooling by quintile of each equity variable. */
+export function EquityBars({ impacts, unit }: { impacts: Impacts; unit: string }) {
+  const u = unitLabel(unit);
+  const groups = Object.entries(impacts.equity);
+  if (!groups.length) return null;
+  return (
+    <div className="grid2">
+      {groups.map(([g, e]) => (
+        <Bars
+          key={g}
+          title={`Who benefits: cooling by ${g.replace(/_/g, " ")} (fifths)`}
+          units={`${u} (positive = cooler)`}
+          categories={e.quintiles.map((q) => `Q${q.quintile}`)}
+          series={[{ id: "cool", label: "Mean cooling", values: e.quintiles.map((q) => q.mean_cooling) }]}
+          valueLabel="Mean cooling"
+          unit={u}
+          categoryLabel="Fifth of places (1 = lowest)"
+          caption={concentrationCaption(e.concentration_index, e.resident_mean_cooling, g)}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** Hot days avoided (person-days), or the action that fetches the station's daily history. */
+export function HotDays({ impacts }: { impacts: Impacts }) {
+  if (impacts.hot_days) {
+    return (
+      <Table
+        title={`Hot days avoided, in person-days (weather station ${impacts.hot_days.station})`}
+        csvName="hot-days"
+        columns={Object.keys(impacts.hot_days.cases[0] ?? {}).map((k) => ({
+          key: k,
+          label: k.replace(/_/g, " "),
+          value: (r: Record<string, unknown>) => (typeof r[k] === "number" || typeof r[k] === "string" ? (r[k] as number | string) : null),
+        }))}
+        rows={impacts.hot_days.cases}
+      />
+    );
+  }
+  if (impacts.hot_days_action) {
+    return (
+      <div className="row">
+        <span className="cap">Hot days avoided need the weather station&apos;s daily history.</span>
+        <ActionButton action={impacts.hot_days_action} size="small" />
+      </div>
+    );
+  }
+  return null;
+}
+
+/** Share of each future's median warming the citywide cooling cancels out (impacts.climate_offset). */
+export function ClimateOffsets({ impacts }: { impacts: Impacts }) {
+  const offsets = impacts.climate_offset.filter((o) => typeof o.offset_share === "number" && Number.isFinite(o.offset_share));
+  if (!offsets.length) return null;
+  return (
+    <div className="grid3">
+      {offsets.map((o) => (
+        <Gauge
+          key={`${o.experiment}-${o.period}`}
+          title={futureLabel(o.experiment, o.period)}
+          label="of the expected warming cancelled out"
+          value={o.offset_share}
+          min={0}
+          max={Math.max(1, o.offset_share)}
+          ticks={[1]}
+          format={(v) => fmtPct(v)}
+          caption={`The citywide cooling as a share of the warming the climate models expect by ${periodWord(o.period)} (${emissionsWord(o.experiment) ?? "this pathway"}, their middle estimate).`}
+        />
+      ))}
+    </div>
   );
 }

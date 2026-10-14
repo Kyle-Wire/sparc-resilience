@@ -14,10 +14,14 @@ export type RingProfileProps = FrameOptions & {
   decimals?: number;
   width?: number;
   height?: number;
+  /** Title of the distance axis (default "Distance from the edited cells"). */
+  axisTitle?: string;
+  /** Label of the ring of the edited cells themselves on the distance axis (default "edited"). */
+  insideLabel?: string;
 };
 
-export function ringLabel(r: Ring): string {
-  return r.r0_m === 0 && r.r1_m === 0 ? "edited" : `${fmtNum(r.r0_m, 0)}–${fmtNum(r.r1_m, 0)} m`;
+export function ringLabel(r: Ring, insideLabel = "edited"): string {
+  return r.r0_m === 0 && r.r1_m === 0 ? insideLabel : `${fmtNum(r.r0_m, 0)}–${fmtNum(r.r1_m, 0)} m`;
 }
 
 export function ringTable(p: Pick<RingProfileProps, "rings" | "unit" | "valueLabel">): ChartTable {
@@ -32,7 +36,7 @@ function Plot(p: RingProfileProps) {
   const auto = useChartWidth(640);
   const W = p.width ?? auto;
   const H = p.height ?? (p.rings.length > 8 ? 300 : 260);
-  const keys = p.rings.map(ringLabel);
+  const keys = p.rings.map((r) => ringLabel(r, p.insideLabel));
   // Many rings get rotated distance labels (BandAxis): leave room for them and the axis title.
   const many = keys.length > 8;
   const M = { top: 12, right: 16, bottom: many ? 84 : 46, left: 62 };
@@ -43,7 +47,7 @@ function Plot(p: RingProfileProps) {
   return (
     <svg className="chart" viewBox={`0 0 ${W} ${H}`} role="group" aria-label={p.title}>
       <Axis scale={sy} orient="left" at={M.left} grid={W - M.left - M.right} title={axisTitle(p.valueLabel ?? "Mean ΔT", p.unit)} signed />
-      <BandAxis scale={band} orient="bottom" at={H - M.bottom} title="Distance from the edited cells" titleGap={many ? 72 : undefined} />
+      <BandAxis scale={band} orient="bottom" at={H - M.bottom} title={p.axisTitle ?? "Distance from the edited cells"} titleGap={many ? 72 : undefined} />
       <line className="zero" x1={M.left} x2={W - M.right} y1={sy(0)} y2={sy(0)} />
       {p.rings.map((r, i) => {
         if (r.mean === null || !Number.isFinite(r.mean)) return null;
