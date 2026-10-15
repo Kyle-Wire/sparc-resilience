@@ -7,7 +7,9 @@ writes.  Attributes:
 
 * ``cfg`` - the run's config, resolved in the order of SPEC §4.3: ``launch.json`` (config_raw +
   config_dir, mode overrides from its args) → ``manifest.config`` + ``provenance.config_dir`` → the
-  config path given at import.  A candidate whose data file is missing yields to the next one.
+  config path given at import.  A candidate whose data file is missing yields to the next one.  Each
+  carries the ``physics.advection_scheme`` the run was fitted with (central for a run made before the
+  key existed: ``config.recorded_advection_scheme``), not today's default.
 * ``manifest`` - the manifest **merged with the per-stage files** (``causal.json``, ``optimize.json``,
   ``cv_distance.json``, ``baselines.json``, ``climate.json``, ``response_curves.json``), with ``sections``
   tagging each ``{present, source, stale, older_code}``.  A file section is stale when the file is more
@@ -196,27 +198,31 @@ class RunContext:
     # ------------------------------------------------------------------ config
 
     def _cfg_candidates(self) -> list[tuple[str, Any, str]]:
-        """``(source, cfg, config_dir)`` candidates in SPEC §4.3 order (unusable ones skipped)."""
+        """``(source, cfg, config_dir)`` candidates in SPEC §4.3 order (unusable ones skipped), each with
+        the advection scheme the run's records say it was fitted with."""
+        from sparc.core.config import recorded_advection_scheme, with_advection_scheme
+
         out = []
         launch = self.launch or {}
+        m = self.manifest_raw or {}
+        scheme = recorded_advection_scheme(m.get("config"), self.json("physics.json"))
         if launch.get("config_raw") is not None:
             try:
                 from sparc.core.pipeline import apply_mode_overrides
 
                 base = launch.get("config_dir") or str(self.run_dir)
-                cfg = _cfg_from_raw(launch["config_raw"], base)
+                cfg = _cfg_from_raw(with_advection_scheme(launch["config_raw"], scheme), base)
                 a = launch.get("args") or {}
                 apply_mode_overrides(cfg, fast=bool(a.get("fast")), coarse=a.get("coarse"), cv_curve=a.get("cv_curve"),
                                      frame_given=self.exists("input_frame.parquet"))
                 out.append(("launch", cfg, str(base)))
             except Exception as exc:
                 log.warning("%s: launch.json config unusable: %s", self.run_id, exc)
-        m = self.manifest_raw or {}
         if isinstance(m.get("config"), dict):
             base = (m.get("provenance") or {}).get("config_dir")
             if base and Path(base).is_dir():
                 try:
-                    out.append(("manifest", _cfg_from_raw(m["config"], base), str(base)))
+                    out.append(("manifest", _cfg_from_raw(with_advection_scheme(m["config"], scheme), base), str(base)))
                 except Exception as exc:
                     log.warning("%s: manifest config unusable: %s", self.run_id, exc)
         imp = (self.import_rec or {}).get("config_path")
@@ -224,6 +230,8 @@ class RunContext:
             try:
                 raw = load_config_raw(imp)
                 cfg = _cfg_from_raw(raw, Path(imp).resolve().parent)
+                if scheme is not None:           # the run's records outrank a config given at import
+                    cfg.raw["physics"]["advection_scheme"] = scheme
                 self._apply_manifest_modes(cfg)
                 out.append(("import", cfg, str(Path(imp).resolve().parent)))
             except Exception as exc:
@@ -231,7 +239,7 @@ class RunContext:
         if not out and isinstance(m.get("config"), dict):
             base = (m.get("provenance") or {}).get("config_dir") or str(self.run_dir)
             try:
-                out.append(("manifest", _cfg_from_raw(m["config"], base), str(base)))
+                out.append(("manifest", _cfg_from_raw(with_advection_scheme(m["config"], scheme), base), str(base)))
             except Exception as exc:
                 log.warning("%s: manifest config unusable: %s", self.run_id, exc)
         return out
@@ -277,7 +285,9 @@ class RunContext:
             return cfg.raw
         m = self.manifest_raw or {}
         if isinstance(m.get("config"), dict):
-            return m["config"]
+            from sparc.core.config import recorded_advection_scheme, with_advection_scheme
+
+            return with_advection_scheme(m["config"], recorded_advection_scheme(m["config"]))
         raw = (self.launch or {}).get("config_raw") or {}
         return raw.get("core", raw)
 

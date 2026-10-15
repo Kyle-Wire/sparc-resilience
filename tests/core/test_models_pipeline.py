@@ -462,9 +462,11 @@ def test_fitted_operator_callers_use_each_fold_model_scheme(synthetic_run, monke
     kernel and the stacker's PDE penalty re-apply each fold's fitted operator
     with that fold's scheme.  A model pickled before ``advection_scheme``
     existed (no attribute, a central solver) was fitted with "central" and
-    must get it, not the current default.  The folds are moved to L = 45 m,
-    v = (400, −250) m (cell Péclet > 1 on both axes), where the schemes'
-    G(0) differs by about 30 %."""
+    must get it, not the current default (hybrid).  The folds are moved to
+    L = 45 m, v = (400, −250) m (cell Péclet > 1 on both axes), where every
+    scheme's G(0) differs from the others' (by about 30 % central vs
+    exponential), so a caller that dropped the scheme (the default) is caught
+    with either model."""
     import copy
 
     from sparc.core.emulator import build_emulator
@@ -524,4 +526,5 @@ def test_fitted_operator_callers_use_each_fold_model_scheme(synthetic_run, monke
     # and the numbers are that scheme's: G(0) differs between the schemes here
     g0 = {s: ops.green_centre(L, v, g.dx, g.dy, scheme=s) for s in ops.SCHEMES}
     assert abs(g0["central"] - g0["exponential"]) > 0.1 * g0["central"]
+    assert abs(g0[want] - g0[ops.DEFAULT_SCHEME]) > 0.01 * g0[want]
     assert all(t["g0"] == g0[want] for t in terms)

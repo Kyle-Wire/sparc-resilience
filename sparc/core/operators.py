@@ -9,69 +9,93 @@ advection–diffusion–relaxation equation (roadmap §2.1)
 with L = √(Kτ) (m) and v = u·τ (m).  It is discretised with 3-point second
 differences δ²_x, δ²_y and *central* first differences δ_x, δ_y,
 
-    φ − D_x·δ²_x φ − D_y·δ²_y φ + vx·δ_x φ + vy·δ_y φ = q,
+    φ − D_x·δ²_x φ − D_y·δ²_y φ + vx·δ_x φ + vy·δ_y φ = q,     D_axis = L² + E_axis,
 
-whose Fourier symbols are
+where E_axis ≥ 0 is the diffusion the advection scheme adds along that axis
+(below).  The Fourier symbols are
 
     λ_x(k) = (4/dx²)·sin²(kx·dx/2),   λ_y(k) = (4/dy²)·sin²(ky·dy/2)
     adv(k) = vx·sin(kx·dx)/dx + vy·sin(ky·dy)/dy
 
-so the spectral solve Ĝ = 1/(1 + D_x·λ_x + D_y·λ_y + i·adv) is the exact
-inverse of :func:`apply_operator` on the (zero-padded, periodic) domain:
-``apply_operator(solve(q)) = q`` on the interior to rounding, for either
-scheme.  The advection symbol vanishes at the Nyquist frequencies by
-construction (sin π = 0), so real inverse FFTs are exact.
+so the spectral solve Ĝ = 1/(1 + L²·(λ_x + λ_y) + E_x·λ_x + E_y·λ_y + i·adv)
+is the exact inverse of :func:`apply_operator` on the (zero-padded,
+periodic) domain: ``apply_operator(solve(q)) = q`` on the interior to
+rounding, for every scheme.  The advection symbol vanishes at the Nyquist
+frequencies by construction (sin π = 0), so real inverse FFTs are exact.
 
 Advection schemes (``scheme=``, :data:`SCHEMES`)
 -----------------------------------------------
-* ``"exponential"`` (default): exponentially fitted diffusion on each axis
-  (Il'in 1969; the exponential scheme of Patankar 1980),
+Every scheme keeps central advection; they differ only in E_axis, a
+function of the axis' cell Péclet number Pe = |v_axis|·d/(2L²) (d the cell
+side along that axis).  At v = 0 all of them are the same 5-point operator.
 
-      D_x = L²·Pe_x·coth(Pe_x),   Pe_x = vx·dx / (2L²)      (likewise D_y),
+* ``"hybrid"`` (default): D = max(L², |v_axis|·d/2), the hybrid scheme of
+  Patankar (1980): central differences (E = 0) wherever Pe ≤ 1, and along
+  an axis with Pe > 1 first-order upwind differences with no physical
+  diffusion (central advection plus |v_axis|·d/2 is exactly upwinding).
+* ``"exponential"``: D = L²·Pe·coth(Pe), exponential fitting (Il'in 1969;
+  the exponential scheme of Patankar 1980); E ≈ L²·Pe²/3 for small Pe.
+* ``"central"``: E = 0 at any wind, the 5-point Laplacian of every run
+  fitted before the scheme existed (old checkpoints keep it).
 
-  with D = L² exactly when the axis' velocity is 0.  Advection stays central.
-* ``"central"``: D_x = D_y = L², the 5-point Laplacian of every run fitted
-  before this scheme existed (old checkpoints keep it).
+Positivity.  With D = L² a neighbour's stencil weight is −D/d² ± v/(2d),
+which turns positive once Pe > 1: the Green's function then has negative
+lobes (heating cools some of its neighbours; min G/max G = −0.81 at
+L = 30 m, |v| = 1 km, dx = 30 m), the textbook failure of central
+differencing for convection–diffusion (Patankar 1980).  The weight is ≤ 0
+exactly when D ≥ |v_axis|·d/2, so that is the least diffusion a 3-point
+stencil with central advection can have and stay positive.  Both the hybrid
+and the exponential schemes keep it (x·coth x ≥ |x|): every off-diagonal
+weight is ≤ 0 and, with the +1 relaxation term, the matrix is a strictly
+diagonally dominant M-matrix, so G ≥ 0.  The hybrid scheme adds the least
+diffusion positivity needs, and none where central is already positive.
+The first moment of G is v for every scheme (λ′(0) = 0, adv′(0) = v), so
+the downwind shift is kept, and Ĝ(0) = 1.
 
-Why fit the diffusion.  With D = L² a neighbour's stencil weight is
-−D/d² ± v/(2d), which turns positive once the cell Péclet number
-|v_axis|·d/(2L²) exceeds 1: the Green's function then has negative lobes
-(heating cools some of its neighbours; min G/max G = −0.81 at L = 30 m,
-|v| = 1 km, dx = 30 m), the textbook failure of central differencing for
-convection–diffusion (Patankar 1980).  Because x·coth(x) ≥ |x|, the fitted
-D ≥ |v_axis|·d/2, every off-diagonal weight is ≤ 0, and with the +1
-relaxation term the matrix is a strictly diagonally dominant M-matrix, so
-G ≥ 0.  The first moment of G is v for both schemes (λ′(0) = 0,
-adv′(0) = v), so the downwind shift is kept, and Ĝ(0) = 1.
+Why hybrid is the default: added diffusion biases L.  A fit pins the
+operator's diffusion D, not L; the L it reports is the one whose D matches
+the data.  When the data are a smooth (continuum) field, D_data ≈ L_true²,
+so a scheme that adds diffusion where central is already positive reports
+too small an L.  The exponential scheme adds L²·(Pe·coth Pe − 1) at every
+wind: fitted to the continuous operator's solution at L = 60 m,
+v = (212, 212) m on 30 m cells (Pe 0.88 on both axes) it returns L ≈ 48 m
+(−19 %), and at L = 90 m, v = (300, 300) m (Pe 0.56) L ≈ 86 m (−5 %), while
+the hybrid and central fits return 61 and 91 m (+1 %, the grid's own
+second-order error; ``tests/core/test_operator_verification.py``).  The
+hybrid operator is bit-identical to the central one wherever every Pe ≤ 1,
+so it keeps the central scheme's accuracy and fitted L there.
 
-The price of positivity.  The fitted scheme adds L²·(Pe·coth Pe − 1) of
-diffusion on each axis.  For small Pe that is ≈ L²·Pe²/3: the schemes agree
-to O(Pe²) and coincide at v = 0.  For large Pe it is ≈ L²·(Pe − 1), and D
-tends to the first-order upwind value |v_axis|·d/2, which does not depend on
-L.  So once an axis' cell Péclet number exceeds 1, its diffusion is set by
-the grid rather than by L (√D_x = 122 m for L = 30 m, v = (1000, 0) m,
-dx = 30 m, while √D_y = 30 m): the operator is anisotropic with respect to
-the grid axes, by an amount that depends on the wind's angle to them.  When
-both axes exceed 1 (an oblique wind), L below √(|v_axis|·d/2) is not
-identified at all.  The central scheme does no better there; it keeps
-D = L² only by giving G negative lobes.  Representing such an L needs
-d ≤ 2L²/|v_axis|.  :func:`grid_resolution` reports the cell Péclet numbers,
-√D_x, √D_y and the smallest L this grid resolves at a given wind, and the
-physics model warns when a fit lands beyond it.
+Above a cell Péclet number of 1.  Positivity then costs diffusion that no
+3-point stencil can avoid, and L loses influence on that axis:
 
-The fitted scheme's advantage is positivity, not accuracy.  Both schemes
-are second order.  Against the oracle below at L = 256 m (Pe = 0.07), the
-median relative error on the 1.5L–2L ring is 0.15 % fitted vs 0.21 %
-central, and the mass-weighted L1 error beyond two cells of the source is
-0.22 % for both.  From Pe ≈ 0.3 up the central scheme's mass-weighted L1
-error is as low or lower (L = 60 m, v = (300, 0) m, Pe = 1.25: 2.9 % central
-vs 4.5 % fitted), and on a smooth manufactured solution at Pe = 1.25 the
-fitted scheme's error is about 8× the central one's (both < 1 %).
+* hybrid: the axis' diffusion is the grid's |v_axis|·d/2, independent of L
+  (d ln D/d ln L = 0), so L rests on the other axis only; when both axes
+  exceed 1 (an oblique wind) the operator is the same for every L below
+  √(min_axis |v_axis|·d/2) and L is not identified;
+* exponential: d ln D/d ln L = 4Pe/sinh(2Pe) (2 where L alone sets D):
+  1.1 at Pe 1, 0.6 at 1.5, 0.3 at 2, 0.06 at 3.  L is weakly identified up
+  to Pe ≈ 3, with the bias above, and effectively not beyond;
+* central: D = L² at any Pe, and on smooth fields it fits better than
+  either positive scheme there, but only by giving G negative lobes.
+
+The remedy is a finer grid (d ≤ 2L²/|v_axis|), not a scheme.
+:func:`grid_resolution` reports the cell Péclet numbers, √D_x, √D_y, the
+elasticities d ln D/d ln L per axis and the smallest L with every Pe ≤ 1 at
+a given wind; the physics model warns when a fit lands beyond it.
+
+Accuracy.  All three schemes converge at second order as the cells shrink
+(the hybrid one is the central one once every Pe ≤ 1; oracle and
+manufactured solutions below).  Mass-weighted L1 error of G beyond two cells
+of the source against the oracle, central / hybrid / exponential:
+0.22 % for all three at L = 256 m, v = (300, 0) m (Pe 0.07); 5.6 / 5.6 /
+12.2 % at L = 60 m, v = (212, 212) m (Pe 0.88 on both axes); 2.9 / 3.7 /
+4.5 % at L = 60 m, v = (300, 0) m (Pe 1.25).  On a smooth manufactured
+solution at that last setting the maximum errors are 0.12 / 0.54 / 0.99 %.
 
 Adjoint.  The second differences are symmetric and the central first
-differences antisymmetric, and D depends on v only through the even
-function Pe·coth(Pe), so the transpose of the operator is the same operator
-with −v (used by :func:`green_mass` and the response-surface adjoint solve).
+differences antisymmetric, and every scheme's E depends on v only through
+|v_axis|, so the transpose of the operator is the same operator with −v
+(used by :func:`green_mass` and the response-surface adjoint solve).
 
 Accuracy oracle.  The continuous Green's function (a density, m⁻²) is
 
@@ -83,7 +107,8 @@ source divided by dx·dy converges to it at second order away from the
 source (``tests/core/test_operator_verification.py``).
 
 Every function has a numpy form; the ``*_torch`` variants are differentiable
-in the field and in (L, vx, vy), with finite gradients at v = 0.
+in the field and in (L, vx, vy), with finite gradients at v = 0 (the hybrid
+diffusion has a kink at Pe = 1, where autograd takes one side).
 """
 
 from __future__ import annotations
@@ -92,9 +117,9 @@ import math
 
 import numpy as np
 
-#: Advection schemes: exponentially fitted diffusion (default) or plain central.
-SCHEMES = ("exponential", "central")
-DEFAULT_SCHEME = "exponential"
+#: Advection schemes: hybrid (default; Patankar 1980), exponentially fitted (Il'in 1969), plain central.
+SCHEMES = ("hybrid", "exponential", "central")
+DEFAULT_SCHEME = "hybrid"
 #: The scheme of every model fitted before ``advection_scheme`` existed.
 LEGACY_SCHEME = "central"
 # Below this |Pe| the series 1 + Pe²/3 − Pe⁴/45 replaces Pe·coth(Pe): exact to
@@ -223,13 +248,75 @@ def fitted_diffusion_torch(L, v_axis, d: float):
     return L2 * _xcothx_torch(v_axis * (0.5 * float(d)) / L2)
 
 
+def hybrid_diffusion(L: float, v_axis: float, d: float) -> float:
+    """Hybrid-scheme diffusion coefficient on one axis (m²; Patankar 1980):
+    D = max(L², |v_axis|·d/2).
+
+    D = L² wherever the cell Péclet number |v_axis|·d/(2L²) is ≤ 1 (where
+    central differences are already positive), and the first-order upwind
+    value |v_axis|·d/2 beyond, the least diffusion that keeps the stencil
+    weights non-positive.  Even in v_axis.
+    """
+    return max(float(L) ** 2, abs(float(v_axis)) * float(d) / 2.0)
+
+
+def hybrid_diffusion_torch(L, v_axis, d: float):
+    """:func:`hybrid_diffusion` for tensors, as L² + relu(|v_axis|·d/2 − L²):
+    differentiable in ``L`` and ``v_axis`` except on the kink Pe = 1, with
+    gradient exactly 0 in v_axis wherever Pe < 1 (so finite at v = 0)."""
+    import torch
+
+    if not isinstance(L, torch.Tensor):
+        L = torch.as_tensor(L, dtype=torch.float64)
+    if not isinstance(v_axis, torch.Tensor):
+        v_axis = torch.as_tensor(v_axis, dtype=L.dtype, device=L.device)
+    L2 = L * L
+    return L2 + torch.relu(v_axis.abs() * (0.5 * float(d)) - L2)
+
+
 def axis_diffusion(L: float, v: tuple[float, float], dx: float, dy: float | None = None,
                    scheme: str = DEFAULT_SCHEME) -> tuple[float, float]:
-    """(D_x, D_y) in m² for ``scheme`` (L² on both axes for "central")."""
+    """(D_x, D_y) in m² for ``scheme`` (L² on both axes for "central";
+    each axis uses its own cell side)."""
     dy = dx if dy is None else dy
-    if check_scheme(scheme) == "central":
+    scheme = check_scheme(scheme)
+    if scheme == "central":
         return float(L) ** 2, float(L) ** 2
-    return fitted_diffusion(L, v[0], dx), fitted_diffusion(L, v[1], dy)
+    f = hybrid_diffusion if scheme == "hybrid" else fitted_diffusion
+    return f(L, v[0], dx), f(L, v[1], dy)
+
+
+def axis_excess(L: float, v: tuple[float, float], dx: float, dy: float | None = None,
+                scheme: str = DEFAULT_SCHEME) -> tuple[float, float]:
+    """(E_x, E_y) = (D_x − L², D_y − L²) in m²: the diffusion ``scheme`` adds
+    on top of L² along each axis (exactly 0.0 for "central", and for
+    "hybrid" on every axis with cell Péclet number ≤ 1)."""
+    Dx, Dy = axis_diffusion(L, v, dx, dy, scheme)
+    L2 = float(L) ** 2
+    return Dx - L2, Dy - L2
+
+
+def _axis_excess_torch(L, vx, vy, dx: float, dy: float, scheme: str):
+    """Tensor (E_x, E_y) for a non-central ``scheme`` (``L``, ``vx``, ``vy`` tensors)."""
+    import torch
+
+    L2 = L * L
+    if scheme == "hybrid":                    # relu: exactly 0 (value and gradient) wherever Pe < 1
+        return (torch.relu(vx.abs() * (0.5 * float(dx)) - L2), torch.relu(vy.abs() * (0.5 * float(dy)) - L2))
+    return fitted_diffusion_torch(L, vx, dx) - L2, fitted_diffusion_torch(L, vy, dy) - L2
+
+
+def _L_elasticity(pe: float, scheme: str) -> float:
+    """d ln D/d ln L on one axis at cell Péclet number ``pe``: 2 where L alone
+    sets D, 0 where the grid does.  Exponential: D = L²·f(c/L²) with
+    f(x) = x·coth x gives 2 − 2·x·f′/f = 4x/sinh(2x)."""
+    if scheme == "central" or pe == 0.0:
+        return 2.0
+    if scheme == "hybrid":
+        return 2.0 if pe <= 1.0 else 0.0
+    if not math.isfinite(pe) or pe > 350.0:   # sinh overflows; the value is < 1e-300 there
+        return 0.0
+    return 4.0 * pe / math.sinh(2.0 * pe) if pe > 1e-8 else 2.0
 
 
 def grid_resolution(L: float, v: tuple[float, float], dx: float, dy: float | None = None,
@@ -239,20 +326,27 @@ def grid_resolution(L: float, v: tuple[float, float], dx: float, dy: float | Non
     * ``cell_peclet_x``, ``cell_peclet_y``: |v_axis|·d/(2L²) per axis;
     * ``L_eff_x_m``, ``L_eff_y_m``: √D_x, √D_y of ``scheme`` (L for
       "central"), the diffusion length the discrete operator actually has;
+    * ``L_elasticity_x``, ``L_elasticity_y``: d ln D_axis/d ln L, how much
+      that axis' diffusion still depends on L (2 where L alone sets it, as
+      for "central"; 0 where the grid does, as for "hybrid" past Pe = 1;
+      4Pe/sinh(2Pe) for "exponential");
     * ``L_min_resolved_m``: √(max(|vx|·dx, |vy|·dy)/2), the smallest L with
       every cell Péclet number ≤ 1 at this wind;
     * ``L_resolved``: max cell Péclet number ≤ 1.
 
-    When ``L_resolved`` is False the fitted scheme's diffusion along the
-    offending axis is set by the grid rather than by L (and the central
-    scheme's G has negative lobes): see the module docstring.
+    When ``L_resolved`` is False the positive schemes' diffusion along the
+    offending axis depends on L weakly ("exponential") or not at all
+    ("hybrid"), and the central scheme's G has negative lobes: see the
+    module docstring.
     """
     dy = dx if dy is None else dy
+    scheme = check_scheme(scheme)
     L2 = float(L) ** 2
     half = (abs(float(v[0])) * float(dx) / 2.0, abs(float(v[1])) * float(dy) / 2.0)
     pe = tuple(h / L2 if L2 > 0 else (math.inf if h > 0 else 0.0) for h in half)
     Dx, Dy = axis_diffusion(L, v, dx, dy, scheme)
     return {"cell_peclet_x": pe[0], "cell_peclet_y": pe[1], "L_eff_x_m": math.sqrt(Dx), "L_eff_y_m": math.sqrt(Dy),
+            "L_elasticity_x": _L_elasticity(pe[0], scheme), "L_elasticity_y": _L_elasticity(pe[1], scheme),
             "L_min_resolved_m": math.sqrt(max(half)), "L_resolved": max(pe) <= 1.0}
 
 
@@ -274,7 +368,9 @@ def solve(
     to q's shape.  ``q`` must be finite (fill no-data cells before calling).
 
     The DC gain is exactly 1 (Ĝ(0) = 1): a uniform source maps to itself.
-    ``scheme`` selects the advection discretisation (module docstring).
+    ``scheme`` selects the advection discretisation (module docstring); an
+    axis without excess diffusion adds nothing, so "hybrid" at cell Péclet
+    numbers ≤ 1 is bit-identical to "central".
     """
     scheme = check_scheme(scheme)
     dy = dx if dy is None else dy
@@ -289,11 +385,12 @@ def solve(
     buf = np.zeros((py, px), dtype=np.float64)
     buf[pad:pad + ny, pad:pad + nx] = q
     lam_x, lam_y, sx, sy = symbols_axes(py, px, dy, dx)
-    if scheme == "central":
-        diff = (L**2) * (lam_x + lam_y)
-    else:
-        Dx, Dy = axis_diffusion(L, (vx, vy), dx, dy, scheme)
-        diff = Dx * lam_x + Dy * lam_y
+    diff = (L**2) * (lam_x + lam_y)
+    Ex, Ey = axis_excess(L, (vx, vy), dx, dy, scheme)
+    if Ex:
+        diff = diff + Ex * lam_x
+    if Ey:
+        diff = diff + Ey * lam_y
     G = 1.0 / (1.0 + diff + 1j * (vx * sx + vy * sy))
     phi = np.fft.irfft2(np.fft.rfft2(buf) * G, s=(py, px))
     return phi[pad:pad + ny, pad:pad + nx]
@@ -342,11 +439,12 @@ def apply_operator(
     scheme = check_scheme(scheme)
     dy = dx if dy is None else dy
     gx, gy = central_gradient(phi, dx, dy)
-    if scheme == "central":
-        return phi - (L**2) * laplacian(phi, dx, dy) + v[0] * gx + v[1] * gy
-    Dx, Dy = axis_diffusion(L, v, dx, dy, scheme)
-    d2x, d2y = second_differences(phi, dx, dy)
-    return phi - Dx * d2x - Dy * d2y + v[0] * gx + v[1] * gy
+    out = phi - (L**2) * laplacian(phi, dx, dy)
+    Ex, Ey = axis_excess(L, v, dx, dy, scheme)
+    if Ex or Ey:
+        d2x, d2y = second_differences(phi, dx, dy)
+        out = out - Ex * d2x - Ey * d2y
+    return out + v[0] * gx + v[1] * gy
 
 
 def stencil_valid(mask: np.ndarray) -> np.ndarray:
@@ -442,8 +540,8 @@ def green_mass(mask: np.ndarray, L: float, v: tuple[float, float], dx: float, dy
     """(Gᵀ ∗ 1_mask)_i = Σ_{j∈mask} G(j−i): total response inside the study
     area to a unit source at i (≈ 1 in the interior since Ĝ(0) = 1, smaller
     near edges where heat is carried off-domain).  The adjoint of the
-    advection–diffusion operator flips the advection vector (for both
-    schemes: the fitted diffusion is even in v)."""
+    advection–diffusion operator flips the advection vector (for every
+    scheme: the added diffusion is even in v)."""
     return solve(np.asarray(mask, dtype=np.float64), L, (-v[0], -v[1]), dx=dx, dy=dy, scheme=scheme)
 
 
@@ -486,12 +584,12 @@ def solve_torch(q, L, vx, vy, dx: float, dy: float | None = None, pad: int = 16,
     lam_x, lam_y, sx, sy = symbols_axes(py, px, dy, dx)
     sx_t = torch.as_tensor(sx, dtype=q.dtype, device=q.device)
     sy_t = torch.as_tensor(sy, dtype=q.dtype, device=q.device)
-    if scheme == "central":
-        re = 1.0 + (L**2) * torch.as_tensor(lam_x + lam_y, dtype=q.dtype, device=q.device)
-    else:
+    re = 1.0 + (L**2) * torch.as_tensor(lam_x + lam_y, dtype=q.dtype, device=q.device)
+    if scheme != "central":
         L, vx, vy = _scalar_tensors(q, L, vx, vy)
-        re = (1.0 + fitted_diffusion_torch(L, vx, dx) * torch.as_tensor(lam_x, dtype=q.dtype, device=q.device)
-              + fitted_diffusion_torch(L, vy, dy) * torch.as_tensor(lam_y, dtype=q.dtype, device=q.device))
+        Ex, Ey = _axis_excess_torch(L, vx, vy, dx, dy, scheme)
+        re = (re + Ex * torch.as_tensor(lam_x, dtype=q.dtype, device=q.device)
+              + Ey * torch.as_tensor(lam_y, dtype=q.dtype, device=q.device))
     denom = torch.complex(re, vx * sx_t + vy * sy_t)
     phi = torch.fft.irfft2(torch.fft.rfft2(buf) / denom, s=(py, px))
     return phi[pad:pad + ny, pad:pad + nx]
@@ -507,7 +605,8 @@ def apply_operator_torch(phi, L, vx, vy, dx: float, dy: float | None = None, sch
     d2y = (phi[2:, 1:-1] - 2.0 * c + phi[:-2, 1:-1]) / dy**2
     gx = (phi[1:-1, 2:] - phi[1:-1, :-2]) / (2.0 * dx)
     gy = (phi[2:, 1:-1] - phi[:-2, 1:-1]) / (2.0 * dy)
-    if scheme == "central":
-        return c - (L**2) * (d2x + d2y) + vx * gx + vy * gy
-    Lt, vxt, vyt = _scalar_tensors(phi, L, vx, vy)
-    return c - fitted_diffusion_torch(Lt, vxt, dx) * d2x - fitted_diffusion_torch(Lt, vyt, dy) * d2y + vx * gx + vy * gy
+    out = c - (L**2) * (d2x + d2y)
+    if scheme != "central":
+        Ex, Ey = _axis_excess_torch(*_scalar_tensors(phi, L, vx, vy), dx, dy, scheme)
+        out = out - Ex * d2x - Ey * d2y
+    return out + vx * gx + vy * gy

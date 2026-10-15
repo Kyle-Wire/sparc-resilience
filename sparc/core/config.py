@@ -65,7 +65,8 @@ DEFAULTS: dict[str, Any] = {
         "v_max_m": 1000.0,
         "fit_advection": "auto",    # True only when a wind record is configured
         "select_advection": True,   # keep advection only if it beats v = 0 out of fold
-        "advection_scheme": "exponential",  # "exponential" (G ≥ 0 at any cell Péclet number) | "central" (legacy)
+        # "hybrid" (central where that is positive, G ≥ 0 always) | "exponential" | "central" (legacy)
+        "advection_scheme": "hybrid",
         "max_iter": 60,
     },
     "influence": {"max_lag_m": 2000.0, "n_rings": 10, "n_perm": 19, "scales": [0.5, 1.0, 2.0], "mass": 0.9},
@@ -246,6 +247,51 @@ def core_config_from_dict(raw: dict, base_dir: str | Path | None = None) -> Core
         cfg.raw["physics"] = apply_forcing_file(cfg.raw["physics"], cfg.resolve_path(forcing), label=str(forcing))
     cfg.validate()
     return cfg
+
+
+def recorded_advection_scheme(stored_config: dict | None = None, physics: list | None = None) -> str | None:
+    """The advection scheme an existing run's physics was fitted with, from its records.
+
+    ``stored_config`` is the run's manifest ``config``.  Manifests store the
+    config *after* merging :data:`DEFAULTS`, so one without
+    ``physics.advection_scheme`` was written before the key existed, by
+    code that fitted the central scheme: it gets
+    ``operators.LEGACY_SCHEME``, never the current default.  Without a
+    manifest config the run's ``physics.json`` (per-fold params) decides
+    the same way.  None when neither record exists (e.g. a run still being
+    made by the current code).
+    """
+    from sparc.core import operators as ops
+
+    if isinstance(stored_config, dict):
+        block = stored_config.get("core", stored_config)
+        phys = block.get("physics") if isinstance(block, dict) else None
+        scheme = phys.get("advection_scheme") if isinstance(phys, dict) else None
+        return ops.LEGACY_SCHEME if scheme is None else ops.check_scheme(scheme)
+    if isinstance(physics, list):
+        folds = [p for p in physics if isinstance(p, dict)]
+        if folds:
+            return ops.params_scheme(folds[0])
+    return None
+
+
+def with_advection_scheme(raw: dict, scheme: str | None) -> dict:
+    """A copy of the raw config ``raw`` (a ``core:`` block or its contents)
+    with ``physics.advection_scheme`` set to ``scheme`` when ``raw`` does not
+    set it (unchanged when ``scheme`` is None).  Use it with
+    :func:`recorded_advection_scheme` before rebuilding the config of an
+    existing run, so merging today's :data:`DEFAULTS` cannot change the
+    scheme the run was fitted with."""
+    out = copy.deepcopy(raw)
+    if scheme is None or not isinstance(out, dict):
+        return out
+    block = out["core"] if isinstance(out.get("core"), dict) else out
+    phys = block.get("physics")
+    if not isinstance(phys, dict):
+        phys = block["physics"] = {}
+    if phys.get("advection_scheme") is None:
+        phys["advection_scheme"] = scheme
+    return out
 
 
 def load_core_config(path: str | Path) -> CoreConfig:
