@@ -502,6 +502,32 @@ def test_night_window_levers_have_no_sunlight_pathway():
     assert [m["id"] for m in day["Pct_Canopy"]["mechanisms"]] == ["M1", "M2"]
 
 
+def test_grid_limited_L_from_the_operator_resolution_keys():
+    """W1's grid_resolution keys reach the panel: past cell Péclet 1 on both axes the hybrid scheme's diffusion
+    no longer depends on L, so L is not identified (no SE); past 1 on one axis only it is weakly identified."""
+    from sparc.core import operators as ops
+
+    def fold(L, v):
+        res = ops.grid_resolution(L, v, 30.0, 30.0, "hybrid")
+        return _fold(L=L, vx_m=v[0], vy_m=v[1], v_norm_m=math.hypot(*v), advection_scheme="hybrid", **res,
+                     resolution_warning=None if res["L_resolved"] else "grid-limited")
+
+    flat = [fold(L, (700.0, 700.0)) for L in (40.0, 42.0, 44.0)]
+    assert all(f["L_elasticity_x"] == 0 and f["L_elasticity_y"] == 0 for f in flat)
+    L = _panel(M.evaluate({}, flat, _cfg()), "L")
+    assert L["grid_limited"]["every_fold"] and L["grid_limited"]["k"] == 3
+    assert L["se"] is None and L["interval"] is None and "not identified" in L["status_note"]
+    assert "grid-limited in 3 of 3 folds: not identified" in L["value_text"]
+
+    one_axis = [fold(L, (900.0, 0.0)) for L in (100.0, 105.0, 110.0)]          # Pe_x ≈ 1.1–1.4, Pe_y = 0
+    L1 = _panel(M.evaluate({}, one_axis, _cfg()), "L")
+    assert not L1["grid_limited"]["every_fold"] and L1["se"] is not None and "weakly identified" in L1["value_text"]
+
+    ok = [fold(L, (100.0, 0.0)) for L in (250.0, 256.0, 262.0)]
+    assert "grid_limited" not in _panel(M.evaluate({}, ok, _cfg()), "L")
+    assert "grid_limited" not in _panel(M.evaluate({}, _folds(), _cfg()), "L")      # old runs: no keys
+
+
 def test_fit_bounds_match_the_physics_transforms():
     from sparc.core import physics
 

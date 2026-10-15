@@ -619,6 +619,35 @@ def _flag_bound(row: dict, key: str, F: "_Folds") -> dict:
     return row
 
 
+def _flag_grid(row: dict, F: "_Folds") -> dict:
+    """Flag the L row when the grid, not L, sets the diffusion (W1, :func:`operators.grid_resolution`): a fold
+    whose fit has a cell Péclet number above 1 reports ``L_resolved`` False.  With every active fold's diffusion
+    independent of L on both axes (elasticity d ln D/d ln L below 0.1, e.g. the hybrid scheme past Pe = 1 on both
+    axes) L is not identified, and the SE and interval are dropped as for a fit bound.  Old runs carry no
+    resolution keys and are left as they are."""
+    if row.get("value") is None or not F.params:
+        return row
+    folds = [p for p in F.active if p.get("L_resolved") is not None]
+    hits = [p for p in folds if p.get("L_resolved") is False]
+    if not hits:
+        return row
+    k, n = len(hits), len(folds)
+    lmin = [float(p["L_min_resolved_m"]) for p in hits if _num(p.get("L_min_resolved_m"))]
+    flat = [p for p in hits
+            if all(_num(p.get(e)) and float(p[e]) < 0.1 for e in ("L_elasticity_x", "L_elasticity_y"))]
+    every = len(flat) == n
+    text = (f"grid-limited in {k} of {n} folds: a cell Péclet number above 1"
+            + (f" (L below about {max(lmin):.0f} m is not resolved on these cells at the fitted drift)" if lmin else "")
+            + ("; the diffusion no longer depends on L on either axis, so L is not identified (no SE)" if every else
+               "; along that axis the grid, not L, sets the diffusion, so L is weakly identified"))
+    row["grid_limited"] = {"k": k, "n": n, "L_min_resolved_m": max(lmin) if lmin else None, "every_fold": every,
+                           "text": text}
+    if every:
+        row.update(se=None, interval=None)
+    row["status_note"] = "; ".join(x for x in (text, row.get("status_note")) if x)
+    return row
+
+
 def _value_text(row: dict, bound: bool = True) -> str:
     """'value ± SE unit', with the fit-bound flag (``bound``) when the fold values sit at a bound."""
     if row.get("value") is None:
@@ -628,6 +657,10 @@ def _value_text(row: dict, bound: bool = True) -> str:
     ab = row.get("at_bound")
     if ab and bound:
         s += f" (at the {ab['side']} fit bound in {ab['k']} of {ab['n']} folds: not identified)"
+    gl = row.get("grid_limited")
+    if gl and bound:
+        s += f" (grid-limited in {gl['k']} of {gl['n']} folds: " + ("not identified)" if gl["every_fold"] else
+                                                                    "weakly identified)")
     return s
 
 
@@ -776,7 +809,7 @@ def _panel(ctx: dict) -> dict:
     L = F.stat("L_m")
     lb = F.first("L_bounds_m")
     L_prior = ((ctx["manifest"].get("influence") or {}).get("L_prior_m"))
-    rows.append(_flag_bound(
+    rows.append(_flag_grid(_flag_bound(
         {"key": "L", "label": "Mixing length L", "unit": "m",
          **(L or {"value": None, "se": None, "per_fold": None, "n": 0}), "interval": _interval(L),
          "published": None, "status": "not_comparable", "refs": [], "group": "transport",
@@ -784,7 +817,7 @@ def _panel(ctx: dict) -> dict:
                          "range in the verified list"
                          + (f"; S1 correlogram prior L₀ = {L_prior:.0f} m" if _num(L_prior) else "")
                          + (f"; fit bounds {lb[0]:.0f}–{lb[1]:.0f} m" if lb and len(lb) == 2 else ""))},
-        "L_m", F))
+        "L_m", F), F))
     v = F.stat("v_norm_m")
     if v and v["value"] > 1.0:
         adv = ctx["manifest"].get("physics_advection")
