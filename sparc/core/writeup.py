@@ -62,6 +62,14 @@ def _sig_ids(rows: list[dict]) -> str:
     return ", ".join(out)
 
 
+def _by_reason(rows: list[dict]) -> str:
+    """Not-testable signatures grouped by their own reason: ``M1(a), M2(a) (one time window …); M7(a) (night …)``."""
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r.get("reason") or "reason not recorded", []).append(r)
+    return "; ".join(f"{_sig_ids(rs)} ({why})" for why, rs in groups.items())
+
+
 def _mechanism_facts(m: dict) -> dict | None:
     """What holds, what is contradicted and what is untested in the run's mechanism register."""
     reg = m.get("mechanisms")
@@ -79,7 +87,7 @@ def _mechanism_facts(m: dict) -> dict | None:
             "supported": [claim(r) for r in rows if r["status"] == "supported"],
             "contradicted": [claim(r) for r in rows if r["status"] == "contradicted"],
             "gates": (reg.get("gates") or {}).get("plain") or (reg.get("gates") or {}).get("statements") or [],
-            "not_testable": _sig_ids([r for r in rows if r["status"] == "not_testable"]),
+            "not_testable": _by_reason([r for r in rows if r["status"] == "not_testable"]),
             "not_yet_tested": _sig_ids(nyt),
             "workstreams": sorted({w.strip() for r in nyt for w in str(r["workstream"]).split(",")}),
             "panel": {r["key"]: r for r in ((reg.get("panel") or {}).get("rows") or [])}}
@@ -158,8 +166,7 @@ def methods_markdown(m: dict) -> str:
                  "supported yet.")
               + (" Contradicted: " + "; ".join(mf["contradicted"]) + ". " + " ".join(mf["gates"])
                  if mf["contradicted"] else " No mechanism is contradicted.")
-              + (f" Not testable with this data (one time window or a missing input): {mf['not_testable']}."
-                 if mf["not_testable"] else "")
+              + (f" Not testable with this data: {mf['not_testable']}." if mf["not_testable"] else "")
               + (f" Not yet tested (workstreams {', '.join(mf['workstreams'])} of the physics plan): "
                  f"{mf['not_yet_tested']}." if mf["not_yet_tested"] else "")]
     if cv:
@@ -308,7 +315,7 @@ def model_card_markdown(m: dict) -> str:
         L += [f"- Contradicted: {'; '.join(mf['contradicted'])}. {' '.join(mf['gates'])}".rstrip()
               if mf["contradicted"] else "- Contradicted: none."]
         if mf["not_testable"]:
-            L += [f"- Not testable with this data: {mf['not_testable']} (one time window or a missing input)."]
+            L += [f"- Not testable with this data: {mf['not_testable']}."]
         if mf["not_yet_tested"]:
             L += [f"- Not yet tested: {mf['not_yet_tested']} (workstreams {', '.join(mf['workstreams'])})."]
     L += ["", "## Noise floor", "",

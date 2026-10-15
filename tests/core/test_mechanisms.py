@@ -41,13 +41,21 @@ def _folds(a_values=(40.0, 42.0, 45.0, 48.0, 50.0), gammas=None, **kw):
 
 
 def _cfg(units="degF", kind="product", window="day", sw=635.8, lw=-71.5, t2m=304.12, wind=(-1.158, 6.567),
-         roles=None):
+         roles=None, hours=(15, 16), forcing=True):
+    """Providence-like config: the 15–16 EDT forcing window (``forcing=False``: no forcing file at all)."""
     ph = {"enabled": True, "window": window, "sw_down": sw, "lw_net": lw, "wind": list(wind) if wind else None,
           "roles": dict(ROLES if roles is None else roles)}
-    if t2m is not None:
-        ph["forcing_info"] = {"date": "2020-07-29", "t2m_K": t2m}
+    if forcing:
+        ph["forcing"] = "forcing/providence_2020-07-29.json"
+        ph["forcing_info"] = {"file": ph["forcing"], "date": "2020-07-29", "t2m_K": t2m,
+                              "hours_local": list(hours) if hours else None}
     return {"data": {"target_units": units, "target_kind": kind}, "physics": ph,
             "actionable": {"Pct_Canopy": {}, "Pct_Impervious": {}, "Albedo": {}}}
+
+
+def _a_for_ra(ra_values, norm=635.8):
+    """Gains a (°F per unit q) that give these r_a (s/m) with Providence's ρc_p."""
+    return [r / (F_TO_K * RHO_CP / norm) for r in ra_values]
 
 
 def _row(reg, rid):
@@ -93,6 +101,14 @@ def test_night_window_normalises_by_abs_lw_net_and_gamma_is_not_testable():
     ra = _panel(reg, "r_a")
     assert reg["panel"]["norm"] == pytest.approx(71.5) and reg["panel"]["norm_label"] == "|LW_net|"
     assert ra["value"] == pytest.approx(45.0 * F_TO_K * RHO_CP / 71.5)
+    # the ≈ 20–100 s/m range is for the daytime, unstable afternoon: no night verdict, the value stays reported
+    assert ra["status"] == "not_comparable" and ra["published"] is None and "no night-time" in ra["status_note"]
+    m6 = _row(reg, "M6a")
+    assert m6["status"] == "not_testable" and "night" in m6["reason"] and "no night-time" in m6["reason"]
+    assert m6["statistic"]["value"] == pytest.approx(ra["value"]) and m6["basis"] is None
+    assert "|LW_net|" in m6["test"] and "SW↓" not in m6["test"] and "|LW_net|" in ra["derivation"]
+    assert "a·ρc_p/|LW_net|" in next(m for m in reg["mechanisms"] if m["id"] == "M6")["chain"]
+    assert "a·ρc_p/SW↓" in _row(M.evaluate({}, _folds(), _cfg()), "M6a")["test"]
     g = _row(reg, "M7a")
     assert g["status"] == "not_testable" and "night" in g["reason"] and "inversions" in g["reason"]
     assert g["statistic"]["value"] == pytest.approx(-8.0)            # the value is still reported
@@ -140,11 +156,95 @@ def test_gamma_minus_26_with_small_se_is_contradicted():
     assert all("M7" not in g["contradicted"] for g in reg["gates"]["levers"].values())   # not a lever's mechanism
 
 
-def test_gamma_wide_interval_overlapping_the_band_is_supported():
+def test_gamma_wide_interval_overlapping_the_band_is_not_testable():
+    # γ = −26.0 ± 47.1 K/km: the ±2 SE interval (−120 to +68) holds the band, zero, inversions and −26 alike,
+    # so it cannot tell inside from outside (a parameter the data cannot pin down cannot be Supported, plan W3)
     reg = M.evaluate({}, _folds(gammas=[-60.0, 5.0, -40.0, -5.0, -30.0]), _cfg())
     g, r = _panel(reg, "gamma"), _row(reg, "M7a")
     assert g["value"] == pytest.approx(-26.0) and g["status"] == "outside" and g["interval_overlaps"] is True
-    assert r["status"] == "supported" and r["interval"][0] < -9.8 and r["interval"][1] > -6.5
+    assert g["interval_informative"] is False and "too wide" in g["status_note"]
+    assert r["status"] == "not_testable" and "too wide" in r["reason"] and r["basis"] is None
+    assert r["interval"][0] < -9.8 and r["interval"][1] > 0 and not reg["gates"]["statements"]
+
+
+def test_gamma_interval_entirely_outside_is_contradicted_however_wide():
+    reg = M.evaluate({}, _folds(gammas=[-40.0, -30.0, -35.0, -38.0, -32.0]), _cfg())   # −35 ± 7.4 K/km
+    r = _row(reg, "M7a")
+    assert r["status"] == "contradicted" and r["interval"][1] < -9.8
+    assert r["interval"][1] - r["interval"][0] > 3.3                 # wider than the band, still excludes it
+
+
+def test_ra_wide_interval_reaching_negative_values_is_not_testable():
+    # r_a = 58.5 ± 130.7 s/m: the ±2 SE interval (−203 to 320) reaches impossible negative values
+    reg = M.evaluate({}, _folds(a_values=(2.0, 150.0, 10.0, 120.0, 5.0)), _cfg())
+    ra, r = _panel(reg, "r_a"), _row(reg, "M6a")
+    assert ra["value"] == pytest.approx(58.5, abs=0.1) and ra["status"] == "inside"
+    assert ra["interval_informative"] is False
+    assert r["status"] == "not_testable" and "too wide" in r["reason"] and r["interval"][0] < 0
+    lv = reg["gates"]["levers"]["Pct_Canopy"]
+    assert "hypothesis" in lv["statement"] and not lv["supported"]
+
+
+def test_ra_regression_folds_far_outside_the_range_are_not_supported():
+    # reviewer case: per-fold r_a 1285, 721, 2368 s/m (r_a = 1458 ± 966, ±2 SE −475 to 3391)
+    per = [1285.0, 721.0, 2368.0]
+    day = M.evaluate({}, _folds(a_values=_a_for_ra(per)), _cfg())
+    ra, r = _panel(day, "r_a"), _row(day, "M6a")
+    assert ra["per_fold"] == pytest.approx(per) and ra["status"] == "outside"
+    assert r["status"] == "not_testable" and "too wide" in r["reason"]
+    night = M.evaluate({}, _folds(a_values=_a_for_ra(per, 71.5), window="night"), _cfg(window="night"))
+    assert _panel(night, "r_a")["per_fold"] == pytest.approx(per)
+    assert _row(night, "M6a")["status"] == "not_testable" and "night" in _row(night, "M6a")["reason"]
+    from sparc.core.writeup import model_card_markdown
+
+    card = model_card_markdown({"mechanisms": night, "config": _cfg(window="night")})
+    assert "What holds: no mechanism is supported yet" in card and "1458" not in card.split("Contradicted")[0]
+
+
+def test_ra_interval_reaching_zero_is_not_testable():
+    chk = M._range_check({"value": 30.0, "se": 16.0}, M.RA_RANGE, "r_a", positive=True)
+    assert chk["verdict"] == "not_testable" and "≤ 0" in chk["why"] and chk["status"] == "inside"
+    assert M._range_check({"value": 30.0, "se": 16.0}, M.RA_RANGE, "r_a")["verdict"] == "supported"
+
+
+def test_one_usable_fold_gives_no_verdict():
+    # one fold with the physics on, two anti-physical: no jackknife interval, so neither Supported nor Contradicted
+    reg = M.evaluate({}, [_fold(gamma_k_km=-26.0), _fold(a=0.0, warn="disabled"), _fold(a=0.0, warn="disabled")],
+                     _cfg())
+    for rid in ("M6a", "M7a"):
+        r = _row(reg, rid)
+        assert r["status"] == "not_testable" and "one fold" in r["reason"] and r["interval"] is None, rid
+    assert _row(reg, "M7a")["statistic"]["value"] == pytest.approx(-26.0)
+    assert not reg["gates"]["statements"] and not reg["gates"]["contradicted"]
+    assert _panel(reg, "gamma")["se"] is None and _panel(reg, "gamma")["status"] == "outside"
+    single = M.evaluate({}, [_fold(gamma_k_km=-9.9)], _cfg())
+    assert _row(single, "M7a")["status"] == "not_testable" and _row(single, "M6a")["status"] == "not_testable"
+
+
+def test_ranges_apply_to_the_afternoon_window_only():
+    for hours in ((6, 7), (19, 20)):
+        reg = M.evaluate({}, _folds(gammas=[-26.0] * 5), _cfg(hours=hours))
+        for rid, key in (("M6a", "r_a"), ("M7a", "gamma")):
+            r = _row(reg, rid)
+            assert r["status"] == "not_testable" and "afternoon" in r["reason"], (hours, rid)
+            assert _panel(reg, key)["status"] == "not_comparable" and _panel(reg, key)["value"] is not None
+        assert not reg["gates"]["statements"]
+    unknown = M.evaluate({}, _folds(), _cfg(hours=None))
+    assert _row(unknown, "M7a")["status"] == "not_testable" and "time of day unknown" in _row(unknown, "M7a")["reason"]
+    assert _row(M.evaluate({}, _folds(), _cfg(hours=(14, 17))), "M6a")["status"] == "supported"
+
+
+def test_ra_with_the_generic_default_forcing_is_not_testable():
+    reg = M.evaluate({}, _folds(), _cfg(sw=800.0, lw=-100.0, t2m=None, forcing=False))
+    r, ra = _row(reg, "M6a"), _panel(reg, "r_a")
+    assert r["status"] == "not_testable" and "generic default SW↓ = 800" in r["reason"]
+    assert ra["status"] == "not_comparable" and ra["value"] is not None and not reg["panel"]["forcing_known"]
+    assert "assumed" in ra["derivation"] and "no forcing file" in ra["derivation"]
+    assert "assumed (no forcing file)" in reg["panel"]["timescales"]["assumption"]
+    # values set in the config without a file are the campaign's, but the time of day is then unknown
+    own = M.evaluate({}, _folds(), _cfg(forcing=False))
+    assert own["panel"]["forcing_known"] and "time of day unknown" in _row(own, "M6a")["reason"]
+    assert "generic default" not in _row(own, "M6a")["reason"]
 
 
 def test_missing_elevation_role_makes_gamma_not_testable():
@@ -168,6 +268,10 @@ def test_physics_disabled_in_every_fold_makes_physics_rows_not_testable():
         assert r["status"] == "not_testable" and "disabled" in r["reason"] and r["basis"] is None
     assert reg["physics_status"] == "disabled" and reg["panel"]["n_active"] == 0
     assert _panel(reg, "r_a")["value"] is None and reg["inputs"]["fit_warnings"] == [warn]
+    for lever, g in reg["gates"]["levers"].items():
+        assert g["in_physics"] is False and not g["mechanisms"] and not g["transport"], lever
+        assert "disabled" in g["statement"] and "statistical only" in g["statement"]
+        assert "acts in the physics" not in g["statement"]
 
 
 def test_physics_disabled_in_some_folds_uses_the_others_and_says_so():
@@ -183,6 +287,13 @@ def test_no_physics_model_marks_the_evaluable_rows_not_testable():
     assert reg["physics_status"] == "absent"
     assert _row(reg, "M6a")["status"] == "not_testable" and "no physics model" in _row(reg, "M6a")["reason"]
     assert _row(reg, "M7a")["status"] == "not_testable"
+    for lever, g in reg["gates"]["levers"].items():
+        assert g["in_physics"] is False and g["physics_status"] == "absent", lever
+        assert "absent" in g["statement"] and "acts in the physics" not in g["statement"]
+    off = _cfg()
+    off["physics"]["enabled"] = False
+    reg = M.evaluate({}, _folds(), off)
+    assert all(g["in_physics"] is False for g in reg["gates"]["levers"].values())
 
 
 def test_non_temperature_units_cannot_be_put_in_physical_units():
@@ -281,6 +392,14 @@ def test_implied_time_scales_are_assumptions_with_an_advection_bound():
     assert M.evaluate({}, _folds(), _cfg())["panel"]["timescales"]["advection_note"].startswith("Advection off")
 
 
+def test_advection_row_says_whether_the_out_of_fold_test_ran():
+    untested = _panel(M.evaluate({}, _folds(v=600.0), _cfg()), "v")
+    assert "without the out-of-fold test" in untested["status_note"] and "kept after" not in untested["status_note"]
+    adv = {"kept": True, "delta_rmse_mean": -0.021, "delta_rmse_se": 0.004}
+    kept = _panel(M.evaluate({"physics_advection": adv}, _folds(v=600.0), _cfg()), "v")
+    assert "kept by the out-of-fold test" in kept["status_note"] and "−0.021" in kept["status_note"]
+
+
 def test_manifest_summary_fallback_uses_the_jackknife_over_n_folds():
     summary = {"a": {"mean": 45.0, "sd": 3.0}, "gamma": {"mean": _gamma_F_per_m(-8.0), "sd": 0.0001},
                "L_m": {"mean": 256.0, "sd": 20.0}, "v_norm_m": {"mean": 0.0, "sd": 0.0}}
@@ -298,10 +417,16 @@ def test_lever_gates_list_the_mechanisms_that_explain_each_lever():
     cfg["actionable"]["Unrelated"] = {}
     reg = M.evaluate({}, _folds(), cfg)
     lv = reg["gates"]["levers"]
-    assert [m["id"] for m in lv["Pct_Canopy"]["mechanisms"]] == ["M1", "M2", "M4", "M5", "M6"]
-    assert [m["id"] for m in lv["Albedo"]["mechanisms"]] == ["M1", "M4", "M5", "M6"]
-    assert [m["id"] for m in lv["Pct_Impervious"]["mechanisms"]] == ["M2", "M3", "M4", "M5", "M6"]
-    assert lv["Pct_Canopy"]["supported"] == ["M6"] and not lv["Pct_Canopy"]["contradicted"]
+    assert [m["id"] for m in lv["Pct_Canopy"]["mechanisms"]] == ["M1", "M2"]
+    assert [m["id"] for m in lv["Albedo"]["mechanisms"]] == ["M1"]
+    assert [m["id"] for m in lv["Pct_Impervious"]["mechanisms"]] == ["M2", "M3"]
+    assert all([m["id"] for m in g["transport"]] == ["M4", "M5", "M6"] for c, g in lv.items() if c != "Unrelated")
+    # M6 (the overall gain) is supported, but it tests no lever's own pathway: every lever stays a hypothesis
+    assert {m["id"]: m["status"] for m in lv["Pct_Canopy"]["transport"]}["M6"] == "supported"
+    for col in ("Pct_Canopy", "Pct_Impervious", "Albedo"):
+        g = lv[col]
+        assert g["in_physics"] and not g["supported"] and not g["contradicted"], col
+        assert "hypothesis" in g["statement"] and "Transport and scale checks" in g["statement"], col
     assert lv["Unrelated"]["in_physics"] is False and "statistical only" in lv["Unrelated"]["statement"]
 
 
@@ -313,6 +438,22 @@ def test_markdown_renders_the_register_panel_and_errors():
     assert "**Gates:** Elevation enters as a statistical term" in md and "Implied time scales" in md
     assert "unavailable: boom" in M.mechanisms_markdown({"error": "boom"})
     json.dumps(reg, allow_nan=False)
+
+
+def test_writeups_give_each_not_testable_signature_its_own_reason():
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    cfg = _cfg(window="night")
+    reg = M.evaluate({}, _folds(window="night"), cfg)
+    m = {"mechanisms": reg, "config": cfg}
+    card, methods = model_card_markdown(m), methods_markdown(m)
+    for text in (card, methods):
+        assert "one time window or a missing input" not in text
+        assert "M7(a) (night window: no single physical range at night" in text
+        assert "M6(a) (night window: the verified reference list gives no night-time" in text
+        assert "(one time window; needs the multi-window fit (W6))" in text
+    line = next(x for x in card.splitlines() if x.startswith("- Not testable with this data"))
+    assert line.count("M1(a)") == 1 and "M3(b) (one time window: the hysteresis coefficient" in line
 
 
 # ---------------------------------------------------------------------------
@@ -332,6 +473,15 @@ def test_forcing_records_t2m_and_old_configs_read_it_from_the_file(tmp_path):
     old = {"forcing": "forcing/" + src.name, "forcing_info": {"date": "2020-07-29"}}
     assert M.forcing_t2m_K(old, tmp_path) == pytest.approx(304.12, abs=0.01)
     assert M.forcing_t2m_K({"forcing": None}, tmp_path) is None
+    # an old run directory: forcing_info without t2m_K or hours_local → both read from the forcing file
+    run = tmp_path / "run"
+    run.mkdir()
+    cfg = _cfg()
+    cfg["physics"]["forcing_info"] = {"date": "2020-07-29"}
+    (run / "manifest.json").write_text(json.dumps({"config": cfg, "provenance": {"config_dir": str(tmp_path)}}))
+    (run / "physics.json").write_text(json.dumps(_folds()))
+    reg = M.mechanisms_for_run(run, write=False)
+    assert reg["panel"]["t2m_known"] and reg["panel"]["afternoon"] and _row(reg, "M6a")["status"] == "supported"
 
 
 def test_target_kind_is_validated_and_does_not_change_fit_fingerprints():
@@ -363,6 +513,20 @@ def test_providence_configs_declare_a_product_target():
         p = repo / "configs" / name
         if p.exists():
             assert yaml.safe_load(p.read_text())["core"]["data"]["target_kind"] == "product"
+
+
+def test_packaged_studio_providence_example_matches_the_repo_config():
+    # Studio uses the packaged copy when there is no repo checkout: same product, same data block
+    import yaml
+
+    root = Path(__file__).resolve().parents[2]
+    repo = root / "configs" / "core_providence.yml"
+    packaged = root / "sparc" / "studio" / "examples" / "providence" / "core_providence.yml"   # templates.EXAMPLE_DIR
+    if not (repo.exists() and packaged.exists()):
+        pytest.skip("Providence configs not present")
+    a, b = (yaml.safe_load(x.read_text())["core"]["data"] for x in (repo, packaged))
+    a.pop("path", None), b.pop("path", None)
+    assert b == a and b["target_kind"] == "product"
 
 
 # ---------------------------------------------------------------------------
@@ -406,9 +570,14 @@ def test_register_failure_is_a_warning_not_a_crash(small_run, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("boom")
 
+    from sparc.core import progress
+
+    warned = []
     monkeypatch.setattr(M, "evaluate", boom)
+    monkeypatch.setattr(progress, "warn", lambda code, msg, **kw: warned.append((code, msg)))
     m = build_manifest(small_run[2], {}, True)
     assert m["mechanisms"] == {"error": "RuntimeError: boom"}
+    assert [c for c, _ in warned] == ["physics.mechanisms_failed"] and "boom" in warned[0][1]
 
 
 def test_results_page_shows_the_register(small_run):
@@ -432,6 +601,17 @@ def test_cli_recomputes_the_register_of_a_run(small_run, capsys):
     assert "| mechanism | IF it holds, THEN …" in out and (run / "mechanisms.json").exists()
     man = json.loads((run / "manifest.json").read_text())
     assert any(e["section"] == "mechanisms" for e in man["post_run"])
-    assert cli.main(["mechanisms", str(run), "-p", str(cfg_path)]) == 0
     assert json.loads((run / "mechanisms.json").read_text())["target_kind"] == "simulated"
+    # -p replaces the run's config: a copy that declares a product target must change the basis
+    import yaml
+
+    raw = yaml.safe_load(Path(cfg_path).read_text())
+    (raw.get("core", raw))["data"]["target_kind"] = "product"
+    prod = Path(cfg_path).with_name("product_copy.yml")
+    prod.write_text(yaml.safe_dump(raw))
+    assert cli.main(["mechanisms", str(run), "-p", str(prod)]) == 0
+    reg = json.loads((run / "mechanisms.json").read_text())
+    assert reg["target_kind"] == "product" and reg["basis"].startswith("indicative")
+    assert all(r["basis"].startswith("indicative") for r in reg["panel"]["rows"] if r["value"] is not None)
+    assert json.loads((run / "manifest.json").read_text())["mechanisms"]["target_kind"] == "product"
     assert cli.main(["mechanisms", "-r", str(run / "missing")]) == 2

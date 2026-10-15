@@ -30,6 +30,22 @@ mixing depth h are labelled as such.
 Uncertainty over the K cross-validation folds is the delete-a-group jackknife already used for every
 decision quantity (:meth:`sparc.core.ensemble.FittedEnsemble.jackknife_sd`): SE = sd·√(K−1).
 
+Range tests (M6a, M7a)
+----------------------
+A fitted value is compared with a published range through its mean ± 2 SE interval:
+
+* Contradicted when the interval lies entirely outside the range: the data exclude it, however wide;
+* Supported only when the interval overlaps the range AND is informative: no wider than the range itself (a
+  wider interval cannot lie inside the range, so it cannot tell inside from outside) and, for r_a, above zero.
+  A parameter the data cannot pin down cannot be Supported, whatever its point estimate (plan W3);
+* Not testable otherwise, and with fewer than two usable folds (no jackknife interval).
+
+The ranges are stated for one regime: the lapse-rate band "in the well-mixed afternoon", and r_a's ≈ 20–100
+s/m as the plan applies it to the afternoon map (Crawford et al. 2018 is for unstable conditions; the verified
+list gives no night-time range).  So both tests need a day window inside the afternoon (:data:`AFTERNOON_LOCAL`,
+from the forcing's local hours), and r_a needs the campaign's SW↓: with the generic default forcing,
+r_a ∝ 1/SW↓_assumed says nothing about the air.
+
 Everything here is a pure function of plain dicts — the manifest, the per-fold physics parameters
 (``physics.json``) and the config — so old run directories can be re-evaluated (``sparc core mechanisms
 -r RUN_DIR``; :func:`mechanisms_for_run` is the only function that touches files).  Ranges and citations
@@ -44,8 +60,8 @@ import math
 from pathlib import Path
 
 __all__ = ["VERDICTS", "VERDICT_LABELS", "TARGET_KINDS", "REGISTER", "REFERENCES", "RA_RANGE", "LAPSE_BAND",
-           "to_kelvin_factor", "rho_cp", "forcing_norm", "physical_parameters", "evaluate", "mechanisms_markdown",
-           "forcing_t2m_K", "mechanisms_for_run"]
+           "AFTERNOON_LOCAL", "to_kelvin_factor", "rho_cp", "forcing_norm", "physical_parameters", "evaluate",
+           "mechanisms_markdown", "forcing_t2m_K", "mechanisms_for_run"]
 
 SCHEMA = 1
 
@@ -83,6 +99,12 @@ LAPSE_BAND = (-9.8, -6.5)                 # K km⁻¹
 LAPSE_TEXT = "−9.8 to −6.5 K/km"
 LAPSE_SOURCE = "dry-adiabatic (−9.8 K/km) and standard-atmosphere (−6.5 K/km) lapse rates"
 NIGHT_GAMMA = "no single physical range at night (inversions, cold-air pooling)"
+NIGHT_RA = ("the verified reference list gives no night-time (stable) range for r_a: the ≈ 20–100 s/m range is "
+            "applied to the afternoon, and Crawford et al. (2018) is for unstable conditions")
+#: The window treated as the well-mixed afternoon: a forcing window inside these local hours.  An operational
+#: choice of this module, not a published threshold: it admits the Heat Watch protocol's 15–16 run and excludes
+#: its 6–7 and 19–20 runs, when the lapse rate and the exchange regime differ (plan F7).
+AFTERNOON_LOCAL = (12, 18)
 
 #: Reference keys used by the register and the panel (copied from PHYSICS_PLAN.md's verified list).
 REFERENCES = {
@@ -121,6 +143,7 @@ REFERENCES = {
 # --------------------------------------------------------------------------- the register (plan §4)
 _ONE_WINDOW = "one time window; needs the multi-window fit (W6)"
 _ALL = "*"          # a transport mechanism: it shapes the effect of every lever that enters the source
+_NORM_TEXT = "norm (norm = SW↓ by day, |LW_net| at night)"      # replaced by the run's normaliser in evaluate()
 
 #: Ten mechanisms of plan §4.  ``kind`` of a signature: ``evaluate`` (tested here), ``multi_window``
 #: (not testable from one window), ``workstream`` (the test is not built yet) or ``missing_term``
@@ -184,12 +207,12 @@ REGISTER = (
           "test": "identify/windshift.py, extended to the physics", "workstream": "W7", "kind": "workstream",
           "reason": "needs the raw traverses (W7); the wind-shift design is built but had 8% power on one day"})},
     {"id": "M6", "name": "Vertical exchange", "terms": "aerodynamic resistance r_a = τ/h", "in_model": True,
-     "chain": "Q_H → ΔT = r_a·Q_H/(ρc_p): the gain a sets r_a = a·ρc_p/SW↓",
+     "chain": "Q_H → ΔT = r_a·Q_H/(ρc_p): the gain a sets r_a = a·ρc_p/" + _NORM_TEXT,
      "roles": (_ALL,), "refs": ("masson2000", "crawford2018", "oke1973"),
      "signatures": (
          {"sig": "a", "then": "The implied r_a lies in the published range for urban surfaces.",
-          "test": "Parameter panel: r_a = a·ρc_p/SW↓, mean ± 2 SE against " + RA_TEXT, "workstream": "W3",
-          "kind": "evaluate"},
+          "test": "Parameter panel: r_a = a·ρc_p/norm, mean ± 2 SE against " + RA_TEXT + " (afternoon window)",
+          "workstream": "W3", "kind": "evaluate"},
          {"sig": "b", "then": "Across runs and campaigns, the gain a falls as wind speed rises; heat-island "
                               "intensity weakens with wind (Oke 1973).",
           "test": "Multi-window and multi-campaign fits", "workstream": "W6", "kind": "multi_window"})},
@@ -198,8 +221,8 @@ REGISTER = (
      "roles": ("elevation",), "refs": (),
      "signatures": (
          {"sig": "a", "then": "γ lies between about −9.8 and −6.5 K/km in the well-mixed afternoon.",
-          "test": "Parameter panel: γ in K/km, mean ± 2 SE against the lapse-rate band", "workstream": "W3",
-          "kind": "evaluate"},
+          "test": "Parameter panel: γ in K/km, mean ± 2 SE against the lapse-rate band (afternoon window)",
+          "workstream": "W3", "kind": "evaluate"},
          {"sig": "b", "then": "At night it can be near zero or positive (inversions, cold-air pooling).",
           "test": "Multi-window fit (day–night contrast)", "workstream": "W6", "kind": "multi_window"})},
     {"id": "M8", "name": "Water bodies", "terms": "water-cell sink w, distance to water", "in_model": True,
@@ -280,6 +303,39 @@ def forcing_norm(physics: dict | None, window: str = "day") -> tuple[float, str]
     return max(abs(lw), 1e-9), "|LW_net|"
 
 
+def _forcing_known(physics: dict | None, norm_label: str) -> tuple[bool, str]:
+    """Whether q's normaliser is the campaign's (a forcing file, or a value set in the config) or the generic
+    default.  r_a ∝ 1/norm and the fitted gain does not rescale to compensate (q = Q_H/SW↓ hardly depends on
+    SW↓), so an assumed normaliser makes r_a an assumption too."""
+    ph = physics or {}
+    fi = ph.get("forcing_info")
+    if isinstance(fi, dict) or ph.get("forcing"):
+        return True, f"campaign forcing ({(fi or {}).get('file') or ph.get('forcing')})"
+    key, default = ("sw_down", _SW_DEFAULT) if norm_label == "SW↓" else ("lw_net", _LW_DEFAULT)
+    val = ph.get(key, default)
+    if not _num(val) or float(val) == default:
+        return False, "the generic default, assumed: no forcing file"
+    return True, "set in the config (no forcing file)"
+
+
+def _afternoon(physics: dict | None, window: str) -> tuple[bool, str | None]:
+    """Whether a day window is the well-mixed afternoon (:data:`AFTERNOON_LOCAL`) the daytime ranges hold in,
+    from the forcing's local hours; the reason when it is not or cannot be told."""
+    if window != "day":
+        return False, None                       # night: each test gives its own reason
+    fi = (physics or {}).get("forcing_info")
+    hrs = fi.get("hours_local") if isinstance(fi, dict) else None
+    if not (isinstance(hrs, (list, tuple)) and len(hrs) == 2 and all(_num(h) for h in hrs)):
+        return False, ("time of day unknown: the run records no forcing window (physics.forcing_info.hours_local), "
+                       "and the published range holds for the well-mixed afternoon")
+    h0, h1 = float(hrs[0]), float(hrs[1])
+    if AFTERNOON_LOCAL[0] <= h0 and h1 <= AFTERNOON_LOCAL[1]:
+        return True, None
+    return False, (f"the {h0:g}–{h1:g} h local window is not the well-mixed afternoon (taken here as a window inside "
+                   f"{AFTERNOON_LOCAL[0]}–{AFTERNOON_LOCAL[1]} h): the lapse rate and the exchange regime change "
+                   "through the day (F7)")
+
+
 def _active(p: dict) -> bool:
     """A fold whose physics term is on: positive gain and no anti-physical fallback."""
     return _num(p.get("a")) and float(p["a"]) > 0 and not p.get("fit_warning")
@@ -339,20 +395,10 @@ class _Folds:
 
 
 def _interval(st: dict | None) -> list[float] | None:
-    if not st or st.get("value") is None:
+    """Mean ± 2 SE; None without a value or without a jackknife SE (fewer than two usable folds)."""
+    if not st or st.get("value") is None or st.get("se") is None:
         return None
-    se = st.get("se") or 0.0
-    return [st["value"] - 2.0 * se, st["value"] + 2.0 * se]
-
-
-def _band_status(st: dict | None, band: tuple[float, float]) -> tuple[str, bool | None]:
-    """Panel status of a point estimate and whether its mean ± 2 SE interval overlaps ``band``."""
-    iv = _interval(st)
-    if iv is None:
-        return "not_comparable", None
-    v = st["value"]
-    inside = band[0] <= v <= band[1]
-    return ("inside" if inside else "outside"), bool(iv[1] >= band[0] and iv[0] <= band[1])
+    return [st["value"] - 2.0 * st["se"], st["value"] + 2.0 * st["se"]]
 
 
 def _fmt(v, nd=1) -> str:
@@ -360,6 +406,36 @@ def _fmt(v, nd=1) -> str:
         return "—"
     s = f"{float(v):.{nd}f}"
     return s.replace("-", "−")
+
+
+def _range_check(st: dict, band: tuple[float, float], sym: str, *, positive: bool = False) -> dict:
+    """A fitted value against a published range (module docstring, "Range tests").
+
+    ``status`` (the panel) is where the point estimate lies, inside / outside.  ``verdict`` (the register) comes
+    from the mean ± 2 SE interval: contradicted if it lies entirely outside the range; supported only if it
+    overlaps the range and is informative — no wider than the range (a wider interval cannot lie inside it, so it
+    cannot tell inside from outside) and, for a ``positive`` quantity, above zero; otherwise not testable,
+    with ``why``."""
+    v = st["value"]
+    out = {"status": "inside" if band[0] <= v <= band[1] else "outside", "overlaps": None, "informative": False,
+           "verdict": "not_testable", "why": None}
+    iv = _interval(st)
+    if iv is None:
+        out["why"] = ("only one fold with the physics term on: no jackknife interval, so the range cannot be "
+                      "tested")
+        return out
+    out["overlaps"] = bool(iv[1] >= band[0] and iv[0] <= band[1])
+    span = f"±2 SE: {_fmt(iv[0])} to {_fmt(iv[1])}"
+    if not out["overlaps"]:
+        out.update(informative=True, verdict="contradicted")
+    elif iv[1] - iv[0] > band[1] - band[0]:
+        out["why"] = (f"interval too wide to test the range ({span}, wider than the range itself): {sym} is not "
+                      "pinned down by this run")
+    elif positive and iv[0] <= 0:
+        out["why"] = f"the interval reaches {sym} ≤ 0, which is not physical ({span}): {sym} is not pinned down"
+    else:
+        out.update(informative=True, verdict="supported")
+    return out
 
 
 def _stat_text(sym: str, st: dict | None, unit: str, nd: int = 1) -> str | None:
@@ -444,6 +520,29 @@ def _t2m(ph: dict) -> tuple[float, str, bool]:
     return T_FALLBACK_K, f"assumed {T_FALLBACK_K:.2f} K: the forcing gives no 2 m temperature", False
 
 
+def _range_row(key, label, unit, st, band, text, source, sym, reasons, note, *, refs=(), positive=False,
+               derivation=None) -> dict:
+    """A panel row compared with a published range.  ``reasons`` say why the range does not apply to this run
+    (night, not the afternoon, an assumed forcing …): the row is then not comparable and keeps its value."""
+    row = {"key": key, "label": label, "unit": unit, **(st or {"value": None, "se": None, "per_fold": None, "n": 0}),
+           "interval": _interval(st), "published": None, "status": "not_comparable", "comparable": False,
+           "not_comparable_reason": "; ".join(reasons) or None, "interval_overlaps": None,
+           "interval_informative": None, "refs": list(refs), "group": "transport",
+           "status_note": "; ".join(x for x in (note, *reasons) if x) or None}
+    if derivation:
+        row["derivation"] = derivation
+    if reasons:
+        return row
+    row.update(published={"low": band[0], "high": band[1], "text": text, "source": source}, comparable=True)
+    if st is None or st.get("value") is None:
+        return row
+    chk = _range_check(st, band, sym, positive=positive)
+    row.update(status=chk["status"], interval_overlaps=chk["overlaps"], interval_informative=chk["informative"])
+    if chk["why"]:
+        row["status_note"] = "; ".join(x for x in (row["status_note"], chk["why"]) if x)
+    return row
+
+
 def physical_parameters(fold_params: list[dict] | None, config: dict | None, *, manifest: dict | None = None,
                         units: str | None = None) -> dict:
     """The W3 parameter panel: fitted physics in physical units, against published ranges where the plan
@@ -475,38 +574,34 @@ def _panel(ctx: dict) -> dict:
     if fK is None and F.present:
         notes.append(f"Target units {ctx['units']!r} are not a temperature scale (°F, °C or K): r_a and γ cannot be "
                      "put in physical units.")
+    forcing_ok, forcing_note = _forcing_known(ph, norm_label)
+    afternoon, tod_reason = _afternoon(ph, window)
     rows: list[dict] = []
     ra = None
     if fK is not None:
         scale = fK * rcp / norm
         ra = F.stat("a", scale)
-        st_ra, overlaps = _band_status(ra, RA_RANGE)
-        rows.append({"key": "r_a", "label": "Aerodynamic resistance r_a", "unit": "s/m",
-                     **(ra or {"value": None, "se": None, "per_fold": None, "n": 0}), "interval": _interval(ra),
-                     "published": {"low": RA_RANGE[0], "high": RA_RANGE[1], "text": RA_TEXT, "source": RA_SOURCE},
-                     "status": st_ra, "interval_overlaps": overlaps, "refs": ["masson2000", "crawford2018"],
-                     "derivation": (f"r_a = a·{'(5/9)·' if fK != 1.0 else ''}ρc_p/{norm_label} with ρc_p = {rcp:.0f} "
-                                    f"J m⁻³ K⁻¹ (p = {P_STD:.0f} Pa, T: {t_note}) and {norm_label} = {norm:.1f} W/m²"),
-                     "status_note": ("q's scale depends on the albedo layer, so a biased albedo biases a and r_a (F5)"
-                                     + ("; Crawford et al. (2018) is for unstable (daytime) conditions"
-                                        if window != "day" else "")),
-                     "group": "transport"})
+        # the published range applies only to the afternoon window and the campaign's own forcing
+        ra_reasons = ([f"night window: {NIGHT_RA}"] if window != "day" else []) \
+            + ([] if forcing_ok else [f"r_a needs the campaign's {norm_label}: this run has no forcing file and "
+                                      f"assumes the generic default {norm_label} = {norm:g} W/m², and r_a scales as "
+                                      f"1/{norm_label}"]) \
+            + ([tod_reason] if window == "day" and tod_reason else [])
+        rows.append(_range_row(
+            "r_a", "Aerodynamic resistance r_a", "s/m", ra, RA_RANGE, RA_TEXT, RA_SOURCE, "r_a", ra_reasons,
+            "q's scale depends on the albedo layer, so a biased albedo biases a and r_a (F5)",
+            refs=["masson2000", "crawford2018"], positive=True,
+            derivation=(f"r_a = a·{'(5/9)·' if fK != 1.0 else ''}ρc_p/{norm_label} with ρc_p = {rcp:.0f} J m⁻³ K⁻¹ "
+                        f"(p = {P_STD:.0f} Pa, T: {t_note}) and {norm_label} = {norm:.1f} W/m² "
+                        f"({forcing_note})")))
         has_elev = "elevation" in ctx["roles_used"]
         g = F.stat("gamma", fK * 1000.0) if has_elev else None
-        if window == "day":
-            st_g, ov_g = _band_status(g, LAPSE_BAND)
-            pub = {"low": LAPSE_BAND[0], "high": LAPSE_BAND[1], "text": LAPSE_TEXT, "source": LAPSE_SOURCE}
-            note = ("assumes the elevation layer is in metres; an indicative γ far outside the band means elevation "
-                    "is standing in for something else (F2)")
-        else:
-            st_g, ov_g, pub = ("not_comparable", None, None)
-            note = NIGHT_GAMMA
-        if not has_elev:
-            st_g, ov_g, note = "not_comparable", None, "no elevation role: γ is not fitted"
-        rows.append({"key": "gamma", "label": "Elevation coefficient γ", "unit": "K/km",
-                     **(g or {"value": None, "se": None, "per_fold": None, "n": 0}), "interval": _interval(g),
-                     "published": pub, "status": st_g, "interval_overlaps": ov_g, "refs": [], "status_note": note,
-                     "group": "transport"})
+        g_reasons = (["no elevation role: γ is not fitted"] if not has_elev else
+                     [f"night window: {NIGHT_GAMMA}"] if window != "day" else [tod_reason] if tod_reason else [])
+        rows.append(_range_row(
+            "gamma", "Elevation coefficient γ", "K/km", g, LAPSE_BAND, LAPSE_TEXT, LAPSE_SOURCE, "γ", g_reasons,
+            "assumes the elevation layer is in metres; an indicative γ far outside the band means elevation is "
+            "standing in for something else (F2)" if has_elev else None))
     L = F.stat("L_m")
     lb = F.first("L_bounds_m")
     L_prior = ((ctx["manifest"].get("influence") or {}).get("L_prior_m"))
@@ -519,9 +614,17 @@ def _panel(ctx: dict) -> dict:
                                  + (f"; fit bounds {lb[0]:.0f}–{lb[1]:.0f} m" if lb and len(lb) == 2 else ""))})
     v = F.stat("v_norm_m")
     if v and v["value"] > 1.0:
+        adv = ctx["manifest"].get("physics_advection")
+        if isinstance(adv, dict) and "kept" in adv:
+            sel = (f"{'kept' if adv['kept'] else 'dropped'} by the out-of-fold test (held-out RMSE with − without = "
+                   f"{_fmt(adv.get('delta_rmse_mean'), 3)} ± {_fmt(adv.get('delta_rmse_se'), 3)} {ctx['units'] or ''})"
+                   .replace(" )", ")"))
+        else:
+            sel = ("kept without the out-of-fold test (physics.select_advection off, or no selection recorded): an "
+                   "untested drift")
         rows.append({"key": "v", "label": "Advection drift |v| = |u|·τ", "unit": "m", **v, "interval": _interval(v),
                      "published": None, "status": "not_comparable", "refs": [], "group": "transport",
-                     "status_note": "v = u_c·τ: the drift times a canopy-layer wind; kept after the out-of-fold test"})
+                     "status_note": f"v = u_c·τ: the drift times a canopy-layer wind; {sel}"})
     rows += _source_rows(ctx)
     for r in rows:
         if r["value"] is None and r["status"] != "not_comparable":
@@ -531,7 +634,9 @@ def _panel(ctx: dict) -> dict:
     return {"rows": rows, "physics_status": status, "n_folds": F.n, "n_active": F.n_active, "source": F.source,
             "window": window, "units": ctx["units"], "to_kelvin": fK, "t2m_K": t_K, "t2m_note": t_note,
             "t2m_known": t_known, "rho_cp": rcp, "pressure_Pa": P_STD, "norm": norm, "norm_label": norm_label,
-            "basis": basis, "target_kind": kind, "timescales": _timescales(ra, v, ph),
+            "basis": basis, "target_kind": kind, "forcing_known": forcing_ok, "forcing_note": forcing_note,
+            "afternoon": afternoon,
+            "timescales": _timescales(ra, v, ph, None if forcing_ok else f"the generic default {norm_label}"),
             "identified_products": "One afternoon map identifies r_a = τ/h and L² = Kτ, not τ, h and K separately "
                                    "(F4); the panel does not split them.",
             "identifiability": "not yet tested: W3 profile likelihood",
@@ -540,7 +645,7 @@ def _panel(ctx: dict) -> dict:
             "notes": notes}
 
 
-def _timescales(ra: dict | None, v: dict | None, ph: dict) -> dict | None:
+def _timescales(ra: dict | None, v: dict | None, ph: dict, forcing_assumed: str | None = None) -> dict | None:
     """Informational time scales from an *assumed* mixing depth h: τ = r_a·h and ωτ (W6's quasi-steady
     argument); a kept advection drift bounds τ from below, since the canopy-layer wind is at most the 10 m one."""
     if not ra or not _num(ra.get("value")) or ra["value"] <= 0:
@@ -551,7 +656,9 @@ def _timescales(ra: dict | None, v: dict | None, ph: dict) -> dict | None:
         rows.append({"h_m": h, "tau_s": tau, "tau_min": tau / 60.0, "omega_tau": OMEGA_DAY * tau,
                      "phase_lag_deg": math.degrees(math.atan(OMEGA_DAY * tau))})
     out = {"assumption": f"h is assumed, not fitted: canopy-layer depths of {H_ASSUMED_M[0]:g} and "
-                         f"{H_ASSUMED_M[1]:g} m (W6). One map identifies r_a = τ/h only.",
+                         f"{H_ASSUMED_M[1]:g} m (W6). One map identifies r_a = τ/h only."
+                         + (f" r_a itself rests on {forcing_assumed}, assumed (no forcing file)."
+                            if forcing_assumed else ""),
            "omega_per_s": OMEGA_DAY, "rows": rows, "advection_bound": None, "advection_note": None}
     wind = ph.get("wind")
     speed = math.hypot(float(wind[0]), float(wind[1])) if isinstance(wind, (list, tuple)) and len(wind) >= 2 \
@@ -601,11 +708,6 @@ def _physics_block(ctx: dict) -> str | None:
     return None
 
 
-def _band_verdict(st: dict, band: tuple[float, float]) -> str:
-    iv = _interval(st)
-    return "supported" if (iv[1] >= band[0] and iv[0] <= band[1]) else "contradicted"
-
-
 def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, config: dict | None = None, *,
              units: str | None = None) -> dict:
     """The mechanism register of a run: one row per mechanism signature with status, statistic, interval,
@@ -631,7 +733,9 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
             r = _default_row(mech, sig)
             key = r["id"]
             if key == "M6a":
-                r = _eval_ra(mech, sig, by_key.get("r_a"), block, ctx, panel)
+                r = _eval_ra(mech, sig, by_key.get("r_a"), block, panel)
+                r["test"] = f"Parameter panel: r_a = a·ρc_p/{panel['norm_label']}, mean ± 2 SE against {RA_TEXT} " \
+                            "(afternoon window)"
             elif key == "M7a":
                 r = _eval_gamma(mech, sig, by_key.get("gamma"), block, ctx)
             if r["status"] in ("supported", "contradicted"):
@@ -656,7 +760,8 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
     for mech in REGISTER:
         mr = [r for r in rows if r["mechanism"] == mech["id"]]
         st = next(s for s in _PRECEDENCE if any(r["status"] == s for r in mr))
-        mechs.append({"id": mech["id"], "name": mech["name"], "terms": mech["terms"], "chain": mech["chain"],
+        chain = mech["chain"].replace(_NORM_TEXT, panel["norm_label"])      # the run's normaliser of q
+        mechs.append({"id": mech["id"], "name": mech["name"], "terms": mech["terms"], "chain": chain,
                       "in_model": mech["in_model"], "roles": list(mech["roles"]), "status": st,
                       "label": VERDICT_LABELS[st], "signatures": [r["id"] for r in mr], "refs": list(mech["refs"])})
     used = sorted({k for m in REGISTER for k in m["refs"]} | {"oreskes1994", "mooij2013", "shandas2019"})
@@ -665,28 +770,37 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
         "schema": SCHEMA, "verdicts": dict(VERDICT_LABELS), "window": ctx["window"], "units": ctx["units"],
         "target_kind": kind, "basis": basis, "physics_status": panel["physics_status"],
         "rows": rows, "mechanisms": mechs, "summary": summary, "panel": panel,
-        "gates": _gates(rows, mechs, ctx, by_key),
+        "gates": _gates(rows, mechs, ctx, panel["physics_status"]),
         "references": {k: REFERENCES[k] for k in used},
         "inputs": {"source": F.source, "n_folds": F.n, "n_active": F.n_active, "fit_warnings": F.warnings,
                    "advection": adv},
     }
 
 
-def _eval_ra(mech, sig, row, block, ctx, panel) -> dict:
+def _eval_range(mech, sig, row, *, sym, name, unit, band, text, source, positive=False, notes=()) -> dict:
+    """M6a / M7a: a panel row against its published range.  Not testable when the range does not apply to this
+    run (the row's ``not_comparable_reason``) or the interval cannot test it (:func:`_range_check`)."""
+    st = {"value": row["value"], "se": row["se"]}
+    common = dict(statistic={"name": name, "value": row["value"], "se": row["se"], "unit": unit},
+                  statistic_text=_stat_text(sym, st, unit), interval=_interval(st))
+    if not row.get("comparable"):
+        return _row(mech, sig, "not_testable", reason=row.get("not_comparable_reason"), **common)
+    chk = _range_check(st, band, sym, positive=positive)
+    note = list(notes)
+    if chk["verdict"] == "supported" and chk["status"] == "outside":
+        note.append("the point estimate lies outside the range; the ±2 SE interval reaches it")
+    return _row(mech, sig, chk["verdict"], reason=chk["why"], note="; ".join(note) or None,
+                reference={"low": band[0], "high": band[1], "text": text, "source": source}, **common)
+
+
+def _eval_ra(mech, sig, row, block, panel) -> dict:
     if block:
         return _row(mech, sig, "not_testable", reason=block)
     if not row or row.get("value") is None:
         return _row(mech, sig, "not_testable", reason="no fitted gain a to convert")
-    st = {"value": row["value"], "se": row["se"]}
-    status = _band_verdict(st, RA_RANGE)
-    note = None if panel["t2m_known"] else f"ρc_p uses T = {panel['t2m_note']}"
-    if ctx["window"] != "day":
-        note = (note + "; " if note else "") + "night window: Crawford et al. (2018) is for unstable (daytime) conditions"
-    if status == "supported" and not (RA_RANGE[0] <= row["value"] <= RA_RANGE[1]):
-        note = (note + "; " if note else "") + "the point estimate lies outside the range, the ±2 SE interval reaches it"
-    return _row(mech, sig, status, statistic={"name": "r_a", "value": row["value"], "se": row["se"], "unit": "s/m"},
-                statistic_text=_stat_text("r_a", st, "s/m"), interval=_interval(st),
-                reference={"low": RA_RANGE[0], "high": RA_RANGE[1], "text": RA_TEXT, "source": RA_SOURCE}, note=note)
+    return _eval_range(mech, sig, row, sym="r_a", name="r_a", unit="s/m", band=RA_RANGE, text=RA_TEXT,
+                       source=RA_SOURCE, positive=True,
+                       notes=() if panel["t2m_known"] else (f"ρc_p uses T = {panel['t2m_note']}",))
 
 
 def _eval_gamma(mech, sig, row, block, ctx) -> dict:
@@ -696,22 +810,21 @@ def _eval_gamma(mech, sig, row, block, ctx) -> dict:
         return _row(mech, sig, "not_testable", reason="no elevation layer in the physics roles: γ is not fitted")
     if not row or row.get("value") is None:
         return _row(mech, sig, "not_testable", reason="no fitted elevation coefficient")
-    st = {"value": row["value"], "se": row["se"]}
-    common = dict(statistic={"name": "gamma", "value": row["value"], "se": row["se"], "unit": "K/km"},
-                  statistic_text=_stat_text("γ", st, "K/km"), interval=_interval(st))
-    if ctx["window"] != "day":
-        return _row(mech, sig, "not_testable", reason=f"night window: {NIGHT_GAMMA}", **common)
-    status = _band_verdict(st, LAPSE_BAND)
-    note = "assumes the elevation layer is in metres"
-    if status == "contradicted":
-        note += ("; elevation is standing in for something else, possibly a missing source such as nearby water "
-                 "carried by the wind (F2, tested by W2)")
-    return _row(mech, sig, status, reference={"low": LAPSE_BAND[0], "high": LAPSE_BAND[1], "text": LAPSE_TEXT,
-                                              "source": LAPSE_SOURCE}, note=note, **common)
+    r = _eval_range(mech, sig, row, sym="γ", name="gamma", unit="K/km", band=LAPSE_BAND, text=LAPSE_TEXT,
+                    source=LAPSE_SOURCE, notes=("assumes the elevation layer is in metres",))
+    if r["status"] == "contradicted":
+        r["note"] += ("; elevation is standing in for something else, possibly a missing source such as nearby "
+                      "water carried by the wind (F2, tested by W2)")
+    return r
 
 
-def _gates(rows: list[dict], mechs: list[dict], ctx: dict, by_key: dict) -> dict:
-    """Plain statements from contradicted rows, and per actionable lever which mechanisms explain it."""
+def _gates(rows: list[dict], mechs: list[dict], ctx: dict, physics_status: str) -> dict:
+    """Plain statements from contradicted rows, and per actionable lever which mechanisms explain it.
+
+    A lever's own mechanisms are those naming its role (M1–M3, M8); the transport mechanisms (M4–M6) shape every
+    lever's effect but test the overall gain and footprint, not the lever's pathway, so they never make a lever's
+    explanation "supported" — they can only withdraw it, when contradicted.  Without an active physics term
+    (absent, or disabled as anti-physical in every fold) no lever acts through the physics."""
     statements, plain = [], []
     contradicted = [m for m in mechs if m["status"] == "contradicted"]
     for m in contradicted:
@@ -722,29 +835,47 @@ def _gates(rows: list[dict], mechs: list[dict], ctx: dict, by_key: dict) -> dict
         statements.append(txt[:-1] + f" ({st})." if st and txt.endswith(".") else txt)
     roles = (ctx["physics"].get("roles") or {})
     col_role = {col: role for role, col in roles.items() if col}
+    status = physics_status if ctx["enabled"] else "absent"     # physics.enabled: false → no physics term
+    active = status == "active"
+
+    def brief(ms):
+        return [{"id": m["id"], "name": m["name"], "status": m["status"], "label": m["label"]} for m in ms]
+
+    def listing(ms):
+        return ", ".join(f"{m['id']} {m['name']} ({m['label'].lower()})" for m in ms)
+
     levers = {}
     for col in (ctx["cfg"].get("actionable") or {}):
         role = col_role.get(col)
         in_source = role is not None and role in ctx["roles_used"] and role not in ("elevation",)
-        rel = [m for m in mechs if in_source and m["in_model"] and (role in m["roles"] or _ALL in m["roles"])]
-        entry = {"role": role, "in_physics": in_source,
-                 "mechanisms": [{"id": m["id"], "name": m["name"], "status": m["status"], "label": m["label"]}
-                                for m in rel],
-                 "supported": [m["id"] for m in rel if m["status"] == "supported"],
-                 "contradicted": [m["id"] for m in rel if m["status"] == "contradicted"],
-                 "untested": [m["id"] for m in rel if m["status"] in ("not_testable", "not_yet_tested")]}
+        on = in_source and active
+        own = [m for m in mechs if on and m["in_model"] and role in m["roles"]]
+        shared = [m for m in mechs if on and m["in_model"] and _ALL in m["roles"]]
+        entry = {"role": role, "in_physics": on, "physics_status": status, "mechanisms": brief(own),
+                 "transport": brief(shared),
+                 "supported": [m["id"] for m in own if m["status"] == "supported"],
+                 "contradicted": [m["id"] for m in own + shared if m["status"] == "contradicted"],
+                 "untested": [m["id"] for m in own if m["status"] in ("not_testable", "not_yet_tested")]}
+        lab = ROLE_LABELS.get(role, role)
+        name = f"{col}{f' ({lab})' if role and str(lab).lower() != col.lower() else ''}"
         if not in_source:
-            entry["statement"] = (f"{col} does not enter the physics source: its modelled effect is statistical "
-                                  "only.")
+            entry["statement"] = f"{col} does not enter the physics source: its modelled effect is statistical only."
+        elif not active:
+            why = ("absent from this run" if status == "absent" else
+                   "disabled in this run (anti-physical gain in every fold)")
+            entry["statement"] = f"The physics model is {why}: {col}'s modelled effect is statistical only."
         else:
-            parts = ", ".join(f"{m['id']} {m['name']} ({m['label'].lower()})" for m in rel)
-            lab = ROLE_LABELS.get(role, role)
-            s = f"{col}{f' ({lab})' if lab != col else ''} acts in the physics model through {parts}."
+            s = (f"{name} acts in the physics model through {listing(own)}." if own else
+                 f"{name} enters the physics source, but no mechanism of the register names it.")
+            if shared:
+                s += f" Transport and scale checks shared by every lever: {listing(shared)}."
             if entry["contradicted"]:
                 s += (f" {', '.join(entry['contradicted'])} contradicted: do not cite "
                       f"{'it' if len(entry['contradicted']) == 1 else 'them'}; that part of the effect is statistical.")
             elif not entry["supported"]:
-                s += " None is supported yet, so the explanation is a hypothesis, not a tested mechanism."
+                s += (" None of its own mechanisms is supported yet, so the explanation is a hypothesis, not a tested "
+                      "mechanism" + (" (the shared checks test the overall gain, not this lever's pathway)."
+                                     if any(m["status"] == "supported" for m in shared) else "."))
             entry["statement"] = s
         levers[col] = entry
     return {"statements": statements, "plain": plain, "contradicted": [m["id"] for m in contradicted],
@@ -763,16 +894,18 @@ def mechanisms_markdown(reg: dict | None) -> str:
     if reg.get("error"):
         return f"_Mechanism register unavailable: {reg['error']}_"
     L = [f"Verdicts: **Supported** (the signature appears), **Contradicted** (absent or reversed: the term is "
-         "reported as statistical, not physics), **Not testable with this data** (reason given), **Not yet tested** "
-         f"(the test belongs to a later workstream). Basis: {reg.get('basis')}.", "",
+         "reported as statistical, not physics), **Not testable with this data** (this run cannot measure the "
+         "signature, or the estimate is too uncertain to test it; reason given), **Not yet tested** (the test belongs "
+         "to a later workstream). A fitted value is Supported against a published range only when its ±2 SE interval "
+         f"overlaps the range and is no wider than it. Basis: {reg.get('basis')}.", "",
          "| mechanism | IF it holds, THEN … | test | verdict | statistic |", "|---|---|---|---|---|"]
     for r in reg.get("rows") or []:
         why = "; ".join(x for x in (r.get("reason") or r.get("basis"), r.get("note")) if x)
         verdict = f"**{r['label']}**" + (f" — {why}" if why else "")
         stat = r.get("statistic_text") or "—"
         if r.get("interval"):
-            stat += f" (±2 SE: {_fmt(r['interval'][0])} to {_fmt(r['interval'][1])}; range {r['reference']['text']})" \
-                if r.get("reference") else ""
+            stat += (f" (±2 SE: {_fmt(r['interval'][0])} to {_fmt(r['interval'][1])}"
+                     + (f"; range {r['reference']['text']}" if r.get("reference") else "") + ")")
         L.append(f"| {r['mechanism']}({r['sig']}) {_md(r['name'])} | {_md(r['then'])} | {_md(r['test'])} "
                  f"({r['workstream']}) | {_md(verdict)} | {_md(stat)} |")
     ctxs = [r for r in reg.get("rows") or [] if r.get("context")]
@@ -798,8 +931,9 @@ def mechanisms_markdown(reg: dict | None) -> str:
             note = r.get("status_note") or ""
             if r.get("prior"):
                 note += f" Prior N({r['prior']['mean']:g}, {r['prior']['sd']:g}²), information only."
-            L.append(f"| {_md(r['label'])} | {_md(val)} | {_md(pub)} | {_md(src)} | {r['status'].replace('_', ' ')} "
-                     f"| {_md(note.strip())} |")
+            status = r["status"].replace("_", " ") + (" (imprecise: see note)"
+                                                       if r.get("interval_informative") is False else "")
+            L.append(f"| {_md(r['label'])} | {_md(val)} | {_md(pub)} | {_md(src)} | {status} | {_md(note.strip())} |")
         if P.get("rows") and P["rows"][0].get("derivation"):
             L += ["", f"*Derivation:* {P['rows'][0]['derivation']}."]
         ts = P.get("timescales")
@@ -820,14 +954,9 @@ def mechanisms_markdown(reg: dict | None) -> str:
 
 
 # --------------------------------------------------------------------------- files (old run directories)
-def forcing_t2m_K(physics: dict | None, config_dir=None) -> float | None:
-    """The ERA5 2 m temperature (K) of a run's forcing: ``forcing_info.t2m_K`` (runs made after it was
-    recorded), else read from the forcing JSON (``physics.forcing``, relative to ``config_dir``)."""
-    ph = physics or {}
-    t = (ph.get("forcing_info") or {}).get("t2m_K")
-    if _num(t):
-        return float(t)
-    rel = ph.get("forcing")
+def _forcing_blob(physics: dict | None, config_dir=None) -> dict | None:
+    """The forcing JSON named by ``physics.forcing`` (relative to ``config_dir``), or None."""
+    rel = (physics or {}).get("forcing")
     if not rel:
         return None
     p = Path(rel)
@@ -837,7 +966,17 @@ def forcing_t2m_K(physics: dict | None, config_dir=None) -> float | None:
         blob = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    era = blob.get("era5") or {}
+    return blob if isinstance(blob, dict) else None
+
+
+def forcing_t2m_K(physics: dict | None, config_dir=None) -> float | None:
+    """The ERA5 2 m temperature (K) of a run's forcing: ``forcing_info.t2m_K`` (runs made after it was
+    recorded), else read from the forcing JSON (``physics.forcing``, relative to ``config_dir``)."""
+    ph = physics or {}
+    t = (ph.get("forcing_info") or {}).get("t2m_K")
+    if _num(t):
+        return float(t)
+    era = (_forcing_blob(ph, config_dir) or {}).get("era5") or {}
     t = (era.get("values") or {}).get("t2m")
     if not _num(t) and _num(era.get("t2m_C")):
         t = float(era["t2m_C"]) + 273.15
@@ -858,10 +997,17 @@ def mechanisms_for_run(run_dir, config: dict | None = None, *, write: bool = Tru
         params = None
     cfg = copy.deepcopy(config if config is not None else (m.get("config") or {}))
     ph = cfg.setdefault("physics", {})
-    if not _num((ph.get("forcing_info") or {}).get("t2m_K")):
-        t = forcing_t2m_K(ph, (m.get("provenance") or {}).get("config_dir"))
-        if t is not None and ph.get("forcing_info") is not None:
-            ph["forcing_info"] = {**ph["forcing_info"], "t2m_K": t}
+    fi = ph.get("forcing_info")
+    if ph.get("forcing") and not (isinstance(fi, dict) and _num(fi.get("t2m_K")) and fi.get("hours_local")):
+        # runs made before forcing_info carried them: read the 2 m temperature and local hours from the file
+        cdir = (m.get("provenance") or {}).get("config_dir")
+        fi = dict(fi) if isinstance(fi, dict) else {"file": ph["forcing"]}
+        t = forcing_t2m_K(ph, cdir)
+        if t is not None and not _num(fi.get("t2m_K")):
+            fi["t2m_K"] = t
+        if not fi.get("hours_local"):
+            fi["hours_local"] = (_forcing_blob(ph, cdir) or {}).get("hours_local")
+        ph["forcing_info"] = fi
     reg = evaluate(m, params if isinstance(params, list) else None, cfg)
     if write:
         with progress.run_dir_scope(run_dir):

@@ -1311,10 +1311,10 @@ const MECH_BASIS = { product: "The target is an interpolated area-wide product, 
 function mechanisms() {
   const R = DATA.mechanisms; if (!R || !(R.rows || []).length) return;
   $("mechCard").hidden = false;
-  $("mechCap").textContent = "Each physics term is written as an if–then claim: IF the mechanism holds, THEN a signature must appear that fitting this map did not force. Supported: the signature appears. Contradicted: it is absent or reversed, so the term is read as a statistical term, not physics, and is not used to explain scenarios. Not testable with this data: this run cannot measure the signature (the reason is given). Not yet tested: the test belongs to a later step of the physics plan (named). " + (MECH_BASIS[R.target_kind] || "The config does not say whether the target is measurements or an interpolated product (data.target_kind), so the basis of the verdicts is unspecified.");
+  $("mechCap").textContent = "Each physics term is written as an if–then claim: IF the mechanism holds, THEN a signature must appear that fitting this map did not force. Supported: the signature appears. Contradicted: it is absent or reversed, so the term is read as a statistical term, not physics, and is not used to explain scenarios. Not testable with this data: this run cannot measure the signature, or the estimate is too uncertain to test it (the reason is given); a fitted value counts as Supported against a published range only when its ±2 SE interval overlaps the range and is no wider than the range itself. Not yet tested: the test belongs to a later step of the physics plan (named). " + (MECH_BASIS[R.target_kind] || "The config does not say whether the target is measurements or an interpolated product (data.target_kind), so the basis of the verdicts is unspecified.");
   const rows = R.rows.map((r) => {
     const st = el("div"); st.textContent = r.statistic_text || "—";
-    if (r.interval && r.reference) st.append(el("div", { class: "why" }, `±2 SE: ${nfmt(r.interval[0], 1)} to ${nfmt(r.interval[1], 1)}; range ${r.reference.text}`));
+    if (r.interval) st.append(el("div", { class: "why" }, `±2 SE: ${nfmt(r.interval[0], 1)} to ${nfmt(r.interval[1], 1)}` + (r.reference ? `; range ${r.reference.text}` : "")));
     return [`${r.mechanism}(${r.sig}) ${r.name}`, withWhy(document.createTextNode(r.then), r.context), `${r.test} (${r.workstream})`, withWhy(mechPill(r.status, r.label), [r.reason || r.basis, r.note].filter(Boolean).join("; ")), st];
   });
   $("tbl-mech").append(table(["Mechanism", "IF it holds, THEN …", "Test", "Verdict", "Statistic"], rows, () => false));
@@ -1326,8 +1326,8 @@ function mechanisms() {
   const prow = P.rows.map((r) => {
     const d = dec(r.key); const val = r.value == null ? "—" : `${fmt(r.value, d)}${r.se != null ? ` ± ${fmt(r.se, d)}` : ""} ${r.unit}`;
     const vcell = withWhy(document.createTextNode(val), r.prior ? `prior N(${r.prior.mean}, ${r.prior.sd}²)` : "");
-    const status = { inside: "inside", outside: "outside", not_comparable: "not comparable" }[r.status] || r.status;
-    return [withWhy(document.createTextNode(r.label), r.status_note), vcell, r.published ? r.published.text : "—", r.published ? r.published.source : "—", mechPill(r.status, status)];
+    const status = ({ inside: "inside", outside: "outside", not_comparable: "not comparable" }[r.status] || r.status) + (r.interval_informative === false ? " (imprecise)" : "");
+    return [withWhy(document.createTextNode(r.label), r.status_note), vcell, r.published ? r.published.text : "—", r.published ? r.published.source : "—", mechPill(r.interval_informative === false ? "imprecise" : r.status, status)];
   });
   $("tbl-mechpanel").append(table(["Quantity", "Value ± SE", "Published range", "Source", "Status"], prow, (i) => i === 1));
   const ts = P.timescales; if (ts && (ts.rows || []).length) { $("mechTimeCap").hidden = false;
