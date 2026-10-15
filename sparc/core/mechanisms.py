@@ -28,17 +28,33 @@ combinations r_a = τ/h and L² = Kτ, not τ, h and K separately; the time scal
 mixing depth h are labelled as such.
 
 Uncertainty over the K cross-validation folds is the delete-a-group jackknife already used for every
-decision quantity (:meth:`sparc.core.ensemble.FittedEnsemble.jackknife_sd`): SE = sd·√(K−1).
+decision quantity (:meth:`sparc.core.ensemble.FittedEnsemble.jackknife_sd`): SE = sd·√(K−1) = s·(K−1)/√K,
+with s the sample sd of the K fold values.  The inflation depends on K, the number of groups (the fold models
+share K−2 groups), so when the physics term is disabled in some folds the SE of the remaining m values is
+s_m·(K−1)/√K, not the m-replicate formula s_m·(m−1)/√m (which would understate it ≈ 1.5× for m = 3 of K = 5
+and ≈ 2.5× for m = 2).
 
 Range tests (M6a, M7a)
 ----------------------
 A fitted value is compared with a published range through its mean ± 2 SE interval:
 
+* Not testable when the interval is not a valid jackknife interval: fewer than three usable folds (with two, the
+  interval has one degree of freedom and ±2 SE is far too narrow), or fewer than K−1 of the K folds with the
+  physics term on (a subset chosen by the fit itself);
 * Contradicted when the interval lies entirely outside the range: the data exclude it, however wide;
-* Supported only when the interval overlaps the range AND is informative: no wider than the range itself (a
-  wider interval cannot lie inside the range, so it cannot tell inside from outside) and, for r_a, above zero.
-  A parameter the data cannot pin down cannot be Supported, whatever its point estimate (plan W3);
-* Not testable otherwise, and with fewer than two usable folds (no jackknife interval).
+* Supported only when the point estimate lies inside the range AND the interval is informative: no wider than
+  the range itself (a wider interval cannot lie inside the range, so it cannot tell inside from outside) and,
+  for r_a, above zero.  A parameter the data cannot pin down cannot be Supported, whatever its point estimate
+  (plan W3), and an interval that only reaches the range from an estimate outside it is not evidence that the
+  signature appears;
+* Not testable otherwise, with the reason.
+
+Fit bounds (plan F6)
+--------------------
+A fold value stopped by a fit bound (L at its bounds, s, a₁, κ … at the ends of their sigmoids, the EF slopes and
+the water sink at their softplus floor) is not an estimate: the fit wanted to go further.  Such rows are flagged
+"at the fit bound in k of m folds: not identified by this run", and when every fold sits there no SE is given
+(the folds agree only because the bound stops them).
 
 The ranges are stated for one regime: the lapse-rate band "in the well-mixed afternoon", and r_a's ≈ 20–100
 s/m as the plan applies it to the afternoon map (Crawford et al. 2018 is for unstable conditions; the verified
@@ -89,6 +105,23 @@ OMEGA_DAY = 2.0 * math.pi / 86400.0       # s⁻¹, the daily harmonic (W6's qua
 H_ASSUMED_M = (20.0, 50.0)                # canopy-layer mixing depths assumed for the time scales (W6)
 #: same defaults as ``physics.PHYSICS_DEFAULTS`` / ``config.DEFAULTS`` (not imported: keeps this module light)
 _SW_DEFAULT, _LW_DEFAULT = 800.0, -100.0
+#: Fit bounds of the source parameters, from ``physics.PhysicsModel._transform`` (not imported: keeps this module
+#: light; a test checks them against physics.py): (low, high, scale).  "lin": a sigmoid onto [low, high];
+#: "log": a sigmoid onto [log low, log high]; "floor": a softplus, ≥ 0 with no upper bound.  L's bounds are
+#: per run (``L_bounds_m``, log scale).
+FIT_BOUNDS = {
+    "s": (0.0, 1.0, "lin"), "a1": (0.0, 1.0, "lin"), "a1n": (0.0, 1.0, "lin"),
+    "kappa_canopy": (0.05, 20.0, "log"), "shade_c0": (0.05, 0.95, "lin"), "shade_width": (0.02, 0.5, "lin"),
+    "e1": (0.0, None, "floor"), "e2": (0.0, None, "floor"), "e3": (0.0, None, "floor"), "w": (0.0, None, "floor"),
+}
+#: A fold value within this fraction of the bounded range (on the transform's own scale) is at the bound: the
+#: sigmoid's slope there is below ≈ 0.5%, so the optimiser has stopped moving it.
+AT_BOUND_FRAC = 0.005
+#: A softplus-floored value below 10⁻³ of its unit is at the floor (the softplus slope is then < 10⁻³); the water
+#: sink is w = 100·softplus(·) W/m² (``physics._W_SCALE``), so its floor tolerance is 0.1 W/m².
+FLOOR_TOL = {"e1": 1e-3, "e2": 1e-3, "e3": 1e-3, "w": 0.1}
+#: decimals shown per panel row (default 3)
+_ND = {"L": 0, "v": 0, "w": 0, "r_a": 1, "gamma": 1}
 
 # --------------------------------------------------------------------------- published ranges (verified list)
 RA_RANGE = (20.0, 100.0)                  # s m⁻¹
@@ -148,8 +181,10 @@ _NORM_TEXT = "norm (norm = SW↓ by day, |LW_net| at night)"      # replaced by 
 #: Ten mechanisms of plan §4.  ``kind`` of a signature: ``evaluate`` (tested here), ``multi_window``
 #: (not testable from one window), ``workstream`` (the test is not built yet) or ``missing_term``
 #: (the term is not in the model).  ``roles``: the physics roles whose effect the mechanism explains.
+#: ``shortwave``: the pathway exists only with sunlight — the night source (Q* = LW_net) has no albedo or shade
+#: term (``PhysicsModel._q_points_torch``), so M1 does not act in a night window.
 REGISTER = (
-    {"id": "M1", "name": "Absorbed sunlight", "terms": "albedo, canopy shade", "in_model": True,
+    {"id": "M1", "name": "Absorbed sunlight", "terms": "albedo, canopy shade", "in_model": True, "shortwave": True,
      "chain": "albedo, canopy → absorbed shortwave SW↓·(1 − albedo)·(1 − s·h(canopy)) → Q* → Q_H → q → "
               "transport G → ΔT",
      "roles": ("albedo", "canopy"), "refs": (),
@@ -268,14 +303,23 @@ def _num(v) -> bool:
         return False
 
 
-def _jackknife_se(values) -> float | None:
-    """Delete-a-group jackknife SE over K fold models (the repo's decision-quantity helper)."""
+def _jackknife_se(values, n_groups: int | None = None) -> float | None:
+    """Delete-a-group jackknife SE over fold models (the repo's decision-quantity helper).
+
+    With all K fold values it is ``FittedEnsemble.jackknife_sd``: sd·√(K−1) = s·(K−1)/√K.  With only m < K of them
+    (``n_groups`` = K; the physics term disabled in the others) the inflation stays the K-group one,
+    s_m·(K−1)/√K with s_m the sample sd of the m values: the replicates still share K−2 groups each."""
     import numpy as np
 
     from sparc.core.ensemble import FittedEnsemble
 
     v = np.asarray(values, float)
-    return float(FittedEnsemble.jackknife_sd(v)) if v.size > 1 else None
+    if v.size < 2:
+        return None
+    K = int(n_groups or v.size)
+    if K <= v.size:
+        return float(FittedEnsemble.jackknife_sd(v))
+    return float(v.std(ddof=1) * (K - 1) / math.sqrt(K))
 
 
 def to_kelvin_factor(units) -> float | None:
@@ -341,6 +385,20 @@ def _active(p: dict) -> bool:
     return _num(p.get("a")) and float(p["a"]) > 0 and not p.get("fit_warning")
 
 
+def _physics_off(cfg: dict | None) -> str | None:
+    """Why the config fits no physics model (the pipeline's test, ``pipeline._base_model_names``); None when it
+    does or the config does not say."""
+    c = cfg or {}
+    models, ph = c.get("models") or {}, c.get("physics") or {}
+    if not models.get("physics", True):
+        return "models.physics is off"
+    if not ph.get("enabled", True):
+        return "physics.enabled is false"
+    if "roles" in ph and not (ph.get("roles") or {}):
+        return "physics.roles is empty"
+    return None
+
+
 def _basis(target_kind) -> tuple[str | None, str]:
     kind = target_kind if target_kind in TARGET_KINDS else (None if target_kind in (None, "") else target_kind)
     if kind in BASIS:
@@ -375,22 +433,25 @@ class _Folds:
         return self.params[0].get(key, default) if self.params else default
 
     def stat(self, key: str, scale: float = 1.0, transform=None) -> dict | None:
-        """Mean, jackknife SE and per-fold values of ``key`` × ``scale`` over the folds with physics on."""
+        """Mean, jackknife SE and per-fold values of ``key`` × ``scale`` over the folds with physics on; ``n`` the
+        folds used, ``n_groups`` the K folds of the run (the jackknife's groups)."""
         if self.params:
             vals = [float(p[key]) for p in self.active if _num(p.get(key))]
             if not vals:
                 return None
             f = transform or (lambda x: x * scale)
             vals = [float(f(v)) for v in vals]
-            return {"value": sum(vals) / len(vals), "se": _jackknife_se(vals), "per_fold": vals, "n": len(vals)}
+            return {"value": sum(vals) / len(vals), "se": _jackknife_se(vals, self.n), "per_fold": vals,
+                    "n": len(vals), "n_groups": self.n}
         if self.summary and self.n_active and isinstance(self.summary.get(key), dict):
             s = self.summary[key]
             if not _num(s.get("mean")):
                 return None
             if transform is not None:          # nonlinear: no SE from a mean/sd summary
-                return {"value": float(transform(float(s["mean"]))), "se": None, "per_fold": None, "n": self.n}
+                return {"value": float(transform(float(s["mean"]))), "se": None, "per_fold": None, "n": self.n,
+                        "n_groups": self.n}
             se = float(s.get("sd") or 0.0) * math.sqrt(self.n - 1) * abs(scale) if self.n > 1 else None
-            return {"value": float(s["mean"]) * scale, "se": se, "per_fold": None, "n": self.n}
+            return {"value": float(s["mean"]) * scale, "se": se, "per_fold": None, "n": self.n, "n_groups": self.n}
         return None
 
 
@@ -399,6 +460,25 @@ def _interval(st: dict | None) -> list[float] | None:
     if not st or st.get("value") is None or st.get("se") is None:
         return None
     return [st["value"] - 2.0 * st["se"], st["value"] + 2.0 * st["se"]]
+
+
+def _fold_precision(st: dict | None) -> str | None:
+    """Why the ±2 SE interval of ``st`` is not a valid jackknife interval (None when it is): no SE (one usable
+    fold), fewer than K−1 of the K folds (a subset of the delete-a-group replicates chosen by the fit itself), or
+    fewer than three fold values (one degree of freedom: ±2 SE is far too narrow)."""
+    if _interval(st) is None:
+        return "only one fold with the physics term on: no jackknife interval"
+    n, K = st.get("n"), st.get("n_groups")
+    if n is None:
+        return None
+    if K and n < K - 1:
+        return (f"the physics term is on in only {n} of {K} folds: an interval from a subset of the delete-a-group "
+                "replicates, chosen by the fit itself (the others were anti-physical), is not a valid jackknife "
+                f"interval (a test needs at least {K - 1})")
+    if n < 3:
+        return (f"only {n} folds with the physics term on: their interval has one degree of freedom, so ±2 SE is far "
+                "too narrow (a test needs at least three)")
+    return None
 
 
 def _fmt(v, nd=1) -> str:
@@ -412,19 +492,22 @@ def _range_check(st: dict, band: tuple[float, float], sym: str, *, positive: boo
     """A fitted value against a published range (module docstring, "Range tests").
 
     ``status`` (the panel) is where the point estimate lies, inside / outside.  ``verdict`` (the register) comes
-    from the mean ± 2 SE interval: contradicted if it lies entirely outside the range; supported only if it
-    overlaps the range and is informative — no wider than the range (a wider interval cannot lie inside it, so it
-    cannot tell inside from outside) and, for a ``positive`` quantity, above zero; otherwise not testable,
-    with ``why``."""
+    from the mean ± 2 SE interval: not testable unless it is a valid jackknife interval (:func:`_fold_precision`);
+    contradicted if it lies entirely outside the range; supported only if the point estimate lies inside the range
+    and the interval is informative — no wider than the range (a wider interval cannot lie inside it, so it cannot
+    tell inside from outside) and, for a ``positive`` quantity, above zero; otherwise not testable, with ``why``.
+    ``informative``: the interval is precise enough to test the range (whatever the verdict)."""
     v = st["value"]
-    out = {"status": "inside" if band[0] <= v <= band[1] else "outside", "overlaps": None, "informative": False,
+    inside = band[0] <= v <= band[1]
+    out = {"status": "inside" if inside else "outside", "overlaps": None, "informative": False,
            "verdict": "not_testable", "why": None}
     iv = _interval(st)
-    if iv is None:
-        out["why"] = ("only one fold with the physics term on: no jackknife interval, so the range cannot be "
-                      "tested")
+    if iv is not None:
+        out["overlaps"] = bool(iv[1] >= band[0] and iv[0] <= band[1])
+    bad = _fold_precision(st)
+    if bad:
+        out["why"] = f"{bad}, so the range cannot be tested"
         return out
-    out["overlaps"] = bool(iv[1] >= band[0] and iv[0] <= band[1])
     span = f"±2 SE: {_fmt(iv[0])} to {_fmt(iv[1])}"
     if not out["overlaps"]:
         out.update(informative=True, verdict="contradicted")
@@ -433,6 +516,11 @@ def _range_check(st: dict, band: tuple[float, float], sym: str, *, positive: boo
                       "pinned down by this run")
     elif positive and iv[0] <= 0:
         out["why"] = f"the interval reaches {sym} ≤ 0, which is not physical ({span}): {sym} is not pinned down"
+    elif not inside:
+        out.update(informative=True,
+                   why=(f"inconclusive: the point estimate {sym} = {_fmt(v)} lies outside the range and the ±2 SE "
+                        f"interval only reaches it ({span}), so the data neither place {sym} inside the range nor "
+                        "exclude it"))
     else:
         out.update(informative=True, verdict="supported")
     return out
@@ -452,32 +540,113 @@ def _context(manifest: dict | None, fold_params, config: dict | None, units=None
     ph = cfg.get("physics") or {}
     data = cfg.get("data") or {}
     units = units if units is not None else data.get("target_units")
-    folds = _Folds(fold_params, m.get("physics"), (m.get("cv") or {}).get("n_folds"))
+    off = _physics_off(cfg)
+    # a config without a physics model has no physics parameters, whatever files lie in the run directory
+    folds = _Folds(None, None, 0) if off else _Folds(fold_params, m.get("physics"), (m.get("cv") or {}).get("n_folds"))
     window = str(folds.first("window") or ph.get("window") or "day").lower()
     roles_used = folds.first("roles_used")
     if roles_used is None:
         roles_used = [r for r, col in (ph.get("roles") or {}).items() if col]
     shade_form = str(folds.first("shade_form") or ph.get("shade_form") or "saturating").lower()
     return {"cfg": cfg, "physics": ph, "units": units, "folds": folds, "window": window,
-            "roles_used": sorted(roles_used), "shade_form": shade_form, "enabled": ph.get("enabled", True),
+            "roles_used": sorted(roles_used), "shade_form": shade_form, "physics_off": off,
+            # sunlight reaches the source: a day window with SW↓ > 0 (else Q* = LW_net, no albedo or shade term)
+            "shortwave": window == "day" and forcing_norm(ph, window)[1] == "SW↓",
             "target_kind": data.get("target_kind"), "manifest": m}
+
+
+def _bound_of(key: str, fold: dict | None) -> tuple[float, float | None, str] | None:
+    """(low, high, scale) of a fitted parameter's fit bound (:data:`FIT_BOUNDS`; L from the fold's
+    ``L_bounds_m``), None for an unbounded one."""
+    if key == "L_m":
+        lb = (fold or {}).get("L_bounds_m")
+        if isinstance(lb, (list, tuple)) and len(lb) == 2 and all(_num(x) and float(x) > 0 for x in lb):
+            return float(lb[0]), float(lb[1]), "log"
+        return None
+    return FIT_BOUNDS.get(key)
+
+
+def _which_bound(v: float, bnd: tuple[float, float | None, str], key: str) -> tuple[str, float] | None:
+    """("lower" | "upper", bound) when ``v`` sits at a fit bound (:data:`AT_BOUND_FRAC`, :data:`FLOOR_TOL`)."""
+    lo, hi, scale = bnd
+    if scale == "floor":
+        return ("lower", lo) if v <= lo + FLOOR_TOL.get(key, 1e-3) else None
+    if scale == "log":
+        if v <= 0:
+            return "lower", lo
+        x, a, b = math.log(v), math.log(lo), math.log(hi)
+    else:
+        x, a, b = v, lo, hi
+    tol = AT_BOUND_FRAC * (b - a)
+    if x <= a + tol:
+        return "lower", lo
+    if x >= b - tol:
+        return "upper", hi
+    return None
+
+
+def _flag_bound(row: dict, key: str, F: "_Folds") -> dict:
+    """Flag a panel row whose fold values sit at a fit bound (plan F6): such a value is where the bound stopped
+    the fit, not an estimate.  Sets ``at_bound`` and the note; with every fold there, drops the SE and interval
+    (the folds agree only because the bound stops them).  Rows without per-fold values (manifest summary) are
+    checked through their mean (at a bound only if every fold is)."""
+    if row.get("value") is None:
+        return row
+    if F.params:
+        folds = [p for p in F.active if _num(p.get(key))]
+        pairs = [(float(p[key]), _bound_of(key, p)) for p in folds]
+    else:
+        pairs = [(float(row["value"]), _bound_of(key, None))] if _bound_of(key, None) else []
+    hits = [h for v, b in pairs if b is not None for h in [_which_bound(v, b, key)] if h is not None]
+    if not hits:
+        return row
+    n = len(pairs) if F.params else int(row.get("n") or 1)
+    k = len(hits) if F.params else n
+    sides = sorted({s for s, _ in hits})
+    side = sides[0] if len(sides) == 1 else "lower and upper"
+    nd = _ND.get(row["key"], 3)
+    bound = " and ".join(f"{_fmt(b, nd)}" for b in sorted({b for _, b in hits}))
+    unit = f" {row['unit']}" if row["key"] in ("L", "w") else ""
+    every = k == n
+    text = (f"at the {side} fit bound ({bound}{unit}) in {k} of {n} folds: not identified by this run"
+            + (" (no SE: the folds agree only because the bound stops them)" if every else
+               " (the SE treats the bound value as an estimate, so it understates the uncertainty)"))
+    row["at_bound"] = {"side": side, "bound": [b for _, b in hits][0] if len(sides) == 1 else None, "k": k, "n": n,
+                       "every_fold": every, "text": text}
+    if every:
+        row.update(se=None, interval=None)
+    row["status_note"] = "; ".join(x for x in (text, row.get("status_note")) if x)
+    return row
+
+
+def _value_text(row: dict, bound: bool = True) -> str:
+    """'value ± SE unit', with the fit-bound flag (``bound``) when the fold values sit at a bound."""
+    if row.get("value") is None:
+        return "—"
+    nd = _ND.get(row["key"], 3)
+    s = _fmt(row["value"], nd) + (f" ± {_fmt(row['se'], nd)}" if row.get("se") is not None else "") + f" {row['unit']}"
+    ab = row.get("at_bound")
+    if ab and bound:
+        s += f" (at the {ab['side']} fit bound in {ab['k']} of {ab['n']} folds: not identified)"
+    return s
 
 
 def _source_rows(ctx: dict) -> list[dict]:
     """The fitted source parameters (s, κ, a₁/a₁ₙ, EF slopes, water sink) with their priors as information."""
     F, roles, day = ctx["folds"], set(ctx["roles_used"]), ctx["window"] == "day"
+    sun = ctx["shortwave"]                        # the shade terms multiply SW↓: none without sunlight
     priors = F.first("priors") or ctx["physics"].get("priors") or {}
     sigmoid = ctx["shade_form"] == "sigmoid"
     no_range = "no published range for this coefficient in the plan's verified reference list"
     specs = [
-        ("s", "Canopy shading strength s", "fraction of absorbed sunlight", day and "canopy" in roles, "s",
+        ("s", "Canopy shading strength s", "fraction of absorbed sunlight", sun and "canopy" in roles, "s",
          "Appendix D: with a tight prior (sd 0.1) s stayed near its prior even for a displaced canopy layer; "
          "whether this map identifies s is the profile-likelihood test (W3)", ()),
-        ("kappa_canopy", "Shade saturation scale κ", "canopy fraction", day and "canopy" in roles and not sigmoid,
+        ("kappa_canopy", "Shade saturation scale κ", "canopy fraction", sun and "canopy" in roles and not sigmoid,
          None, "weak log-normal regulariser log κ ~ N(0, 3²); large κ is a linear shade response", ()),
-        ("shade_c0", "Shade inflection c₀", "canopy fraction", day and "canopy" in roles and sigmoid, None,
+        ("shade_c0", "Shade inflection c₀", "canopy fraction", sun and "canopy" in roles and sigmoid, None,
          no_range, ()),
-        ("shade_width", "Shade transition width", "canopy fraction", day and "canopy" in roles and sigmoid, None,
+        ("shade_width", "Shade transition width", "canopy fraction", sun and "canopy" in roles and sigmoid, None,
          no_range, ()),
         ("a1", "Impervious heat storage a₁", "fraction of Q*", day and "impervious" in roles, "a1",
          "Grimmond & Oke (1999) give OHM coefficients per surface type; this a₁ multiplies impervious fraction × "
@@ -505,11 +674,12 @@ def _source_rows(ctx: dict) -> list[dict]:
         if st is None:
             continue
         pr = priors.get(prior_key) if prior_key else None
-        rows.append({"key": key, "label": label, "unit": unit, **st, "interval": _interval(st), "published": None,
-                     "status": "not_comparable", "status_note": note, "refs": list(refs), "group": "source",
-                     "prior": ({"mean": float(pr[0]), "sd": float(pr[1]),
-                                "note": "information only; prior sensitivity is not yet tested (W3 power-scaling)"}
-                               if pr and len(pr) == 2 else None)})
+        rows.append(_flag_bound(
+            {"key": key, "label": label, "unit": unit, **st, "interval": _interval(st), "published": None,
+             "status": "not_comparable", "status_note": note, "refs": list(refs), "group": "source",
+             "prior": ({"mean": float(pr[0]), "sd": float(pr[1]),
+                        "note": "information only; prior sensitivity is not yet tested (W3 power-scaling)"}
+                       if pr and len(pr) == 2 else None)}, key, F))
     return rows
 
 
@@ -537,7 +707,8 @@ def _range_row(key, label, unit, st, band, text, source, sym, reasons, note, *, 
     if st is None or st.get("value") is None:
         return row
     chk = _range_check(st, band, sym, positive=positive)
-    row.update(status=chk["status"], interval_overlaps=chk["overlaps"], interval_informative=chk["informative"])
+    row.update(status=chk["status"], interval_overlaps=chk["overlaps"], interval_informative=chk["informative"],
+               check_note=chk["why"])
     if chk["why"]:
         row["status_note"] = "; ".join(x for x in (row["status_note"], chk["why"]) if x)
     return row
@@ -605,13 +776,15 @@ def _panel(ctx: dict) -> dict:
     L = F.stat("L_m")
     lb = F.first("L_bounds_m")
     L_prior = ((ctx["manifest"].get("influence") or {}).get("L_prior_m"))
-    rows.append({"key": "L", "label": "Mixing length L", "unit": "m",
-                 **(L or {"value": None, "se": None, "per_fold": None, "n": 0}), "interval": _interval(L),
-                 "published": None, "status": "not_comparable", "refs": [], "group": "transport",
-                 "status_note": ("L² = Kτ: one map identifies the product, not K and τ separately (F4); no published "
-                                 "range in the verified list"
-                                 + (f"; S1 correlogram prior L₀ = {L_prior:.0f} m" if _num(L_prior) else "")
-                                 + (f"; fit bounds {lb[0]:.0f}–{lb[1]:.0f} m" if lb and len(lb) == 2 else ""))})
+    rows.append(_flag_bound(
+        {"key": "L", "label": "Mixing length L", "unit": "m",
+         **(L or {"value": None, "se": None, "per_fold": None, "n": 0}), "interval": _interval(L),
+         "published": None, "status": "not_comparable", "refs": [], "group": "transport",
+         "status_note": ("L² = Kτ: one map identifies the product, not K and τ separately (F4); no published "
+                         "range in the verified list"
+                         + (f"; S1 correlogram prior L₀ = {L_prior:.0f} m" if _num(L_prior) else "")
+                         + (f"; fit bounds {lb[0]:.0f}–{lb[1]:.0f} m" if lb and len(lb) == 2 else ""))},
+        "L_m", F))
     v = F.stat("v_norm_m")
     if v and v["value"] > 1.0:
         adv = ctx["manifest"].get("physics_advection")
@@ -631,34 +804,71 @@ def _panel(ctx: dict) -> dict:
             r["status"] = "not_comparable"
     for r in rows:
         r["basis"] = basis if r.get("value") is not None else None
+        r["value_text"] = _value_text(r)
+    pinned = [r["label"] for r in rows if r.get("at_bound")]
+    if pinned:
+        notes.append(f"At a fit bound in at least one fold: {', '.join(pinned)}. A value stopped by a fit bound is "
+                     "not an estimate, so these parameters are not identified by this run whatever their SE (plan F6); "
+                     "the W3 profile likelihood will test identifiability properly.")
+    ra_row = next((r for r in rows if r["key"] == "r_a"), None)
     return {"rows": rows, "physics_status": status, "n_folds": F.n, "n_active": F.n_active, "source": F.source,
             "window": window, "units": ctx["units"], "to_kelvin": fK, "t2m_K": t_K, "t2m_note": t_note,
             "t2m_known": t_known, "rho_cp": rcp, "pressure_Pa": P_STD, "norm": norm, "norm_label": norm_label,
             "basis": basis, "target_kind": kind, "forcing_known": forcing_ok, "forcing_note": forcing_note,
             "afternoon": afternoon,
-            "timescales": _timescales(ra, v, ph, None if forcing_ok else f"the generic default {norm_label}"),
+            "timescales": _timescales(ra_row, v, ph, None if forcing_ok else f"the generic default {norm_label}"),
             "identified_products": "One afternoon map identifies r_a = τ/h and L² = Kτ, not τ, h and K separately "
                                    "(F4); the panel does not split them.",
             "identifiability": "not yet tested: W3 profile likelihood",
             "prior_sensitivity": "not yet tested: W3 power-scaling",
-            "uncertainty": "mean ± delete-a-group jackknife SE over the fold models (SE = sd·√(K−1))",
+            "uncertainty": "mean ± delete-a-group jackknife SE over the fold models (SE = sd·√(K−1) = s·(K−1)/√K; "
+                           "with folds disabled, s is the sample sd of the remaining folds and K stays the run's "
+                           "number of folds)",
+            "at_bound": [r["key"] for r in rows if r.get("at_bound")],
             "notes": notes}
+
+
+def _ra_pinned(ra: dict) -> str | None:
+    """Why r_a is not pinned down by this run (None when it is): no valid jackknife interval
+    (:func:`_fold_precision`), an interval reaching r_a ≤ 0, or — where the published range applies — one wider
+    than that range (the range test's own criterion)."""
+    bad = _fold_precision(ra)
+    if bad:
+        return bad
+    iv = _interval(ra)
+    span = f"{_fmt(iv[0])} to {_fmt(iv[1])} s/m"
+    if iv[0] <= 0:
+        return f"its ±2 SE interval, {span}, reaches r_a ≤ 0"
+    pub = ra.get("published")
+    if pub and iv[1] - iv[0] > pub["high"] - pub["low"]:
+        return f"its ±2 SE interval, {span}, is wider than the published range"
+    return None
 
 
 def _timescales(ra: dict | None, v: dict | None, ph: dict, forcing_assumed: str | None = None) -> dict | None:
     """Informational time scales from an *assumed* mixing depth h: τ = r_a·h and ωτ (W6's quasi-steady
-    argument); a kept advection drift bounds τ from below, since the canopy-layer wind is at most the 10 m one."""
+    argument), with ranges from r_a's ±2 SE interval (clipped at 0); a kept advection drift bounds τ from below,
+    since the canopy-layer wind is at most the 10 m one.  When r_a is not pinned down (:func:`_ra_pinned`) the
+    block says the time scales are not informative."""
     if not ra or not _num(ra.get("value")) or ra["value"] <= 0:
         return None
+    iv = _interval(ra)
     rows = []
     for h in H_ASSUMED_M:
         tau = ra["value"] * h
+        rng = [max(iv[0], 0.0) * h, iv[1] * h] if iv else None
         rows.append({"h_m": h, "tau_s": tau, "tau_min": tau / 60.0, "omega_tau": OMEGA_DAY * tau,
-                     "phase_lag_deg": math.degrees(math.atan(OMEGA_DAY * tau))})
+                     "phase_lag_deg": math.degrees(math.atan(OMEGA_DAY * tau)),
+                     "tau_min_range": [x / 60.0 for x in rng] if rng else None,
+                     "omega_tau_range": [OMEGA_DAY * x for x in rng] if rng else None})
+    why = _ra_pinned(ra)
     out = {"assumption": f"h is assumed, not fitted: canopy-layer depths of {H_ASSUMED_M[0]:g} and "
                          f"{H_ASSUMED_M[1]:g} m (W6). One map identifies r_a = τ/h only."
                          + (f" r_a itself rests on {forcing_assumed}, assumed (no forcing file)."
                             if forcing_assumed else ""),
+           "informative": why is None,
+           "caveat": (f"r_a is not pinned down by this run ({why}), so these time scales are not informative and "
+                      "say nothing about whether the steady operator holds" if why else None),
            "omega_per_s": OMEGA_DAY, "rows": rows, "advection_bound": None, "advection_note": None}
     wind = ph.get("wind")
     speed = math.hypot(float(wind[0]), float(wind[1])) if isinstance(wind, (list, tuple)) and len(wind) >= 2 \
@@ -696,8 +906,8 @@ def _default_row(mech: dict, sig: dict) -> dict:
 def _physics_block(ctx: dict) -> str | None:
     """Why no physics test can run (None when the physics term is on in at least one fold)."""
     F = ctx["folds"]
-    if not ctx["enabled"]:
-        return "the physics model is disabled in this run's config"
+    if ctx["physics_off"]:
+        return f"no physics model in this run ({ctx['physics_off']} in the config)"
     if not F.present:
         return "no physics model in this run (no physics.json and no physics summary)"
     if F.n_active == 0:
@@ -749,7 +959,13 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
                                 f"{_fmt(adv.get('delta_rmse_se'), 3)} {u}). An RMSE test is not the signature test: "
                                 "it cannot tell 'no advection' from 'advection the target cannot show' (F8).")
             if mech["id"] == "M4" and first and by_key.get("L") and by_key["L"].get("value") is not None:
-                r["context"] = f"Fitted L = {_fmt(by_key['L']['value'], 0)} ± {_fmt(by_key['L']['se'], 0)} m."
+                Lr = by_key["L"]
+                r["context"] = (f"Fitted L = {_fmt(Lr['value'], 0)}"
+                                + (f" ± {_fmt(Lr['se'], 0)}" if Lr.get("se") is not None else "") + " m"
+                                + (f", {Lr['at_bound']['text']}." if Lr.get("at_bound") else "."))
+            if mech.get("shortwave") and not ctx["shortwave"]:
+                r["note"] = (r["note"] + " " if r["note"] else "") + \
+                    "This run's source has no sunlight term (Q* = LW_net), so M1 does not act in its physics."
             missing = [x for x in mech["roles"] if x != _ALL and x not in ctx["roles_used"]]
             if sig["kind"] != "evaluate" and mech["roles"] and _ALL not in mech["roles"] \
                     and len(missing) == len(mech["roles"]):
@@ -763,6 +979,8 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
         chain = mech["chain"].replace(_NORM_TEXT, panel["norm_label"])      # the run's normaliser of q
         mechs.append({"id": mech["id"], "name": mech["name"], "terms": mech["terms"], "chain": chain,
                       "in_model": mech["in_model"], "roles": list(mech["roles"]), "status": st,
+                      "shortwave": bool(mech.get("shortwave")),
+                      "acts_in_run": bool(mech["in_model"] and (ctx["shortwave"] or not mech.get("shortwave"))),
                       "label": VERDICT_LABELS[st], "signatures": [r["id"] for r in mr], "refs": list(mech["refs"])})
     used = sorted({k for m in REGISTER for k in m["refs"]} | {"oreskes1994", "mooij2013", "shandas2019"})
     summary = {s: [r["id"] for r in rows if r["status"] == s] for s in VERDICTS}
@@ -780,16 +998,14 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
 def _eval_range(mech, sig, row, *, sym, name, unit, band, text, source, positive=False, notes=()) -> dict:
     """M6a / M7a: a panel row against its published range.  Not testable when the range does not apply to this
     run (the row's ``not_comparable_reason``) or the interval cannot test it (:func:`_range_check`)."""
-    st = {"value": row["value"], "se": row["se"]}
-    common = dict(statistic={"name": name, "value": row["value"], "se": row["se"], "unit": unit},
+    st = {k: row.get(k) for k in ("value", "se", "n", "n_groups")}
+    common = dict(statistic={"name": name, "value": row["value"], "se": row["se"], "unit": unit, "n": row.get("n"),
+                             "n_folds": row.get("n_groups")},
                   statistic_text=_stat_text(sym, st, unit), interval=_interval(st))
     if not row.get("comparable"):
         return _row(mech, sig, "not_testable", reason=row.get("not_comparable_reason"), **common)
     chk = _range_check(st, band, sym, positive=positive)
-    note = list(notes)
-    if chk["verdict"] == "supported" and chk["status"] == "outside":
-        note.append("the point estimate lies outside the range; the ±2 SE interval reaches it")
-    return _row(mech, sig, chk["verdict"], reason=chk["why"], note="; ".join(note) or None,
+    return _row(mech, sig, chk["verdict"], reason=chk["why"], note="; ".join(notes) or None,
                 reference={"low": band[0], "high": band[1], "text": text, "source": source}, **common)
 
 
@@ -824,7 +1040,9 @@ def _gates(rows: list[dict], mechs: list[dict], ctx: dict, physics_status: str) 
     A lever's own mechanisms are those naming its role (M1–M3, M8); the transport mechanisms (M4–M6) shape every
     lever's effect but test the overall gain and footprint, not the lever's pathway, so they never make a lever's
     explanation "supported" — they can only withdraw it, when contradicted.  Without an active physics term
-    (absent, or disabled as anti-physical in every fold) no lever acts through the physics."""
+    (absent, or disabled as anti-physical in every fold) no lever acts through the physics.  Only mechanisms that
+    act in this run's source count: without sunlight (a night window) M1 is not in the source, so canopy acts
+    through evaporation only and a lever whose only pathway is absorbed sunlight (albedo) does not enter it."""
     statements, plain = [], []
     contradicted = [m for m in mechs if m["status"] == "contradicted"]
     for m in contradicted:
@@ -835,7 +1053,7 @@ def _gates(rows: list[dict], mechs: list[dict], ctx: dict, physics_status: str) 
         statements.append(txt[:-1] + f" ({st})." if st and txt.endswith(".") else txt)
     roles = (ctx["physics"].get("roles") or {})
     col_role = {col: role for role, col in roles.items() if col}
-    status = physics_status if ctx["enabled"] else "absent"     # physics.enabled: false → no physics term
+    status = physics_status
     active = status == "active"
 
     def brief(ms):
@@ -847,10 +1065,13 @@ def _gates(rows: list[dict], mechs: list[dict], ctx: dict, physics_status: str) 
     levers = {}
     for col in (ctx["cfg"].get("actionable") or {}):
         role = col_role.get(col)
-        in_source = role is not None and role in ctx["roles_used"] and role not in ("elevation",)
+        named = [m for m in mechs if m["in_model"] and role is not None and role in m["roles"]]
+        # without sunlight a role whose every pathway is absorbed sunlight (albedo) has no term in the source
+        no_sun = bool(named) and not any(m["acts_in_run"] for m in named)
+        in_source = role is not None and role in ctx["roles_used"] and role not in ("elevation",) and not no_sun
         on = in_source and active
-        own = [m for m in mechs if on and m["in_model"] and role in m["roles"]]
-        shared = [m for m in mechs if on and m["in_model"] and _ALL in m["roles"]]
+        own = [m for m in named if on and m["acts_in_run"]]
+        shared = [m for m in mechs if on and m["acts_in_run"] and _ALL in m["roles"]]
         entry = {"role": role, "in_physics": on, "physics_status": status, "mechanisms": brief(own),
                  "transport": brief(shared),
                  "supported": [m["id"] for m in own if m["status"] == "supported"],
@@ -858,7 +1079,11 @@ def _gates(rows: list[dict], mechs: list[dict], ctx: dict, physics_status: str) 
                  "untested": [m["id"] for m in own if m["status"] in ("not_testable", "not_yet_tested")]}
         lab = ROLE_LABELS.get(role, role)
         name = f"{col}{f' ({lab})' if role and str(lab).lower() != col.lower() else ''}"
-        if not in_source:
+        if no_sun and role in ctx["roles_used"]:
+            entry["statement"] = (f"{col} does not enter the physics source in this {ctx['window']} window (no "
+                                  "sunlight: its only pathway, M1 absorbed sunlight, acts by day): its modelled effect "
+                                  "is statistical only.")
+        elif not in_source:
             entry["statement"] = f"{col} does not enter the physics source: its modelled effect is statistical only."
         elif not active:
             why = ("absent from this run" if status == "absent" else
@@ -887,6 +1112,15 @@ def _md(s) -> str:
     return str(s if s is not None else "—").replace("|", "\\|")
 
 
+def _tau_text(t: dict) -> str:
+    """One assumed depth's time scale, with the range from r_a's ±2 SE interval when there is one."""
+    s = f"h = {t['h_m']:g} m → τ = r_a·h ≈ {t['tau_min']:.0f} min, ωτ ≈ {t['omega_tau']:.2f}"
+    tr, wr = t.get("tau_min_range"), t.get("omega_tau_range")
+    if tr and wr:
+        s += f" (±2 SE: τ {tr[0]:.0f}–{tr[1]:.0f} min, ωτ {wr[0]:.2f}–{wr[1]:.2f})"
+    return s
+
+
 def mechanisms_markdown(reg: dict | None) -> str:
     """The register, the parameter panel and the gates as markdown (report.md, the CLI)."""
     if not reg:
@@ -896,8 +1130,9 @@ def mechanisms_markdown(reg: dict | None) -> str:
     L = [f"Verdicts: **Supported** (the signature appears), **Contradicted** (absent or reversed: the term is "
          "reported as statistical, not physics), **Not testable with this data** (this run cannot measure the "
          "signature, or the estimate is too uncertain to test it; reason given), **Not yet tested** (the test belongs "
-         "to a later workstream). A fitted value is Supported against a published range only when its ±2 SE interval "
-         f"overlaps the range and is no wider than it. Basis: {reg.get('basis')}.", "",
+         "to a later workstream). A fitted value is Supported against a published range only when its point estimate "
+         "lies inside the range and its ±2 SE interval (from at least three folds) is no wider than the range; it is "
+         f"Contradicted when that interval lies entirely outside. Basis: {reg.get('basis')}.", "",
          "| mechanism | IF it holds, THEN … | test | verdict | statistic |", "|---|---|---|---|---|"]
     for r in reg.get("rows") or []:
         why = "; ".join(x for x in (r.get("reason") or r.get("basis"), r.get("note")) if x)
@@ -922,27 +1157,23 @@ def mechanisms_markdown(reg: dict | None) -> str:
                   f"sensitivity ({P.get('prior_sensitivity')}) come later.", "",
               "| quantity | value ± SE | published range | source | status | note |", "|---|---|---|---|---|---|"]
         for r in P["rows"]:
-            nd = 0 if r["key"] in ("L", "v", "w") else (1 if r["key"] in ("r_a", "gamma") else 3)
-            val = "—" if r.get("value") is None else (
-                f"{_fmt(r['value'], nd)}" + (f" ± {_fmt(r['se'], nd)}" if r.get("se") is not None else "")
-                + f" {r['unit']}")
+            val = _value_text(r, bound=False)            # the status and note columns carry the fit bound
             pub = r["published"]["text"] if r.get("published") else "—"
             src = r["published"]["source"] if r.get("published") else "—"
             note = r.get("status_note") or ""
             if r.get("prior"):
                 note += f" Prior N({r['prior']['mean']:g}, {r['prior']['sd']:g}²), information only."
-            status = r["status"].replace("_", " ") + (" (imprecise: see note)"
-                                                       if r.get("interval_informative") is False else "")
+            status = ("at fit bound" if r.get("at_bound") else r["status"].replace("_", " ")) + (
+                " (imprecise: see note)" if r.get("interval_informative") is False else "")
             L.append(f"| {_md(r['label'])} | {_md(val)} | {_md(pub)} | {_md(src)} | {status} | {_md(note.strip())} |")
         if P.get("rows") and P["rows"][0].get("derivation"):
             L += ["", f"*Derivation:* {P['rows'][0]['derivation']}."]
         ts = P.get("timescales")
         if ts:
-            L += ["", "*Implied time scales (assumptions, informational):* " + ts["assumption"] + " " + "; ".join(
-                f"h = {t['h_m']:g} m → τ = r_a·h ≈ {t['tau_min']:.0f} min, ωτ ≈ {t['omega_tau']:.2f}"
-                for t in ts["rows"]) + "."
-                + (f" {ts['advection_bound']['text']}." if ts.get("advection_bound") else "")
-                + (f" {ts['advection_note']}." if ts.get("advection_note") else "")]
+            L += ["", "*Implied time scales (assumptions, informational):* " + ts["assumption"] + " "
+                  + (ts["caveat"] + ". " if ts.get("caveat") else "") + "; ".join(_tau_text(t) for t in ts["rows"]) + "."
+                  + (f" {ts['advection_bound']['text']}." if ts.get("advection_bound") else "")
+                  + (f" {ts['advection_note']}." if ts.get("advection_note") else "")]
         for n in P.get("notes") or []:
             L += ["", f"*Note:* {n}"]
     G = reg.get("gates") or {}
@@ -983,18 +1214,50 @@ def forcing_t2m_K(physics: dict | None, config_dir=None) -> float | None:
     return float(t) if _num(t) else None
 
 
+def _run_physics_params(run_dir: Path, m: dict) -> tuple[list | None, str | None]:
+    """``physics.json`` of a run, only when it belongs to this run: the pipeline never deletes old outputs, so a
+    re-run without physics (``models.physics: false``, or stopping before S2_S3) into the same directory leaves an
+    earlier run's file behind.  It is used only when the manifest records a physics fit (``manifest["physics"]``,
+    or for manifests without that key, a config that fits physics) and its fold means match the manifest's own
+    summary.  Returns (params or None, a note on why the file was not used)."""
+    p = run_dir / "physics.json"
+    if not p.is_file():
+        return None, None
+    if "physics" in m:
+        fitted = isinstance(m["physics"], dict) and bool(m["physics"])
+    else:
+        fitted = _physics_off(m.get("config") or {}) is None
+    if not fitted:
+        return None, "physics.json ignored: this run's manifest records no physics fit (a file left by an earlier run)"
+    try:
+        params = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, "physics.json unreadable"
+    if not isinstance(params, list) or not all(isinstance(x, dict) for x in params) or not params:
+        return None, "physics.json is not a list of per-fold parameters"
+    summary = m.get("physics") if isinstance(m.get("physics"), dict) else {}
+    for key in ("a", "L_m", "gamma"):
+        s = summary.get(key)
+        if not (isinstance(s, dict) and _num(s.get("mean"))):
+            continue
+        vals = [x.get(key) for x in params]
+        if not all(_num(v) for v in vals) or not math.isclose(
+                sum(float(v) for v in vals) / len(vals), float(s["mean"]), rel_tol=1e-6, abs_tol=1e-9):
+            return None, (f"physics.json ignored: its fold mean of {key} does not match this run's manifest (a file "
+                          "left by an earlier run); the manifest's mean/sd summary is used")
+    return params, None
+
+
 def mechanisms_for_run(run_dir, config: dict | None = None, *, write: bool = True) -> dict:
     """Recompute the register of a finished run from ``manifest.json`` + ``physics.json``; with ``write``,
     store ``mechanisms.json`` and the manifest's ``mechanisms`` section (``runio.update_manifest``).
-    ``config``: a raw config dict to use instead of the manifest's (e.g. one that sets ``data.target_kind``)."""
+    ``config``: a raw config dict to use instead of the manifest's (e.g. one that sets ``data.target_kind``).
+    ``physics.json`` is used only when it belongs to this run (:func:`_run_physics_params`)."""
     from sparc.core import progress, runio
 
     run_dir = Path(run_dir)
     m = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
-    try:
-        params = json.loads((run_dir / "physics.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        params = None
+    params, params_note = _run_physics_params(run_dir, m)
     cfg = copy.deepcopy(config if config is not None else (m.get("config") or {}))
     ph = cfg.setdefault("physics", {})
     fi = ph.get("forcing_info")
@@ -1008,7 +1271,9 @@ def mechanisms_for_run(run_dir, config: dict | None = None, *, write: bool = Tru
         if not fi.get("hours_local"):
             fi["hours_local"] = (_forcing_blob(ph, cdir) or {}).get("hours_local")
         ph["forcing_info"] = fi
-    reg = evaluate(m, params if isinstance(params, list) else None, cfg)
+    reg = evaluate(m, params, cfg)
+    if params_note:
+        reg["inputs"]["note"] = params_note
     if write:
         with progress.run_dir_scope(run_dir):
             runio.write_json_atomic(run_dir / "mechanisms.json", reg, indent=1)

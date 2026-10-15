@@ -275,11 +275,65 @@ def test_physics_disabled_in_every_fold_makes_physics_rows_not_testable():
 
 
 def test_physics_disabled_in_some_folds_uses_the_others_and_says_so():
-    folds = [_fold(a=44.0), _fold(a=0.0, warn="disabled"), _fold(a=46.0)]
+    folds = [_fold(a=44.0), _fold(a=0.0, warn="disabled"), _fold(a=46.0), _fold(a=45.0), _fold(a=43.0)]
     reg = M.evaluate({}, folds, _cfg())
     r = _row(reg, "M6a")
-    assert r["status"] == "supported" and "1 of 3 folds" in r["note"]
-    assert _panel(reg, "r_a")["n"] == 2 and reg["panel"]["n_active"] == 2
+    assert r["status"] == "supported" and "1 of 5 folds" in r["note"]
+    ra = _panel(reg, "r_a")
+    assert ra["n"] == 4 and ra["n_groups"] == 5 and reg["panel"]["n_active"] == 4
+    # the delete-a-group inflation stays the K = 5 one: s·(K−1)/√K with s the sample sd of the 4 active folds
+    per = np.asarray(ra["per_fold"])
+    assert ra["se"] == pytest.approx(per.std(ddof=1) * 4 / math.sqrt(5))
+    assert ra["se"] > per.std() * math.sqrt(3)                      # the 4-replicate formula understates it
+
+
+def test_a_subset_of_the_folds_gives_no_verdict():
+    # reviewer case: γ −12 and −11 K/km in 2 of 5 folds.  The 2-replicate formula gave −11.5 ± 0.5 (Contradicted);
+    # the K = 5 inflation gives ± 1.26, and a subset chosen by the fit is not a valid jackknife interval anyway
+    folds = [_fold(gamma_k_km=-12.0), _fold(gamma_k_km=-11.0)] + [_fold(a=0.0, warn="disabled") for _ in range(3)]
+    reg = M.evaluate({}, folds, _cfg())
+    g, r = _panel(reg, "gamma"), _row(reg, "M7a")
+    assert g["se"] == pytest.approx(math.sqrt(0.5) * 4 / math.sqrt(5)) and g["interval_informative"] is False
+    assert r["status"] == "not_testable" and "2 of 5 folds" in r["reason"] and "not a valid jackknife" in r["reason"]
+    assert r["basis"] is None and not reg["gates"]["statements"] and not reg["gates"]["contradicted"]
+    assert _row(reg, "M6a")["status"] == "not_testable"
+    # three of five is still a subset; two of three passes K−1 but leaves one degree of freedom
+    three = [_fold(gamma_k_km=g) for g in (-26.0, -25.9, -26.1)] + [_fold(a=0.0, warn="x") for _ in range(2)]
+    assert _row(M.evaluate({}, three, _cfg()), "M7a")["status"] == "not_testable"
+    two = [_fold(gamma_k_km=-26.0), _fold(gamma_k_km=-26.2), _fold(a=0.0, warn="x")]
+    r2 = _row(M.evaluate({}, two, _cfg()), "M7a")
+    assert r2["status"] == "not_testable" and "only 2 folds" in r2["reason"] and "degree of freedom" in r2["reason"]
+    # four of five is enough: −26 K/km with a small SE is Contradicted
+    four = [_fold(gamma_k_km=g) for g in (-26.0, -25.9, -26.1, -26.2)] + [_fold(a=0.0, warn="x")]
+    assert _row(M.evaluate({}, four, _cfg()), "M7a")["status"] == "contradicted"
+    # two folds in a two-fold run: one degree of freedom too
+    assert _row(M.evaluate({}, _folds(a_values=(44.0, 46.0)), _cfg()), "M6a")["status"] == "not_testable"
+
+
+def test_point_estimate_outside_the_range_is_not_supported():
+    # reviewer cases: the ±2 SE interval only reaches the range from an estimate outside it
+    for st, band, sym, pos in (({"value": 130.0, "se": 17.0}, M.RA_RANGE, "r_a", True),
+                               ({"value": -5.0, "se": 0.8}, M.LAPSE_BAND, "γ", False),
+                               ({"value": 12.0, "se": 4.5}, M.RA_RANGE, "r_a", True)):
+        chk = M._range_check(st, band, sym, positive=pos)
+        assert chk["verdict"] == "not_testable" and chk["status"] == "outside", st
+        assert chk["overlaps"] and chk["informative"] and "inconclusive" in chk["why"], st
+    # through evaluate: folds with r_a 118–142 s/m are neither Supported nor cited for any lever
+    reg = M.evaluate({}, _folds(a_values=_a_for_ra([118.0, 125.0, 130.0, 136.0, 142.0])), _cfg())
+    r = _row(reg, "M6a")
+    assert r["status"] == "not_testable" and "inconclusive" in r["reason"] and r["interval"][0] < 100.0
+    assert _panel(reg, "r_a")["status"] == "outside"
+    assert {m["id"]: m["status"] for m in reg["mechanisms"]}["M6"] == "not_testable"
+    assert all("(supported)" not in g["statement"] for g in reg["gates"]["levers"].values())
+    from sparc.core.writeup import model_card_markdown
+
+    card = model_card_markdown({"mechanisms": reg, "config": _cfg()})
+    holds = next(x for x in card.splitlines() if x.startswith("- What holds"))
+    assert "M6(a)" not in holds and "M7(a)" in holds                    # γ = −8 K/km is inside the band
+    # γ just outside the band with a tight interval reaching it: inconclusive, not Supported
+    near = M.evaluate({}, _folds(gammas=[-5.5, -4.5, -5.0, -5.4, -4.6]), _cfg())      # −5.0 ± 0.81 K/km
+    assert _row(near, "M7a")["interval"][0] < -6.5 < _row(near, "M7a")["interval"][1]
+    assert _row(near, "M7a")["status"] == "not_testable" and "inconclusive" in _row(near, "M7a")["reason"]
 
 
 def test_no_physics_model_marks_the_evaluable_rows_not_testable():
@@ -430,6 +484,93 @@ def test_lever_gates_list_the_mechanisms_that_explain_each_lever():
     assert lv["Unrelated"]["in_physics"] is False and "statistical only" in lv["Unrelated"]["statement"]
 
 
+def test_night_window_levers_have_no_sunlight_pathway():
+    # the night source is Q* = LW_net: no albedo or shade term, so M1 is not in it (PhysicsModel._q_points_torch)
+    reg = M.evaluate({}, _folds(window="night"), _cfg(window="night", hours=(0, 1)))
+    lv = reg["gates"]["levers"]
+    assert lv["Albedo"]["in_physics"] is False and not lv["Albedo"]["mechanisms"]
+    assert "does not enter the physics source in this night window" in lv["Albedo"]["statement"]
+    assert "statistical only" in lv["Albedo"]["statement"] and "M1" not in lv["Albedo"]["contradicted"]
+    assert [m["id"] for m in lv["Pct_Canopy"]["mechanisms"]] == ["M2"] and lv["Pct_Canopy"]["in_physics"]
+    assert [m["id"] for m in lv["Pct_Impervious"]["mechanisms"]] == ["M2", "M3"]
+    assert all("through M1" not in g["statement"] and "M1 Absorbed" not in g["statement"] for g in lv.values())
+    m1 = next(m for m in reg["mechanisms"] if m["id"] == "M1")
+    assert m1["acts_in_run"] is False and "does not act" in _row(reg, "M1a")["note"]
+    # by day the same config keeps M1 for albedo and canopy
+    day = M.evaluate({}, _folds(), _cfg())["gates"]["levers"]
+    assert [m["id"] for m in day["Albedo"]["mechanisms"]] == ["M1"] and day["Albedo"]["in_physics"]
+    assert [m["id"] for m in day["Pct_Canopy"]["mechanisms"]] == ["M1", "M2"]
+
+
+def test_fit_bounds_match_the_physics_transforms():
+    from sparc.core import physics
+
+    assert M.FIT_BOUNDS["kappa_canopy"][:2] == physics.KAPPA_BOUNDS
+    assert M.FIT_BOUNDS["shade_c0"][:2] == physics.C0_BOUNDS and M.FIT_BOUNDS["shade_width"][:2] == physics.CW_BOUNDS
+    assert M.FLOOR_TOL["w"] == pytest.approx(1e-3 * physics._W_SCALE)
+
+
+def test_parameters_at_a_fit_bound_are_flagged_not_reported_as_precise():
+    # reviewer case (Providence fast run): L = 644.967 m, the upper fit bound, in every fold → "645 ± 0 m"
+    hi = 644.9672339344687
+    folds = _folds(a_values=(44.0, 45.0, 46.0), L=hi - 3e-6, L_bounds_m=[30.0, hi])
+    for f, e2 in zip(folds, (1e-12, 1e-13, 0.8)):                   # e₂ at its softplus floor in 2 of 3 folds
+        f["e2"] = e2
+    reg = M.evaluate({}, folds, _cfg())
+    L = _panel(reg, "L")
+    assert L["at_bound"]["side"] == "upper" and L["at_bound"]["k"] == 3 and L["at_bound"]["every_fold"]
+    assert L["se"] is None and L["interval"] is None and "not identified" in L["status_note"]
+    assert "± 0" not in L["value_text"] and "upper fit bound" in L["value_text"]
+    ctx = _row(reg, "M4a")["context"]
+    assert "upper fit bound" in ctx and "± 0" not in ctx
+    e2 = _panel(reg, "e2")
+    assert e2["at_bound"]["side"] == "lower" and e2["at_bound"]["k"] == 2 and e2["se"] is not None
+    assert "understates" in e2["status_note"]
+    assert "L" in reg["panel"]["at_bound"] and "e2" in reg["panel"]["at_bound"]
+    assert any("fit bound" in n for n in reg["panel"]["notes"])
+    assert "at_bound" not in _panel(reg, "e1")                         # e₁ = 2.0: interior
+    md = M.mechanisms_markdown(reg)
+    assert "645 ± 0" not in md and "| at fit bound |" in md
+    from sparc.core.writeup import methods_markdown
+
+    methods = methods_markdown({"mechanisms": reg, "config": _cfg()})
+    assert "mixing length L = 645 m (at the upper fit bound in 3 of 3 folds" in methods and "645 ± 0" not in methods
+    # an interior L keeps its SE and no flag
+    inner = _panel(M.evaluate({}, _folds(L=256.0), _cfg()), "L")
+    assert "at_bound" not in inner and inner["se"] is not None
+    # s at the bottom of its sigmoid in one fold
+    s_folds = _folds(a_values=(44.0, 45.0, 46.0))
+    s_folds[2]["s"] = 2.6e-53
+    s = _panel(M.evaluate({}, s_folds, _cfg()), "s")
+    assert s["at_bound"]["side"] == "lower" and s["at_bound"]["k"] == 1
+
+
+def test_time_scales_from_an_r_a_that_is_not_pinned_down_say_so():
+    # r_a = 58.5 ± 130.7 s/m (±2 SE −203 to 320): the point time scales would mean nothing on their own
+    reg = M.evaluate({}, _folds(a_values=(2.0, 150.0, 10.0, 120.0, 5.0)), _cfg())
+    ts = reg["panel"]["timescales"]
+    assert ts["informative"] is False and "not pinned down" in ts["caveat"] and "reaches r_a ≤ 0" in ts["caveat"]
+    assert ts["rows"][0]["tau_min_range"][0] == 0.0                     # clipped at zero
+    assert ts["rows"][1]["omega_tau_range"][1] > ts["rows"][1]["omega_tau"]
+    md = M.mechanisms_markdown(reg)
+    assert "not informative" in md and "±2 SE: τ 0–" in md
+    # a precise r_a: informative, with its range
+    ok = M.evaluate({}, _folds(), _cfg())["panel"]["timescales"]
+    assert ok["informative"] and ok["caveat"] is None
+    lo, hi = ok["rows"][0]["tau_min_range"]
+    assert 0 < lo < ok["rows"][0]["tau_min"] < hi
+    # one usable fold: no interval, so not informative either
+    one = M.evaluate({}, [_fold(), _fold(a=0.0, warn="x"), _fold(a=0.0, warn="x")], _cfg())["panel"]["timescales"]
+    assert one["informative"] is False and "one fold" in one["caveat"] and one["rows"][0]["tau_min_range"] is None
+
+
+def test_catalog_defines_r_a_with_the_run_normaliser():
+    from sparc.core.catalog import DATA_DICTIONARY
+
+    text = DATA_DICTIONARY["mechanisms.json"]["r_a"][2]
+    assert "|LW_net|" in text and "SW↓" in text and "5/9" in text
+
+
 def test_markdown_renders_the_register_panel_and_errors():
     reg = M.evaluate({}, _folds(gammas=[-26.0] * 5), _cfg())
     md = M.mechanisms_markdown(reg)
@@ -482,6 +623,33 @@ def test_forcing_records_t2m_and_old_configs_read_it_from_the_file(tmp_path):
     (run / "physics.json").write_text(json.dumps(_folds()))
     reg = M.mechanisms_for_run(run, write=False)
     assert reg["panel"]["t2m_known"] and reg["panel"]["afternoon"] and _row(reg, "M6a")["status"] == "supported"
+
+
+def test_physics_json_is_used_only_when_it_belongs_to_the_run(tmp_path):
+    run = tmp_path / "run"
+    run.mkdir()
+    summary = {"a": {"mean": 45.0, "sd": 3.0}, "gamma": {"mean": _gamma_F_per_m(-8.0), "sd": 0.0},
+               "L_m": {"mean": 256.0, "sd": 0.0}, "v_norm_m": {"mean": 0.0, "sd": 0.0}}
+    (run / "manifest.json").write_text(json.dumps({"config": _cfg(), "physics": summary, "cv": {"n_folds": 5}}))
+    # a file from an earlier fit: its fold means do not match this run's summary → the summary is used
+    (run / "physics.json").write_text(json.dumps(_folds(a_values=(1000.0, 1010.0, 990.0))))
+    reg = M.mechanisms_for_run(run, write=False)
+    assert reg["inputs"]["source"] == "manifest summary" and "does not match" in reg["inputs"]["note"]
+    assert _panel(reg, "r_a")["value"] == pytest.approx(45.0 * F_TO_K * RHO_CP / 635.8)
+    (run / "physics.json").write_text(json.dumps(_folds(a_values=(40.0, 42.0, 45.0, 48.0, 50.0))))
+    reg = M.mechanisms_for_run(run, write=False)
+    assert reg["inputs"]["source"] == "physics.json" and "note" not in reg["inputs"]
+    # the manifest records no physics fit: the file is ignored and the register says physics is absent
+    (run / "manifest.json").write_text(json.dumps({"config": _cfg(), "physics": None}))
+    reg = M.mechanisms_for_run(run, write=False)
+    assert reg["physics_status"] == "absent" and "records no physics fit" in reg["inputs"]["note"]
+    # a config without a physics model has none, whatever files are passed in
+    off = _cfg()
+    off["models"] = {"physics": False}
+    reg = M.evaluate({}, _folds(), off)
+    assert reg["physics_status"] == "absent" and _panel(reg, "r_a")["value"] is None
+    assert "models.physics is off" in _row(reg, "M6a")["reason"]
+    assert all(not g["in_physics"] for g in reg["gates"]["levers"].values())
 
 
 def test_target_kind_is_validated_and_does_not_change_fit_fingerprints():
@@ -615,3 +783,28 @@ def test_cli_recomputes_the_register_of_a_run(small_run, capsys):
     assert all(r["basis"].startswith("indicative") for r in reg["panel"]["rows"] if r["value"] is not None)
     assert json.loads((run / "manifest.json").read_text())["mechanisms"]["target_kind"] == "product"
     assert cli.main(["mechanisms", "-r", str(run / "missing")]) == 2
+
+
+def test_cli_ignores_a_physics_json_left_by_an_earlier_run(small_run, tmp_path):
+    # reviewer case: re-run the same config without physics into a directory that holds an old physics.json
+    import copy
+    import shutil
+
+    from sparc.core import cli
+    from sparc.core.pipeline import run_core
+
+    _, cfg, res = small_run
+    run = tmp_path / "rerun"
+    shutil.copytree(res.run_dir, run)
+    cfg2 = copy.deepcopy(cfg)
+    cfg2.raw["models"] = dict(cfg.raw["models"], physics=False)
+    run_core(cfg2, stages=("S0", "S1", "S2", "S3"), fast=True, run_dir=run)
+    man = json.loads((run / "manifest.json").read_text())
+    assert man["physics"] is None and (run / "physics.json").exists()       # the pipeline leaves the old file
+    assert man["mechanisms"]["physics_status"] == "absent"
+    assert cli.main(["mechanisms", "-r", str(run)]) == 0
+    reg = json.loads((run / "mechanisms.json").read_text())
+    assert reg["physics_status"] == "absent" and "records no physics fit" in reg["inputs"]["note"]
+    assert _row(reg, "M6a")["status"] == "not_testable" and "no physics model" in _row(reg, "M6a")["reason"]
+    assert all(r["value"] is None for r in reg["panel"]["rows"])
+    assert json.loads((run / "manifest.json").read_text())["mechanisms"]["physics_status"] == "absent"

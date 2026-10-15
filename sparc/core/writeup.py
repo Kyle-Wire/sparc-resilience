@@ -97,7 +97,10 @@ def _panel_value(row: dict | None, nd: int = 1) -> str | None:
     if not row or row.get("value") is None:
         return None
     se = f" ± {_f(row['se'], nd)}" if row.get("se") is not None else ""
-    return f"{_f(row['value'], nd)}{se} {row['unit']}"
+    ab = row.get("at_bound")              # stopped by a fit bound: not an estimate (no '± 0')
+    return (f"{_f(row['value'], nd)}{se} {row['unit']}"
+            + (f" (at the {ab['side']} fit bound in {ab['k']} of {ab['n']} folds, so not identified by this run)"
+               if ab else ""))
 
 
 def methods_markdown(m: dict) -> str:

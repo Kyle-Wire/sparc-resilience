@@ -1311,7 +1311,7 @@ const MECH_BASIS = { product: "The target is an interpolated area-wide product, 
 function mechanisms() {
   const R = DATA.mechanisms; if (!R || !(R.rows || []).length) return;
   $("mechCard").hidden = false;
-  $("mechCap").textContent = "Each physics term is written as an if–then claim: IF the mechanism holds, THEN a signature must appear that fitting this map did not force. Supported: the signature appears. Contradicted: it is absent or reversed, so the term is read as a statistical term, not physics, and is not used to explain scenarios. Not testable with this data: this run cannot measure the signature, or the estimate is too uncertain to test it (the reason is given); a fitted value counts as Supported against a published range only when its ±2 SE interval overlaps the range and is no wider than the range itself. Not yet tested: the test belongs to a later step of the physics plan (named). " + (MECH_BASIS[R.target_kind] || "The config does not say whether the target is measurements or an interpolated product (data.target_kind), so the basis of the verdicts is unspecified.");
+  $("mechCap").textContent = "Each physics term is written as an if–then claim: IF the mechanism holds, THEN a signature must appear that fitting this map did not force. Supported: the signature appears. Contradicted: it is absent or reversed, so the term is read as a statistical term, not physics, and is not used to explain scenarios. Not testable with this data: this run cannot measure the signature, or the estimate is too uncertain to test it (the reason is given); a fitted value counts as Supported against a published range only when its point estimate lies inside the range and its ±2 SE interval (from at least three folds) is no wider than the range itself, and as Contradicted when that interval lies entirely outside the range. Not yet tested: the test belongs to a later step of the physics plan (named). " + (MECH_BASIS[R.target_kind] || "The config does not say whether the target is measurements or an interpolated product (data.target_kind), so the basis of the verdicts is unspecified.");
   const rows = R.rows.map((r) => {
     const st = el("div"); st.textContent = r.statistic_text || "—";
     if (r.interval) st.append(el("div", { class: "why" }, `±2 SE: ${nfmt(r.interval[0], 1)} to ${nfmt(r.interval[1], 1)}` + (r.reference ? `; range ${r.reference.text}` : "")));
@@ -1325,13 +1325,14 @@ function mechanisms() {
   const dec = (k) => ["L", "v", "w"].includes(k) ? 0 : ["r_a", "gamma"].includes(k) ? 1 : 3;
   const prow = P.rows.map((r) => {
     const d = dec(r.key); const val = r.value == null ? "—" : `${fmt(r.value, d)}${r.se != null ? ` ± ${fmt(r.se, d)}` : ""} ${r.unit}`;
-    const vcell = withWhy(document.createTextNode(val), r.prior ? `prior N(${r.prior.mean}, ${r.prior.sd}²)` : "");
-    const status = ({ inside: "inside", outside: "outside", not_comparable: "not comparable" }[r.status] || r.status) + (r.interval_informative === false ? " (imprecise)" : "");
-    return [withWhy(document.createTextNode(r.label), r.status_note), vcell, r.published ? r.published.text : "—", r.published ? r.published.source : "—", mechPill(r.interval_informative === false ? "imprecise" : r.status, status)];
+    const ab = r.at_bound; const vwhy = [ab ? `at the ${ab.side} fit bound in ${ab.k} of ${ab.n} folds: not identified` + (ab.every_fold ? " (no SE)" : "") : "", r.prior ? `prior N(${r.prior.mean}, ${r.prior.sd}²)` : ""].filter(Boolean).join("; ");
+    const vcell = withWhy(document.createTextNode(val), vwhy);
+    const status = ab ? "at fit bound" : ({ inside: "inside", outside: "outside", not_comparable: "not comparable" }[r.status] || r.status) + (r.interval_informative === false ? " (imprecise)" : "");
+    return [withWhy(document.createTextNode(r.label), r.status_note), vcell, r.published ? r.published.text : "—", r.published ? r.published.source : "—", mechPill(ab ? "at_bound" : r.interval_informative === false ? "imprecise" : r.status, status)];
   });
   $("tbl-mechpanel").append(table(["Quantity", "Value ± SE", "Published range", "Source", "Status"], prow, (i) => i === 1));
   const ts = P.timescales; if (ts && (ts.rows || []).length) { $("mechTimeCap").hidden = false;
-    $("mechTimeCap").textContent = `Implied time scales (assumptions, not fits): ${ts.assumption} ` + ts.rows.map((t) => `With h = ${fmt(t.h_m, 0)} m, τ = r_a·h ≈ ${fmt(t.tau_min, 0)} min and ωτ ≈ ${fmt(t.omega_tau, 2)} for the daily cycle (phase lag ≈ ${fmt(t.phase_lag_deg, 0)}°)`).join("; ") + "." + (ts.advection_bound ? ` ${ts.advection_bound.text}.` : "") + (ts.advection_note ? ` ${ts.advection_note}.` : ""); }
+    $("mechTimeCap").textContent = `Implied time scales (assumptions, not fits): ${ts.assumption} ` + (ts.caveat ? `${ts.caveat}. ` : "") + ts.rows.map((t) => `With h = ${fmt(t.h_m, 0)} m, τ = r_a·h ≈ ${fmt(t.tau_min, 0)} min and ωτ ≈ ${fmt(t.omega_tau, 2)} for the daily cycle (phase lag ≈ ${fmt(t.phase_lag_deg, 0)}°)` + (t.tau_min_range && t.omega_tau_range ? `; ±2 SE: τ ${fmt(t.tau_min_range[0], 0)}–${fmt(t.tau_min_range[1], 0)} min, ωτ ${fmt(t.omega_tau_range[0], 2)}–${fmt(t.omega_tau_range[1], 2)}` : "")).join(". ") + "." + (ts.advection_bound ? ` ${ts.advection_bound.text}.` : "") + (ts.advection_note ? ` ${ts.advection_note}.` : ""); }
 }
 
 /* ---------- caveats & footer ---------- */

@@ -455,7 +455,8 @@ DATA_DICTIONARY: dict[str, dict[str, tuple[str, str, str]]] = {
     "mechanisms.json": {
         "status": ("", "", "Mechanism verdict: supported, contradicted, not_testable (this data cannot test it) or "
                            "not_yet_tested (a later workstream)"),
-        "r_a": ("s/m", "", "Aerodynamic resistance implied by the physics gain, a·ρc_p/SW↓"),
+        "r_a": ("s/m", "", "Aerodynamic resistance implied by the physics gain, a_K·ρc_p/norm (norm = SW↓ by day, "
+                           "|LW_net| at night; a_K = a in kelvin per unit q, × 5/9 for a °F target)"),
         "gamma": ("K/km", "", "Elevation coefficient in kelvin per kilometre"),
         "basis": ("", "", "What the verdicts rest on (an interpolated product makes them indicative)"),
     },
