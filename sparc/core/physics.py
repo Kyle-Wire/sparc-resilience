@@ -5,10 +5,24 @@ The anomaly obeys the steady advection–diffusion–relaxation equation of
 
     (1 − L²∇² + v·∇) φ = q,        ΔT_phys = a·φ + b + γ·elev_c + βx·x_c + βy·y_c
 
-solved spectrally with the *same* discrete operator (5-point Laplacian,
-central-difference advection, Ĝ = 1/(1 + L²λ + i·adv)), so the PDE residual
-used by the stacker (:meth:`PhysicsModel.operator_residual_torch`) is exactly
-zero on this model's own prediction.
+solved spectrally with the *same* discrete operator (3-point second
+differences with diffusion D_x, D_y per axis, central-difference advection,
+Ĝ = 1/(1 + D_x·λ_x + D_y·λ_y + i·adv); ``physics.advection_scheme``, see
+:mod:`sparc.core.operators`), so the PDE residual used by the stacker
+(:meth:`PhysicsModel.operator_residual_torch`) is exactly zero on this
+model's own prediction.  The default hybrid scheme (Patankar 1980) is the
+central one (D = L²) wherever every cell Péclet number |v_axis|·dx/(2L²) is
+≤ 1, and adds the least diffusion that keeps the Green's function
+non-negative beyond (D = |v_axis|·dx/2 along that axis, independent of L).
+So past Pe = 1 L rests on the other axis only, or is not identified when
+both axes exceed 1; :attr:`PhysicsModel.params` reports the cell Péclet
+numbers, effective lengths and L-elasticities
+(:func:`operators.grid_resolution`) and a ``resolution_warning``, and the
+pipeline emits ``physics.grid_peclet`` for the delivered fold models
+(:func:`report_grid_resolution`).  With advection the fit starts on the
+central operator and continues on the model's own where the two differ
+(:func:`_warm_solver`).  Models pickled before the scheme existed were
+fitted with ``"central"`` (D = L²) and keep it when unpickled.
 
 Source (normalised sensible heat, per point, from the configured roles)
 ----------------------------------------------------------------------
@@ -46,7 +60,10 @@ Identifiability and fitting
   with penalty |u|² = (|v|/v_max)²; multi-start over v ∈ {0, (±v_max/2, 0),
   (0, ±v_max/2)} (plus wind·τ if configured) when advection is fit: each
   start is probed for ``start_iter`` iterations and the lowest-loss one is
-  continued for ``max_iter``.
+  continued for ``max_iter``.  All of this runs on the central operator;
+  a non-central scheme then continues for up to ``max_iter`` on its own
+  operator unless it equals the central one there (hybrid with every cell
+  Péclet number < 1, where the fit is bit-identical to a central fit).
 * torch L-BFGS (strong Wolfe), float64, fixed zero padding
   ``pad_cells(L_max, v_max, dx)`` for the whole fit; torch threads are
   capped at ``num_threads`` (default 1) during fit/predict.
@@ -91,6 +108,10 @@ PHYSICS_DEFAULTS: dict[str, Any] = {
     "L_max_m": 2000.0,
     "v_max_m": 1000.0,
     "fit_advection": True,
+    # Wind-term discretisation (operators.SCHEMES): "hybrid" is central wherever every cell
+    # Péclet number ≤ 1 and keeps G ≥ 0 beyond; "exponential" keeps G ≥ 0 but adds diffusion
+    # at any wind (fitted L biased low); "central" is the legacy scheme (negative lobes once Pe > 1).
+    "advection_scheme": "hybrid",
     "max_iter": 60,
     "start_iter": 0,             # iterations per multi-start probe (0 → max(8, max_iter // 4))
     # torch intra-op threads during fit/predict (capped, restored afterwards).  The
@@ -158,25 +179,56 @@ def _inv_softplus(y: float) -> float:
 
 class _SpectralSolver:
     """:func:`operators.solve_torch` with the symbols cached for a fixed
-    (shape, dx, pad): identical operator, no per-call symbol rebuild."""
+    (shape, dx, pad, scheme): identical operator, no per-call symbol rebuild.
 
-    def __init__(self, ny: int, nx: int, dx: float, pad: int):
+    The scheme's excess diffusion E_x, E_y (``operators.axis_excess``) is
+    recomputed from (L, vx, vy) on every call, so the solve stays
+    differentiable in all three; with no excess (always for "central", and
+    for "hybrid" at cell Péclet numbers ≤ 1) the operator is bit-identical to
+    the pre-scheme solver's.  Solvers pickled before the scheme existed hold
+    only ``lam``/``sx``/``sy``; they unpickle as ``"central"`` (the scheme
+    they were fitted with), and any symbol a scheme needs but the state
+    lacks is rebuilt on first use."""
+
+    def __init__(self, ny: int, nx: int, dx: float, pad: int, scheme: str = ops.DEFAULT_SCHEME):
+        self.ny, self.nx, self.dx, self.pad = ny, nx, float(dx), int(pad)
+        self.scheme = ops.check_scheme(scheme)
+        self.py, self.px = ops._padded_shape(ny, nx, self.pad)
+        self._build_symbols()
+
+    def _build_symbols(self) -> None:
+        """Cache λ = λ_x + λ_y, sx, sy (bit-identical to the pre-scheme
+        solver) and, for a scheme with excess diffusion, λ_x and λ_y."""
         import torch
 
-        self.ny, self.nx, self.dx, self.pad = ny, nx, float(dx), int(pad)
-        self.py, self.px = ops._padded_shape(ny, nx, self.pad)
-        lam, sx, sy = ops.symbols(self.py, self.px, self.dx, self.dx)
-        self.lam = torch.as_tensor(lam, dtype=torch.float64)
+        lam_x, lam_y, sx, sy = ops.symbols_axes(self.py, self.px, self.dx, self.dx)
+        self.lam = torch.as_tensor(lam_x + lam_y, dtype=torch.float64)
+        if getattr(self, "scheme", ops.LEGACY_SCHEME) != "central":
+            self.lam_x = torch.as_tensor(lam_x, dtype=torch.float64)
+            self.lam_y = torch.as_tensor(lam_y, dtype=torch.float64)
         self.sx = torch.as_tensor(sx, dtype=torch.float64)
         self.sy = torch.as_tensor(sy, dtype=torch.float64)
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("scheme", ops.LEGACY_SCHEME)       # pre-scheme pickles were fitted with central
 
     def __call__(self, q, L, vx, vy):
         import torch
 
+        central = getattr(self, "scheme", ops.LEGACY_SCHEME) == "central"
+        if any(getattr(self, n, None) is None for n in ("lam", "sx", "sy") + (() if central else ("lam_x", "lam_y"))):
+            self._build_symbols()
         p, ny, nx = self.pad, self.ny, self.nx
         buf = q.new_zeros((self.py, self.px))
         buf[p:p + ny, p:p + nx] = q
-        denom = torch.complex(1.0 + (L**2) * self.lam, vx * self.sx + vy * self.sy)
+        re = 1.0 + (L**2) * self.lam
+        if not central:
+            # float64 for the excess diffusion whatever the callers pass (as_tensor keeps the graph).
+            Lt, vxt, vyt = (torch.as_tensor(x, dtype=torch.float64) for x in (L, vx, vy))
+            Ex, Ey = ops._axis_excess_torch(Lt, vxt, vyt, self.dx, self.dx, self.scheme)
+            re = re + Ex * self.lam_x + Ey * self.lam_y
+        denom = torch.complex(re, vx * self.sx + vy * self.sy)
         phi = torch.fft.irfft2(torch.fft.rfft2(buf) / denom, s=(self.py, self.px))
         return phi[p:p + ny, p:p + nx]
 
@@ -261,6 +313,108 @@ def _uL_from_L(L: float, lo: float, hi: float) -> float:
     return _logit(f)
 
 
+def grid_resolution_report(L: float, vx: float, vy: float, dx: float, scheme: str) -> tuple[dict, str | None]:
+    """:func:`operators.grid_resolution` at a fitted (L, v) on a square grid,
+    plus a warning text when a cell Péclet number exceeds 1 (None otherwise).
+
+    What the warning says depends on the scheme (operators module docstring):
+    the hybrid diffusion along an axis past Pe = 1 is the grid's
+    |v_axis|·dx/2 whatever L is (on both axes for an oblique wind, so L is
+    then not identified at all); the exponentially fitted one still depends
+    on L, with elasticity d ln D/d ln L = 4Pe/sinh(2Pe) (L weakly identified,
+    effectively not once that is below 0.1 on both axes, Pe ≳ 2.9); the
+    central scheme's G has negative lobes.  A finer grid (dx ≤ 2L²/|v_axis|)
+    is the remedy, not the scheme.
+    """
+    scheme = ops.check_scheme(scheme)
+    info = ops.grid_resolution(L, (vx, vy), dx, dx, scheme)
+    if info["L_resolved"]:
+        return info, None
+    pe_x, pe_y = info["cell_peclet_x"], info["cell_peclet_y"]
+    el_x, el_y = info["L_elasticity_x"], info["L_elasticity_y"]
+    ax, other = ("x", "y") if pe_x > pe_y else ("y", "x")
+    both = min(pe_x, pe_y) > 1.0
+    if scheme == "central":
+        what = "the central scheme's Green's function has negative lobes here (heating cools some neighbours)"
+    elif scheme == "hybrid" and both:
+        flat = math.sqrt(min(abs(vx), abs(vy)) * dx / 2.0)
+        what = (f"the hybrid diffusion on both axes is the grid's upwind value |v_axis|·dx/2 "
+                f"(√D_x = {info['L_eff_x_m']:.0f} m, √D_y = {info['L_eff_y_m']:.0f} m) whatever L is, so L is not "
+                f"identified: every L below {flat:.0f} m gives the same operator")
+    elif scheme == "hybrid":
+        what = (f"the hybrid diffusion along {ax} is the grid's upwind value |v_{ax}|·dx/2 "
+                f"(√D_{ax} = {info[f'L_eff_{ax}_m']:.0f} m) whatever L is, so L rests on the spread along "
+                f"{other} only")
+    else:
+        sens = f"d ln D/d ln L = {el_x:.2f} along x, {el_y:.2f} along y, against 2 where L alone sets D"
+        if max(el_x, el_y) < 0.1:
+            what = f"the fitted diffusion hardly depends on L ({sens}), so L is effectively not identified"
+        elif both:
+            what = f"the fitted diffusion depends on L only weakly ({sens}), so L is only weakly identified"
+        else:
+            what = (f"the fitted diffusion along {ax} depends on L only weakly ({sens}), so L rests mostly on the "
+                    f"spread along {other}")
+    msg = (f"cell Péclet number {max(pe_x, pe_y):.2g} > 1 at L = {L:.0f} m, v = ({vx:.0f}, {vy:.0f}) m on the "
+           f"{dx:g} m grid: {what}; every cell Péclet number is ≤ 1 for L ≥ "
+           f"{info['L_min_resolved_m']:.0f} m at this wind")
+    return info, msg
+
+
+def report_grid_resolution(fold_params: list) -> dict | None:
+    """Emit ``physics.grid_peclet`` once for a run's delivered physics models.
+
+    ``fold_params`` are the final per-fold :attr:`PhysicsModel.params` (None
+    for a fold without physics).  The pipeline calls this after advection
+    selection, which may replace every fold's fit by a v = 0 refit, so the
+    event describes the models the run delivers, never a discarded fit.  The
+    per-fold texts stay in each ``params["resolution_warning"]`` (and
+    ``physics.json``).  Returns the event's data, or None when every fold's
+    cell Péclet numbers are ≤ 1 (or its physics term is off, a = 0).
+    """
+    rows = [(k, p) for k, p in enumerate(fold_params) if p and p.get("resolution_warning")]
+    if not rows:
+        return None
+    pe = [float(max(p["cell_peclet_x"], p["cell_peclet_y"])) for _, p in rows]
+    data = {"folds": [k for k, _ in rows], "n_folds": len(fold_params), "L_m": [float(p["L_m"]) for _, p in rows],
+            "cell_peclet": pe, "L_min_resolved_m": [float(p["L_min_resolved_m"]) for _, p in rows],
+            "scheme": ops.params_scheme(rows[0][1])}
+    k0, p0 = rows[0]
+    msg = (f"{len(rows)} of {len(fold_params)} fold physics fits have a cell Péclet number above 1 "
+           f"(max {max(pe):.2g}); fold {k0}: {p0['resolution_warning']}")
+    log.warning("physics: %s", msg)
+    progress.warn("physics.grid_peclet", msg, **data)
+    return data
+
+
+def _warm_solver(solver: _SpectralSolver, fit_advection: bool) -> _SpectralSolver:
+    """The operator a fit starts on: the central one, unless the model's own
+    scheme is central or v is fixed at 0 (where every scheme is central).
+
+    The central scheme is the smooth extension of the positive ones: the
+    hybrid operator *is* the central one wherever every cell Péclet number is
+    below 1, while past 1 on both axes it does not depend on L at all, a flat
+    region in which L-BFGS stalls wherever it enters (a fit planted at
+    L = 90 m stuck at its 54 m start).  Starting on the central operator keeps
+    L identified along the way; :func:`_continue_on_scheme` then decides
+    whether the fit must continue on the model's own operator."""
+    if solver.scheme == "central" or not fit_advection:
+        return solver
+    return _SpectralSolver(solver.ny, solver.nx, solver.dx, solver.pad, "central")
+
+
+def _continue_on_scheme(scheme: str, L: float, vx: float, vy: float, dx: float) -> bool:
+    """After the central warm start at (L, v): does the model's own operator
+    differ from the central one near that point?  Not for "hybrid" when every
+    cell Péclet number is < 1 (the two coincide on a neighbourhood, so the
+    central optimum is the hybrid one, bit for bit); always for
+    "exponential" (it adds diffusion at any v ≠ 0)."""
+    if scheme == "central":
+        return False
+    if scheme == "hybrid":
+        return max(abs(vx), abs(vy)) * dx / 2.0 >= L * L
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Known-source operator fit (tests / diagnostics)
 # ---------------------------------------------------------------------------
@@ -268,19 +422,26 @@ def _uL_from_L(L: float, lo: float, hi: float) -> float:
 
 def fit_operator(q: np.ndarray, y_raster: np.ndarray, mask: np.ndarray, dx: float, L_init: float, v_max: float,
                  fit_advection: bool = True, L_max: float = 2000.0, max_iter: int = 60,
-                 v_penalty: float = 1e-2, num_threads: int | None = 1) -> dict:
+                 v_penalty: float = 1e-2, num_threads: int | None = 1, scheme: str = ops.DEFAULT_SCHEME) -> dict:
     """Fit y ≈ a·solve(q; L, v) + b on ``mask`` cells for a *known* source.
 
     L and v are found by L-BFGS (multi-start over v, penalty
     ``v_penalty``·(|v|/v_max)²), a and b by variable projection; log L is
-    bounded to [log dx, log min(L_max, extent/4)].  Returns L_m, vx_m, vy_m,
-    v_norm_m, a, b, rmse, loss, pad_cells.
+    bounded to [log dx, log min(L_max, extent/4)].  ``scheme`` is the
+    advection discretisation (:data:`operators.SCHEMES`); with advection the
+    fit starts on the central operator and continues on ``scheme`` where the
+    two differ (:func:`_warm_solver`).  Returns L_m, vx_m,
+    vy_m, v_norm_m, a, b, rmse, loss, pad_cells, advection_scheme, the
+    :func:`operators.grid_resolution` keys at the fitted (L, v) and
+    ``resolution_warning`` (None unless a cell Péclet number exceeds 1, where
+    the grid limits what L_m means; logged as such).
     """
+    scheme = ops.check_scheme(scheme)
     with _torch_threads(num_threads):
-        return _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty)
+        return _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty, scheme)
 
 
-def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty) -> dict:
+def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty, scheme) -> dict:
     import torch
 
     q = np.asarray(q, dtype=np.float64)
@@ -289,7 +450,7 @@ def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, ma
     ny, nx = q.shape
     lo, hi = _L_bounds(dx, L_max, min(ny, nx) * dx)
     pad = ops.pad_cells(math.exp(hi), v_max if fit_advection else 0.0, dx)
-    solver = _SpectralSolver(ny, nx, dx, pad)
+    solver = _SpectralSolver(ny, nx, dx, pad, scheme)
     qt = torch.as_tensor(np.nan_to_num(q), dtype=torch.float64)
     idx = torch.as_tensor(np.flatnonzero(m.ravel()))
     yt = torch.as_tensor(yr.ravel()[m.ravel()], dtype=torch.float64)
@@ -302,7 +463,7 @@ def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, ma
         vy = v_max * P["uy"] if fit_advection else torch.zeros((), dtype=torch.float64)
         return L, vx, vy
 
-    def evaluate(P):
+    def evaluate(P, solver=solver):
         L, vx, vy = unpack(P)
         phi = solver(qt, L, vx, vy).reshape(-1)[idx]
         coef, fit = _varpro(torch.stack([phi, ones], dim=1), yt)
@@ -320,15 +481,24 @@ def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, ma
     def leaves(P):
         return [P["uL"]] + ([P["ux"], P["uy"]] if fit_advection else [])
 
+    warm = _warm_solver(solver, fit_advection)
     loss, P, _ = _multistart(_v_starts(v_max, None, fit_advection), make_params, leaves,
-                             lambda P: evaluate(P)[0], max_iter)
+                             lambda P: evaluate(P, warm)[0], max_iter)
+    if warm is not solver:
+        with torch.no_grad():
+            L, vx, vy = (float(t) for t in unpack(P))
+        if _continue_on_scheme(scheme, L, vx, vy, dx):
+            loss = _lbfgs(leaves(P), lambda: evaluate(P)[0], max_iter)
     with torch.no_grad():
         _, coef, mse = evaluate(P)
         L, vx, vy = unpack(P)
+    res, warning = grid_resolution_report(float(L), float(vx), float(vy), dx, scheme)
+    if warning:
+        log.warning("fit_operator: %s", warning)
     return {
         "L_m": float(L), "vx_m": float(vx), "vy_m": float(vy), "v_norm_m": float(math.hypot(float(vx), float(vy))),
         "a": float(coef[0]), "b": float(coef[1]), "rmse": float(math.sqrt(float(mse))), "loss": float(loss),
-        "pad_cells": int(pad),
+        "pad_cells": int(pad), "advection_scheme": scheme, **res, "resolution_warning": warning,
     }
 
 
@@ -365,6 +535,10 @@ class PhysicsModel:
             raise ValueError(f"physics.shade_form must be 'saturating' or 'sigmoid', got {self.shade_form!r}")
         if self.window not in ("day", "night"):
             raise ValueError(f"physics.window must be 'day' or 'night', got {self.window!r}")
+        scheme = str(self.cfg.get("advection_scheme") or ops.DEFAULT_SCHEME).lower()
+        if scheme not in ops.SCHEMES:
+            raise ValueError(f"physics.advection_scheme must be one of {ops.SCHEMES}, got {scheme!r}")
+        self.advection_scheme = scheme
         self.roles = {k: v for k, v in (self.cfg.get("roles") or {}).items() if v and k in _ROLES}
         self.v_max = float(self.cfg["v_max_m"])
         fa = self.cfg.get("fit_advection", "auto")
@@ -604,7 +778,7 @@ class PhysicsModel:
         self._valid_flat_t = torch.as_tensor(self._valid_flat)
         self._valid_flat_f = torch.as_tensor(self._valid_flat.astype(np.float64))
         if self._solver is None:
-            self._solver = _SpectralSolver(g.ny, g.nx, self.dx, self.pad)
+            self._solver = _SpectralSolver(g.ny, g.nx, self.dx, self.pad, self._scheme())
 
     def _linear_columns(self, feats: dict[str, np.ndarray], coords: np.ndarray) -> np.ndarray:
         cols = []
@@ -654,7 +828,7 @@ class PhysicsModel:
         tr_cells = torch.as_tensor(self.grid.cell_index[tr])
         solver = self._solver
 
-        def evaluate(P):
+        def evaluate(P, solver=solver):
             T = self._transform(P)
             q, q_mean = self._q_raster_torch(tf, T)
             phi = solver(q, T["L"], T["vx"], T["vy"]).reshape(-1)[tr_cells]
@@ -668,9 +842,19 @@ class PhysicsModel:
 
         max_iter = int(self.cfg["max_iter"])
         starts = _v_starts(self.v_max, self.v_init, self.fit_advection)
+        # Start on the central operator (the same as the hybrid one wherever every cell Péclet number < 1)
+        # and continue on the model's own where they differ: _warm_solver.
+        warm = _warm_solver(solver, self.fit_advection)
         loss, P, losses = _multistart(
-            starts, self._init_params, lambda P: self._active_leaves(P, tf), lambda P: evaluate(P)[0], max_iter,
+            starts, self._init_params, lambda P: self._active_leaves(P, tf), lambda P: evaluate(P, warm)[0], max_iter,
             int(self.cfg.get("start_iter") or 0))
+        continued = False
+        if warm is not solver:
+            with torch.no_grad():
+                T0 = self._transform(P)
+            continued = _continue_on_scheme(self._scheme(), float(T0["L"]), float(T0["vx"]), float(T0["vy"]), self.dx)
+            if continued:
+                loss = _lbfgs(self._active_leaves(P, tf), lambda: evaluate(P)[0], max_iter)
         with torch.no_grad():
             _, coef, mse, T, q_mean = evaluate(P)
         self._P = {k: v.detach().clone() for k, v in P.items()}
@@ -707,8 +891,14 @@ class PhysicsModel:
             self.train_rmse = float(math.sqrt(mse0))
             self.train_r2 = float(1.0 - mse0 / var_y)
         self._fitted = True
+        _, grid_warning = grid_resolution_report(self._T["L"], self._T["vx"], self._T["vy"], self.dx, self._scheme())
+        if grid_warning and self.a > 0:
+            # Logged only: advection selection may still replace this fit, so the run-level
+            # physics.grid_peclet event is emitted for the delivered models (report_grid_resolution).
+            log.info("physics: %s", grid_warning)
         self._store_operator_rasters(frame)
         self.fit_info = {"loss": float(loss), "start_losses": losses, "starts": starts,
+                         "continued_on_scheme": bool(continued),
                          "n_train": int(tr.size), "seconds": time.perf_counter() - t0, "pad_cells": int(self.pad)}
         log.info("physics: L=%.0f m v=(%.0f, %.0f) m a=%.3g train RMSE %.3f (%.1f s)", self._T["L"],
                  self._T["vx"], self._T["vy"], self.a, self.train_rmse, self.fit_info["seconds"])
@@ -717,6 +907,11 @@ class PhysicsModel:
     def _require_fit(self) -> None:
         if not self._fitted:
             raise RuntimeError("PhysicsModel is not fitted")
+
+    def _scheme(self) -> str:
+        """The advection scheme this model was fitted with.  Models pickled
+        before the scheme existed have no attribute and were central."""
+        return getattr(self, "advection_scheme", ops.LEGACY_SCHEME)
 
     def _store_operator_rasters(self, frame: pd.DataFrame) -> None:
         """Rasters needed by :meth:`operator_residual_torch` (fit frame)."""
@@ -802,7 +997,8 @@ class PhysicsModel:
         base = (self.b + self.gamma * self._elev_c_raster + self.beta_x * self._xc_raster
                 + self.beta_y * self._yc_raster)
         field = dT_raster - torch.as_tensor(base, dtype=dt, device=dev)
-        Lop = ops.apply_operator_torch(field, self._T["L"], self._T["vx"], self._T["vy"], self.dx)
+        Lop = ops.apply_operator_torch(field, self._T["L"], self._T["vx"], self._T["vy"], self.dx,
+                                       scheme=self._scheme())
         R = Lop - self.a * torch.as_tensor(q[1:-1, 1:-1], dtype=dt, device=dev)
         a = self.a if abs(self.a) > 1e-12 else math.copysign(1e-12, self.a or 1.0)
         return R[torch.as_tensor(sv, device=dev)] / a
@@ -812,8 +1008,13 @@ class PhysicsModel:
     def params(self) -> dict:
         self._require_fit()
         T = self._T
+        # How well the grid resolves L at the fitted wind (cell Péclet numbers, √D per axis); computed
+        # here rather than stored so models pickled before these keys existed report them too.  The
+        # warning is dropped with the physics term (a = 0), as in fit().
+        res, grid_warning = grid_resolution_report(T["L"], T["vx"], T["vy"], self.dx, self._scheme())
         return {
             "L_m": T["L"], "vx_m": T["vx"], "vy_m": T["vy"], "v_norm_m": float(math.hypot(T["vx"], T["vy"])),
+            "advection_scheme": self._scheme(), **res, "resolution_warning": grid_warning if self.a > 0 else None,
             "a": self.a, "b": self.b, "gamma": self.gamma, "beta_x": self.beta_x, "beta_y": self.beta_y,
             "s": T["s"], "shade_form": self.shade_form, "kappa_canopy": T["kc"],
             "shade_c0": T["c0"], "shade_width": T["cw"], "a1": T["a1"], "a1n": T["a1n"], "e0": T["e0"], "e1": T["e1"], "e2": T["e2"],

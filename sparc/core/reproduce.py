@@ -72,7 +72,7 @@ def reproduce(run_dir: str | Path, stages=("S0", "S1", "S2", "S3"), tol_r2: floa
     next to the original), with ``run_meta`` plus ``role = "reproduction"``
     recorded in its manifest; ``reproduce.json`` goes into it."""
     from sparc.core import progress, runio
-    from sparc.core.config import core_config_from_dict
+    from sparc.core.config import core_config_from_dict, recorded_advection_scheme, with_advection_scheme
     from sparc.core.pipeline import run_core
     from sparc.core.provenance import sha256_file
 
@@ -82,7 +82,9 @@ def reproduce(run_dir: str | Path, stages=("S0", "S1", "S2", "S3"), tol_r2: floa
     base = config_dir or prov.get("config_dir")
     if base is None:
         raise ValueError("the manifest has no config_dir (older run): pass config_dir / --config-dir")
-    cfg = core_config_from_dict(old["config"], base_dir=base)
+    # the scheme the run was fitted with (a pre-scheme run: central), not today's default
+    raw = with_advection_scheme(old["config"], recorded_advection_scheme(old["config"]))
+    cfg = core_config_from_dict(raw, base_dir=base)
     if prov.get("input_kind") == "frame":
         raise ValueError("this run was made from an in-memory table; reproduce needs a file-based run")
     sha = sha256_file(cfg.data_path)

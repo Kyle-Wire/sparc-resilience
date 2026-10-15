@@ -486,7 +486,7 @@ Envelope, present on every line:
   - `cv.block_raised`, `cv.partition_skipped`
   - `checkpoint.mismatch`
   - `influence.few_cells`, `influence.constant_predictor` (emitted by `influence.py`, which is instrumented, §11 item 7)
-  - `physics.missing_roles`, `physics.antiphysical_a`
+  - `physics.missing_roles`, `physics.antiphysical_a`, `physics.grid_peclet` (once per run, after advection selection, when a delivered fold's fit has a cell Péclet number above 1: L is then weakly or not identified along that axis, or the central scheme's kernel has negative lobes; the per-fold texts are in `physics.json` `resolution_warning`)
 - Causal:
   - `causal.hole_scale`, `causal.blp_constant`, `causal.dag_unavailable`
   - `causal.no_confounders`, `causal.controls_missing`, `causal.treatment_missing`

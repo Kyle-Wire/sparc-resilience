@@ -1,6 +1,6 @@
 # Model card — synthetic_demo
 
-*Generated 2026-10-01T21:21:49+00:00 from the run manifest.*
+*Generated 2026-10-15T18:43:05+00:00 from the run manifest.*
 
 ## Intended use
 
@@ -16,7 +16,7 @@
 
 ## Performance (held-out spatial blocks)
 
-- RMSE 0.34 degF, R² 0.81, 90% interval coverage 0.89.
+- RMSE 0.34 degF, R² 0.82, 90% interval coverage 0.89.
 
 - Against standard baselines on the same folds: stack not distinguishable from hgb_focal (|ΔMSE| ≤ 2 SE).
 
@@ -29,7 +29,7 @@
 ## Noise floor
 
 - Target rounding noise ≈ 0.01 degF (0% whole-degree values).
-- City-wide scenario differences smaller than ≈ 0.45 degF (2 × median jackknife SE) are not distinguishable from fold-to-fold variation.
+- City-wide scenario differences smaller than ≈ 0.44 degF (2 × median jackknife SE) are not distinguishable from fold-to-fold variation.
 
 ## Limitations
 
@@ -40,4 +40,4 @@
 
 ## Reproducibility
 
-- commit `5a04f4472c57`, code `9ef8fac0551a`, input `4bfb0ca0ba3b`, config `58f0d8cabbf3`; `sparc core reproduce` re-runs and compares.
+- commit `c0b556280fa7`, code `5966cc525919`, input `4bfb0ca0ba3b`, config `b9fe879229ca`; `sparc core reproduce` re-runs and compares.

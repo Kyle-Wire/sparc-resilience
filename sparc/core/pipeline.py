@@ -1015,6 +1015,12 @@ class _Run:
                                            buffer_m=buf, seed=int(cfg.raw["cv"].get("seed", 42)))
                 ens = fit_ensemble(ctx, folds, cfg, ranges_m=ranges, intercept_range_m=influence.target_resid_range_m,
                                    L_init=influence.L_prior_m, seed=int(cfg.raw["cv"].get("seed", 0)))
+                if ens.has_physics:
+                    # once per run, for the models advection selection kept (physics.grid_peclet)
+                    from sparc.core.physics import report_grid_resolution
+
+                    report_grid_resolution([st.physics.params if st.physics is not None else None
+                                            for st in ens.stacks])
                 self.state.update(influence=influence, folds=folds, ensemble=ens)
                 self.save("S3")
                 st = ens.metrics["stacker"]

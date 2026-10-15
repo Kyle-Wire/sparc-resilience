@@ -16,6 +16,11 @@ These drive the core unit tests: every stage must recover what was planted.
   the committed Studio fixture and the event-invariant tests.
 
 Target units are "°F-like" (arbitrary but realistic magnitudes).
+
+Physics truths are planted (and their exact footprints computed) with the
+default advection scheme of :mod:`sparc.core.operators` (hybrid), the one
+the physics model fits by default.  At the planted cell Péclet numbers
+(|v|·dx/2L² ≤ 0.06) it is the central scheme, bit for bit.
 """
 
 from __future__ import annotations
@@ -69,11 +74,13 @@ def make_operator_fixture(
     b: float = 0.5,
     noise: float = 0.05,
     seed: int = 0,
+    scheme: str = ops.DEFAULT_SCHEME,
 ) -> dict:
-    """y = a·solve(q; L, v) + b + ε on a full n×n grid with a short-range source."""
+    """y = a·solve(q; L, v) + b + ε on a full n×n grid with a short-range source
+    (``scheme``: the advection scheme the truth is planted with)."""
     rng = np.random.default_rng(seed)
     q = gaussian_random_field((n, n), range_cells=2.0, rng=rng)
-    phi = ops.solve(q, L, v, dx=dx)
+    phi = ops.solve(q, L, v, dx=dx, scheme=scheme)
     y = a * phi + b
     y = y + noise * y.std() * rng.standard_normal(y.shape)
     yy, xx = np.mgrid[0:n, 0:n]
@@ -84,7 +91,7 @@ def make_operator_fixture(
         "x": (xx * dx).ravel().astype(float),
         "y_coord": (yy * dx).ravel().astype(float),
         "values": y.ravel(),
-        "truth": {"L": L, "v": v, "a": a, "b": b, "dx": dx},
+        "truth": {"L": L, "v": v, "a": a, "b": b, "dx": dx, "scheme": ops.check_scheme(scheme)},
     }
 
 

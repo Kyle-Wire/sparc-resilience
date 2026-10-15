@@ -90,7 +90,8 @@ def build_emulator(resp, var: str, kernel_cells: int | None = None, max_kernel_c
         for f, pt in enumerate(terms):
             p = ens.stacks[f].physics.model.params
             L, v = float(p["L_m"]), (float(p.get("vx_m", 0.0)), float(p.get("vy_m", 0.0)))
-            G = ops.solve(imp, L, v, dx=g.dx, dy=g.dy, pad=k)
+            # the fold's own discretisation (runs fitted before the scheme existed were central)
+            G = ops.solve(imp, L, v, dx=g.dx, dy=g.dy, pad=k, scheme=ops.params_scheme(p))
             w = float(np.median(g_phys[f]))                  # the stack's weight on its physics input
             kern += w * pt["a"] * G
             dq += pt["dq"]

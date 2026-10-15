@@ -247,9 +247,10 @@ class ResponseEngine:
             p = pm.params
             a = float(p["a"])
             L, v = float(p["L_m"]), (float(p.get("vx_m", 0.0)), float(p.get("vy_m", 0.0)))
+            scheme = ops.params_scheme(p)                    # the fold's own; old runs were central
             dq = (pm.source_points(fr) - pm.source_points(self.data.frame)) / delta
-            g0 = ops.green_centre(L, v, g.dx, g.dy)
-            gm = g.sample(ops.green_mass(g.mask.astype(float), L, v, g.dx, g.dy))
+            g0 = ops.green_centre(L, v, g.dx, g.dy, scheme=scheme)
+            gm = g.sample(ops.green_mass(g.mask.astype(float), L, v, g.dx, g.dy, scheme=scheme))
             out.append({"a": a, "g0": g0, "gmass": gm, "dq": dq})
         return out
 
@@ -307,7 +308,8 @@ class ResponseEngine:
                 own[k] += g_phys[k] * pt["a"] * pt["g0"] * pt["dq"]
                 # Σ_j g_j·G(j−i): adjoint solve of the sensitivity raster
                 gr = g.rasterize(g_phys[k], fill=0.0)
-                adj = g.sample(ops.solve(np.nan_to_num(gr), L, (-v[0], -v[1]), dx=g.dx, dy=g.dy))
+                adj = g.sample(ops.solve(np.nan_to_num(gr), L, (-v[0], -v[1]), dx=g.dx, dy=g.dy,
+                                           scheme=ops.params_scheme(p)))
                 foot[k] += pt["a"] * adj * pt["dq"]
         return {
             "own": self.ens.decision(own), "own_sd": self.ens.jackknife_sd(own),
@@ -341,7 +343,8 @@ class ResponseEngine:
             if phys is not None:
                 po = np.empty_like(self._phys_base)
                 for k, (pm, p) in enumerate(phys):
-                    g0 = ops.green_centre(float(p["L_m"]), (float(p.get("vx_m", 0)), float(p.get("vy_m", 0))), g.dx)
+                    g0 = ops.green_centre(float(p["L_m"]), (float(p.get("vx_m", 0)), float(p.get("vy_m", 0))), g.dx,
+                                          scheme=ops.params_scheme(p))
                     po[k] = self._phys_base[k] + float(p["a"]) * g0 * (pm.source_points(fr) - q0[k])
             ctx = self.eng.clip_ctx(build_context(fr, data, self.eng.ranges_m, self.cfg, F_override=F2))
             fp = self.ens.fold_predictions(ctx, phys_override=po)

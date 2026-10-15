@@ -44,7 +44,8 @@ from typing import Any, Callable
 import numpy as np
 
 from sparc.core import progress
-from sparc.core.config import CoreConfig, core_config_from_dict, load_core_config
+from sparc.core.config import (CoreConfig, core_config_from_dict, load_core_config, recorded_advection_scheme,
+                               with_advection_scheme)
 
 log = logging.getLogger(__name__)
 
@@ -104,16 +105,20 @@ def config_for_run(run_dir, fallback: CoreConfig | str | os.PathLike | None = No
     3. ``fallback``: a :class:`CoreConfig` or a config path given at import.
 
     A candidate whose data file is missing yields to the next one; the first candidate is returned when none
-    has its data (the caller's ``load_run`` then reports the missing file).
+    has its data (the caller's ``load_run`` then reports the missing file).  Every candidate carries the
+    ``physics.advection_scheme`` the run was fitted with (``config.recorded_advection_scheme``: central for
+    a run made before the key existed), not today's default.
     """
     run_dir = Path(run_dir)
     sdir = Path(studio_dir) if studio_dir is not None else run_dir / "studio"
     manifest = _read_json(run_dir / "manifest.json")
+    # The advection scheme the run was fitted with, kept whatever today's DEFAULTS say.
+    scheme = recorded_advection_scheme((manifest or {}).get("config"), _read_json(run_dir / "physics.json"))
     cands: list[CoreConfig] = []
     launch = _read_json(sdir / "launch.json")
     if launch and isinstance(launch.get("config_raw"), dict):
         try:
-            cfg = core_config_from_dict(copy.deepcopy(launch["config_raw"]),
+            cfg = core_config_from_dict(with_advection_scheme(launch["config_raw"], scheme),
                                         base_dir=launch.get("config_dir") or run_dir)
             cands.append(_apply_modes(cfg, run_dir, launch.get("args"), manifest))
         except (OSError, ValueError) as exc:
@@ -121,13 +126,15 @@ def config_for_run(run_dir, fallback: CoreConfig | str | os.PathLike | None = No
     if manifest and isinstance(manifest.get("config"), dict):
         base = (manifest.get("provenance") or {}).get("config_dir") or run_dir
         try:
-            cfg = core_config_from_dict(copy.deepcopy(manifest["config"]), base_dir=base)
+            cfg = core_config_from_dict(with_advection_scheme(manifest["config"], scheme), base_dir=base)
             cands.append(_apply_modes(cfg, run_dir, None, manifest))
         except (OSError, ValueError) as exc:
             log.warning("%s: manifest config unusable: %s", run_dir, exc)
     if fallback is not None:
-        cfg = fallback if isinstance(fallback, CoreConfig) else load_core_config(fallback)
-        cands.append(_apply_modes(copy.deepcopy(cfg), run_dir, None, manifest))
+        cfg = copy.deepcopy(fallback if isinstance(fallback, CoreConfig) else load_core_config(fallback))
+        if scheme is not None:                   # the run's records outrank a config given at import
+            cfg.raw.setdefault("physics", {})["advection_scheme"] = scheme
+        cands.append(_apply_modes(cfg, run_dir, None, manifest))
     if not cands:
         raise FileNotFoundError(f"{run_dir}: no launch.json, manifest config or fallback config")
     for cfg in cands:

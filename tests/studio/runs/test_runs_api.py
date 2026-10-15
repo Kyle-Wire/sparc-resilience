@@ -49,7 +49,8 @@ def test_list_and_detail(client, demo, fixture_run, synth):
     states = {s["id"]: s["state"] for s in d["stages"]}
     assert states["S0"] == "done" and states["S7"] == "done"
     ck = d["checkpoint"]                                   # the fixture keeps checkpoint.json, not the pickle
-    assert ck["present"] is False and set(ck["done"]) >= {"S3", "S4"} and ck["fingerprint"] == "68c17c7b36fce387"
+    side = json.loads((synth / "checkpoint.json").read_text())   # (re-recorded whenever core outputs change)
+    assert ck["present"] is False and set(ck["done"]) >= {"S3", "S4"} and ck["fingerprint"] == side["fingerprint"]
     assert ck["resumable"] is False and ck["reason"] == "the run is complete"
     assert d["outputs_summary"]["present"] >= 20
     assert client.get("/api/runs/nope").status_code == 404
@@ -481,7 +482,8 @@ def test_waiting_post_jobs_are_running_cells_with_a_reason():
 def test_manifest_config_provenance_environment(client, demo, fixture_run, synth):
     rid, _ = fixture_run
     m = client.get(f"/api/runs/{rid}/manifest").json()
-    assert m["name"] == "synthetic_demo" and m["created_utc"] == "2026-10-01T21:21:49+00:00"
+    recorded = json.loads((synth / "manifest.json").read_text())["created_utc"]
+    assert m["name"] == "synthetic_demo" and m["created_utc"] == recorded
     cfg = client.get(f"/api/runs/{rid}/config").json()
     assert cfg["source"] == "launch" and cfg["config_dir"] == demo["dir"]
     assert cfg["effective"]["cv"]["n_folds"] == 3                       # fast mode applied

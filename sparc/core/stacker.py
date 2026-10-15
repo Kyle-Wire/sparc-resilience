@@ -181,10 +181,11 @@ class PhysicsInformedStacker:
 
         use_pde = self.physics is not None and self.lambda_pde > 0
         if use_pde:
-            from sparc.core.operators import apply_operator_torch, stencil_valid
+            from sparc.core.operators import apply_operator_torch, params_scheme, stencil_valid
 
             pp = self.physics.params
             L, vx, vy = float(pp["L_m"]), float(pp.get("vx_m", 0.0)), float(pp.get("vy_m", 0.0))
+            scheme = params_scheme(pp)      # the fitted operator's; old runs (no key) were central
             interior = torch.as_tensor(stencil_valid(self.grid.mask)[1:-1, 1:-1])
             # Normalise by the operator roughness of the data's own misfit
             # (y − ΔT_phys) on training cells: λ = 1 then penalises a learned
@@ -197,7 +198,7 @@ class PhysicsInformedStacker:
                 sv = stencil_valid(ok)[1:-1, 1:-1]
                 if sv.sum() >= 50:
                     Rr = apply_operator_torch(torch.as_tensor(np.nan_to_num(resid_rast)), L, vx, vy,
-                                              self.grid.dx, self.grid.dy)[torch.as_tensor(sv)]
+                                              self.grid.dx, self.grid.dy, scheme=scheme)[torch.as_tensor(sv)]
                     self.pde_scale = float((Rr**2).mean()) or 1.0
                 else:
                     self.pde_scale = float(np.var(np.asarray(y, float)[fit_idx])) or 1.0
@@ -221,7 +222,7 @@ class PhysicsInformedStacker:
                 # The PDE acts on the part of the prediction the physics does
                 # not explain (ΔT̂ − ΔT_phys; = r in backbone mode).
                 r_rast, _ = self.grid.rasterize_torch(pred - phys_t)
-                R = apply_operator_torch(r_rast, L, vx, vy, self.grid.dx, self.grid.dy)[interior]
+                R = apply_operator_torch(r_rast, L, vx, vy, self.grid.dx, self.grid.dy, scheme=scheme)[interior]
                 pde = (R**2).mean() / self.pde_scale if R.numel() else r.new_zeros(())
                 loss = loss + self.lambda_pde * pde
             loss.backward()

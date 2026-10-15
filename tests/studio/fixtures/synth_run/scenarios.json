@@ -1,89 +1,89 @@
 [
   {
     "name": "Canopy Increase +5",
-    "mean_delta": -0.6218780473242606,
-    "mean_delta_se": 0.1636103741669042,
-    "p10_delta": -1.0358703525365158,
-    "p90_delta": -0.30491396255081626,
-    "mean_delta_sd": 0.16800778125582774,
-    "frac_extrapolated": 0.4758928571428571,
+    "mean_delta": -0.6250549801560061,
+    "mean_delta_se": 0.16179942920676052,
+    "p10_delta": -1.0414019954642553,
+    "p90_delta": -0.3070139343963681,
+    "mean_delta_sd": 0.16605002995544138,
+    "frac_extrapolated": 0.4857142857142857,
     "mean_realized": {
       "canopy": 5.0
     },
     "causal_linear": {
-      "delta": -0.2052248509212945,
-      "lo": -0.27363517313111724,
-      "hi": -0.13681452871147176,
+      "delta": -0.20252564598496425,
+      "lo": -0.27049907169203086,
+      "hi": -0.13455222027789765,
       "model_within": false
     }
   },
   {
     "name": "Canopy Increase +10",
-    "mean_delta": -1.0316500390097199,
-    "mean_delta_se": 0.28149278439991643,
-    "p10_delta": -1.697750727351196,
-    "p90_delta": -0.503336755398642,
-    "mean_delta_sd": 0.2845318485905357,
+    "mean_delta": -1.0329444492480389,
+    "mean_delta_se": 0.2784096184843804,
+    "p10_delta": -1.6959796271439853,
+    "p90_delta": -0.5069147127859015,
+    "mean_delta_sd": 0.281104639246393,
     "frac_extrapolated": 0.7276785714285714,
     "mean_realized": {
       "canopy": 10.0
     },
     "causal_linear": {
-      "delta": -0.410449701842589,
-      "lo": -0.5472703462622345,
-      "hi": -0.2736290574229435,
+      "delta": -0.4050512919699285,
+      "lo": -0.5409981433840617,
+      "hi": -0.2691044405557953,
       "model_within": false
     }
   },
   {
     "name": "Canopy Increase +20",
-    "mean_delta": -1.499782904389928,
-    "mean_delta_se": 0.45712536374258744,
-    "p10_delta": -2.436254717763016,
-    "p90_delta": -0.746269945976983,
-    "mean_delta_sd": 0.4585729682109684,
+    "mean_delta": -1.5060059800920853,
+    "mean_delta_se": 0.45073585016120304,
+    "p10_delta": -2.439287782716229,
+    "p90_delta": -0.7510866725400157,
+    "mean_delta_sd": 0.4518176626509896,
     "frac_extrapolated": 1.0,
     "mean_realized": {
       "canopy": 20.0
     },
     "causal_linear": {
-      "delta": -0.820899403685178,
-      "lo": -1.094540692524469,
-      "hi": -0.547258114845887,
+      "delta": -0.810102583939857,
+      "lo": -1.0819962867681234,
+      "hi": -0.5382088811115906,
       "model_within": false
     }
   },
   {
     "name": "Impervious Decrease \u221210",
-    "mean_delta": -0.18214703373566943,
-    "mean_delta_se": 0.15428216256864394,
-    "p10_delta": -0.24671777416196106,
-    "p90_delta": -0.11803807789811743,
-    "mean_delta_sd": 0.15862539795566072,
-    "frac_extrapolated": 0.34285714285714286,
+    "mean_delta": -0.18369111931231952,
+    "mean_delta_se": 0.1532633321242161,
+    "p10_delta": -0.24717164579172354,
+    "p90_delta": -0.11999441411874887,
+    "mean_delta_sd": 0.15807017092875458,
+    "frac_extrapolated": 0.3419642857142857,
     "mean_realized": {
       "impervious": -9.99791875
     }
   },
   {
     "name": "Impervious Decrease \u221220",
-    "mean_delta": -0.34979080681655583,
-    "mean_delta_se": 0.3064843475902563,
-    "p10_delta": -0.4927175704796419,
-    "p90_delta": -0.21473644094844388,
-    "mean_delta_sd": 0.309610854882552,
-    "frac_extrapolated": 0.6821428571428572,
+    "mean_delta": -0.3525816737320822,
+    "mean_delta_se": 0.30496512962010214,
+    "p10_delta": -0.4934196153643102,
+    "p90_delta": -0.21703110416420304,
+    "mean_delta_sd": 0.3084944275951608,
+    "frac_extrapolated": 0.6830357142857143,
     "mean_realized": {
       "impervious": -19.293013392857144
     }
   },
   {
     "name": "Albedo Increase +0.05",
-    "mean_delta": -0.21770505595474576,
-    "mean_delta_se": 0.040135917685862124,
-    "p10_delta": -0.3164068049720289,
-    "p90_delta": -0.1290394545607827,
-    "mean_delta_sd": 0.0470178028712321,
+    "mean_delta": -0.21954783931937827,
+    "mean_delta_se": 0.03965295224493337,
+    "p10_delta": -0.31826494326661814,
+    "p90_delta": -0.1294769406145147,
+    "mean_delta_sd": 0.04649506456855883,
     "frac_extrapolated": 0.22410714285714287,
     "mean_realized": {
       "albedo": 0.05
@@ -91,11 +91,11 @@
   },
   {
     "name": "Albedo Increase +0.1",
-    "mean_delta": -0.43601259017370364,
-    "mean_delta_se": 0.07773175896173032,
-    "p10_delta": -0.6342047081806629,
-    "p90_delta": -0.258509525422733,
-    "mean_delta_sd": 0.08508498980202121,
+    "mean_delta": -0.4398692114703549,
+    "mean_delta_se": 0.07621745395663825,
+    "p10_delta": -0.6398471211578111,
+    "p90_delta": -0.260350698203681,
+    "mean_delta_sd": 0.08357711696730002,
     "frac_extrapolated": 0.5366071428571428,
     "mean_realized": {
       "albedo": 0.1
@@ -103,12 +103,12 @@
   },
   {
     "name": "Cooling package",
-    "mean_delta": -1.3051926100310534,
-    "mean_delta_se": 0.37836199473127574,
-    "p10_delta": -2.0748908705659526,
-    "p90_delta": -0.6813637120107432,
-    "mean_delta_sd": 0.3817764384252109,
-    "frac_extrapolated": 0.7482142857142857,
+    "mean_delta": -1.3097600416317825,
+    "mean_delta_se": 0.37251714643686623,
+    "p10_delta": -2.067752779178077,
+    "p90_delta": -0.6845727291141173,
+    "mean_delta_sd": 0.3761248173510558,
+    "frac_extrapolated": 0.7491071428571429,
     "mean_realized": {
       "canopy": 10.0,
       "impervious": -9.99791875,

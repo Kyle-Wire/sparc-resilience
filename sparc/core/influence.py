@@ -441,6 +441,7 @@ def _kernel_ring_weights_cached(edges: tuple, dx: float, family: str, scale_m: f
     elif family == "green":
         q = np.zeros(d.shape)
         q[K, K] = 1.0
+        # v = 0: every advection scheme reduces to the 5-point operator (D = L²).
         k = ops.solve(q, scale_m, (0.0, 0.0), dx=dx, pad=int(math.ceil(6.0 * scale_m / dx)) + 4)
     else:
         raise ValueError(f"unknown kernel family {family!r}")

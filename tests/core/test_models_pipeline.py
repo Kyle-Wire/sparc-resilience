@@ -448,3 +448,83 @@ def test_emulator_matches_exact_engine_on_patches(synthetic_run):
     v = validate(eng, em, "canopy", 10.0, n_patches=3, radii_m=(90.0,))
     assert v["patch_mean_abs_err_median"] < 0.05 and v["p95_cell_err_median"] < 0.1
     assert v["patches"][0]["emu_patch_mean"] < 0                       # canopy cools in both
+
+
+def _operator_L(name: str, args: tuple) -> float | None:
+    """The L argument of a spied operator call (positional, as the callers pass it)."""
+    pos = {"solve": 1, "green_mass": 1, "apply_operator_torch": 1, "green_centre": 0}[name]
+    return float(args[pos]) if len(args) > pos else None
+
+
+@pytest.mark.parametrize("legacy", [True, False], ids=["pre_scheme_model", "exponential_model"])
+def test_fitted_operator_callers_use_each_fold_model_scheme(synthetic_run, monkeypatch, legacy):
+    """Response (G0, G-mass, the −v adjoint solve, own-only PD), the emulator
+    kernel and the stacker's PDE penalty re-apply each fold's fitted operator
+    with that fold's scheme.  A model pickled before ``advection_scheme``
+    existed (no attribute, a central solver) was fitted with "central" and
+    must get it, not the current default (hybrid).  The folds are moved to
+    L = 45 m, v = (400, −250) m (cell Péclet > 1 on both axes), where every
+    scheme's G(0) differs from the others' (by about 30 % central vs
+    exponential), so a caller that dropped the scheme (the default) is caught
+    with either model."""
+    import copy
+
+    from sparc.core.emulator import build_emulator
+    from sparc.core.physics import _SpectralSolver
+    from sparc.core.response import ResponseEngine
+    from sparc.core.scenarios import ScenarioEngine
+    from sparc.core.stacker import PhysicsInformedStacker, StackerInputs
+
+    r = synthetic_run
+    g = r.data.grid
+    L, v = 45.0, (400.0, -250.0)
+    want = "central" if legacy else "exponential"
+    ens = copy.deepcopy(r.ensemble)
+    for st in ens.stacks:
+        pm = st.physics.model
+        pm._T.update(L=L, vx=v[0], vy=v[1])
+        pm._solver = _SpectralSolver(g.ny, g.nx, pm.dx, pm.pad, want)
+        if legacy:
+            del pm.advection_scheme
+        else:
+            pm.advection_scheme = "exponential"
+        assert ops.params_scheme(pm.params) == want
+    calls = []
+
+    def spy(name):
+        fn = getattr(ops, name)
+
+        def wrapped(*a, **k):
+            if _operator_L(name, a) == L:                    # the fitted operator, not a generator's
+                calls.append((name, k.get("scheme", ops.DEFAULT_SCHEME), a))
+            return fn(*a, **k)
+        return wrapped
+
+    for name in ("solve", "green_centre", "green_mass", "apply_operator_torch"):
+        monkeypatch.setattr(ops, name, spy(name))
+
+    resp = ResponseEngine(ScenarioEngine(r.data, r.cfg, ens, r.influence.ranges_m, None))
+    # Only the physics path is under test: skip the focal channels and stand in for the stacks'
+    # predictions with their physics input (so each stack's sensitivity to it is 1).
+    monkeypatch.setattr(resp, "_focal_cols", lambda var: [])
+    monkeypatch.setattr(ens, "fold_predictions", lambda ctx, phys_override=None, F_only=False: (
+        np.zeros((len(ens.stacks), r.data.n)) if phys_override is None else np.array(phys_override, float)))
+    x = r.data.frame["canopy"].to_numpy(float)
+    terms = resp._physics_terms(resp._edited("canopy", x + 5.0), np.full(r.data.n, 5.0))
+    resp.marginals("canopy")                                 # G0, G-mass and the adjoint solve with −v
+    resp.own_only_pd("canopy", np.array([30.0]))             # G0 per fold
+    build_emulator(resp, "canopy", kernel_cells=8)           # the fold kernels
+    pm = ens.stacks[0].physics.model
+    st = PhysicsInformedStacker({"epochs": 2, "hidden": 8, "eval_every": 1}, g, physics=pm, lambda_pde=1.0)
+    st.fit(StackerInputs(Z=r.data.y[:, None] + 0.1, phys=pm.predict(r.data.frame, r.data.coords),
+                         feats=np.zeros((r.data.n, 1))), r.data.y, np.arange(r.data.n))
+
+    used = {(name, scheme) for name, scheme, _ in calls}
+    assert {name for name, _ in used} == {"solve", "green_centre", "green_mass", "apply_operator_torch"}, used
+    assert {scheme for _, scheme in used} == {want}, used
+    assert any(name == "solve" and tuple(a[2]) == (-v[0], -v[1]) for name, _, a in calls)     # the adjoint
+    # and the numbers are that scheme's: G(0) differs between the schemes here
+    g0 = {s: ops.green_centre(L, v, g.dx, g.dy, scheme=s) for s in ops.SCHEMES}
+    assert abs(g0["central"] - g0["exponential"]) > 0.1 * g0["central"]
+    assert abs(g0[want] - g0[ops.DEFAULT_SCHEME]) > 0.01 * g0[want]
+    assert all(t["g0"] == g0[want] for t in terms)

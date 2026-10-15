@@ -413,7 +413,9 @@ def _accuracy(ctx, env) -> dict:
                 vals = [fnum((f or {}).get(key)) for f in pj]
                 if any(v is not None for v in vals):
                     folds.append({"param": key, "values": vals})
-        warns = [str(f.get("fit_warning")) for f in (pj or []) if isinstance(f, dict) and f.get("fit_warning")]
+        # per-fold fit warnings: an anti-physical amplitude, and a fitted L the grid cannot resolve at that wind
+        warns = [str(f.get(k)) for k in ("fit_warning", "resolution_warning")
+                 for f in (pj or []) if isinstance(f, dict) and f.get(k)]
         phys = {"params": params, "folds": folds, "warnings": warns}
     adv = m.get("physics_advection")
     advection = None

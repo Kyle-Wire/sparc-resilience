@@ -73,7 +73,7 @@ def plant_runs(kind: str, layout, real: dict, rng, winds) -> list[np.ndarray]:
             src = np.zeros(g.shape)
             src[g.iy, g.ix] = np.exp(-np.asarray(wd, float) / 100.0)
             v = (ADVECTION_S * spd * u[0], ADVECTION_S * spd * u[1])
-            sig = sig - 0.6 * ops.solve(src, 300.0, v, dx=g.dx)[g.iy, g.ix]
+            sig = sig - 0.6 * ops.solve(src, 300.0, v, dx=g.dx)[g.iy, g.ix]     # default scheme: G ≥ 0 at any wind
         noise = 0.8 * (0.75 * persist + 0.55 * _grf_points(g, real["residual_range_m"], rng)
                        + 0.35 * rng.standard_normal(g.iy.size))
         out.append(real["mean"] + sig + noise)
