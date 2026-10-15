@@ -1,6 +1,6 @@
 {
   "present": {
-    "mean": 88.15622678571428,
+    "mean": 88.1562169642857,
     "share_at_or_above": {
       "90.0": 0.03482142857142857,
       "95.0": 0.0
@@ -34,7 +34,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 89.85722678571427,
+          "mean": 89.8572169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -75,7 +75,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 90.61322678571428,
+          "mean": 90.6132169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -116,13 +116,13 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 90.99122678571428,
+          "mean": 90.9912169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
             "90.0": {
               "median": 0.9441964285714286,
-              "p10": 0.6392857142857142,
+              "p10": 0.6397321428571429,
               "p90": 0.9977678571428572
             },
             "95.0": {
@@ -157,7 +157,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 90.04622678571428,
+          "mean": 90.0462169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -198,7 +198,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 91.36922678571428,
+          "mean": 91.3692169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -239,7 +239,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 93.07022678571428,
+          "mean": 93.0702169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -280,7 +280,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 90.04622678571428,
+          "mean": 90.0462169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -321,7 +321,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 91.93622678571428,
+          "mean": 91.9362169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -362,7 +362,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 95.14922678571428,
+          "mean": 95.1492169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -372,7 +372,7 @@
               "p90": 1.0
             },
             "95.0": {
-              "median": 0.5160714285714286,
+              "median": 0.515625,
               "p10": 0.103125,
               "p90": 0.9959821428571429
             }
@@ -403,14 +403,14 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 90.23522678571427,
+          "mean": 90.2352169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
             "90.0": {
               "median": 0.5151785714285715,
               "p10": 0.2888392857142857,
-              "p90": 0.8919642857142858
+              "p90": 0.8924107142857143
             },
             "95.0": {
               "median": 0.0,
@@ -444,7 +444,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 92.69222678571428,
+          "mean": 92.6922169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {
@@ -485,7 +485,7 @@
       "variants": [
         {
           "name": "no adaptation",
-          "mean": 96.85022678571428,
+          "mean": 96.8502169642857,
           "adaptation_mean_delta": 0.0,
           "offset_share_of_median_warming": null,
           "share_at_or_above": {

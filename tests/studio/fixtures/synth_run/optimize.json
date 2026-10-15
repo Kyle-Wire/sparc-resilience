@@ -1,10 +1,10 @@
 {
   "variable": "canopy",
   "budget": 2000.0,
-  "planned_total_cooling": 586.7253039817813,
-  "realized_total_cooling": 626.8125261734748,
-  "realized_mean_cooling_treated": 0.8145171176089587,
-  "realized_mean_cooling_all": 0.5596540412263168,
+  "planned_total_cooling": 586.727609650014,
+  "realized_total_cooling": 626.7472763688722,
+  "realized_mean_cooling_treated": 0.8144396845733449,
+  "realized_mean_cooling_all": 0.5595957824722073,
   "n_cells_treated": 232,
   "mean_dose_treated": 8.620689655172377,
   "total_cost": 1999.9999999999914,
@@ -14,28 +14,28 @@
     "points": [
       {
         "budget": 500.0,
-        "total_benefit": 194.27134094377922,
+        "total_benefit": 194.2758097871028,
         "n_cells": 75,
         "n_segments": 75,
         "gini": 0.9865975696926376
       },
       {
         "budget": 1000.0,
-        "total_benefit": 345.2201592829567,
+        "total_benefit": 345.22361771678266,
         "n_cells": 142,
         "n_segments": 150,
         "gini": 0.9731951393852752
       },
       {
         "budget": 2000.0,
-        "total_benefit": 586.7253039817813,
+        "total_benefit": 586.727609650014,
         "n_cells": 232,
         "n_segments": 300,
         "gini": 0.9463902787705507
       },
       {
         "budget": 4000.0,
-        "total_benefit": 924.7721453426474,
+        "total_benefit": 924.759373270636,
         "n_cells": 330,
         "n_segments": 600,
         "gini": 0.8927805575411001

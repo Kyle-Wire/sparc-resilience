@@ -26,7 +26,7 @@ Spatial-block cross-validation (Roberts et al. 2017): 16 square blocks of 390 m 
 
 Held-out skill: RMSE 0.34 degF, R² 0.82, interval coverage 0.89.
 
-Standard baselines were fitted on the same folds and compared with the stack by a block-clustered paired difference in squared error: gradient boosting, covariates + x,y RMSE 0.68 (ΔMSE +0.341 ± 0.124); gradient boosting on the stack's inputs (covariates + neighbourhood features) RMSE 0.47 (ΔMSE +0.105 ± 0.059); inverse-distance interpolation (no covariates) RMSE 0.64 (ΔMSE +0.300 ± 0.162). Verdict: stack not distinguishable from hgb_focal (|ΔMSE| ≤ 2 SE).
+Standard baselines were fitted on the same folds and compared with the stack by a block-clustered paired difference in squared error: gradient boosting, covariates + x,y RMSE 0.67 (ΔMSE +0.331 ± 0.120); gradient boosting on the stack's inputs (covariates + neighbourhood features) RMSE 0.47 (ΔMSE +0.107 ± 0.059); inverse-distance interpolation (no covariates) RMSE 0.64 (ΔMSE +0.300 ± 0.162). Verdict: stack not distinguishable from hgb_focal (|ΔMSE| ≤ 2 SE).
 
 ## Effects
 
@@ -42,4 +42,4 @@ Summer (June–August) mean daily maximum temperature change from 6 CMIP6 models
 
 ## Reproducibility
 
-Code commit `f8284e572250`, core code SHA-256 `44140ef2909c`, input SHA-256 `2e734ace8da2`, config SHA-256 `a8e78a6e1299`; package versions in `environment.txt`. `sparc core reproduce <run dir>` re-runs and compares.
+Code commit `c0b556280fa7`, core code SHA-256 `5966cc525919`, input SHA-256 `4bfb0ca0ba3b`, config SHA-256 `b9fe879229ca`; package versions in `environment.txt`. `sparc core reproduce <run dir>` re-runs and compares.

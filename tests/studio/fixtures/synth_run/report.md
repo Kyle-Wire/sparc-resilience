@@ -1,6 +1,6 @@
 # SPARC core run — synthetic_demo
 
-*2026-10-15T15:48:45+00:00* · commit `f8284e5` · 1120 points · **fast mode**
+*2026-10-15T18:43:05+00:00* · commit `c0b5562` · 1120 points · **fast mode**
 
 ## S0 — Data
 
@@ -36,41 +36,41 @@ Target residual range 630 m → physics length prior L₀ = 223 m; CV block 630 
 |---|---|---|---|
 | ols | 1.048 | 0.776 | -0.739 |
 | mgwr | 0.931 | 0.716 | -0.373 |
-| gwrf | 0.470 | 0.380 | 0.650 |
-| gam | 0.515 | 0.429 | 0.581 |
+| gwrf | 0.467 | 0.378 | 0.655 |
+| gam | 0.514 | 0.429 | 0.581 |
 | physics | 0.319 | 0.278 | 0.839 |
-| base_mean | 0.508 | 0.419 | 0.592 |
+| base_mean | 0.507 | 0.418 | 0.593 |
 | stacker | 0.339 | 0.296 | 0.818 |
 
-Stacker: convex (NNLS) blend of base models (out-of-fold RMSE by candidate: {'mean': 0.5077083816327378, 'off': 0.3394922332170534, '0.0': 0.4066576923608064, '0.1': 0.432644776514148}); 90% cross-conformal interval coverage 0.891 (mean half-width 0.501 degF).
+Stacker: convex (NNLS) blend of base models (out-of-fold RMSE by candidate: {'mean': 0.5069736886997543, 'off': 0.3390579197598106, '0.0': 0.40546528203118515, '0.1': 0.43212091237436434}); 90% cross-conformal interval coverage 0.890 (mean half-width 0.501 degF).
 
 **Interval honesty** — pooled coverage is nearly guaranteed by construction, so coverage is also shown per fold, by distance from training data and per zone (global vs distance-adaptive cross-conformal intervals):
 
 | group | n | global coverage | adaptive coverage | global ± (degF) | adaptive ± (degF) |
 |---|---|---|---|---|---|
-| all | 1120 | 0.891 | 0.886 | 0.50 | 0.51 |
-| fold 0 | 373 | 0.997 | 0.995 | 0.54 | 0.54 |
+| all | 1120 | 0.890 | 0.886 | 0.50 | 0.51 |
+| fold 0 | 373 | 0.992 | 0.992 | 0.54 | 0.54 |
 | fold 1 | 375 | 0.808 | 0.797 | 0.47 | 0.48 |
-| fold 2 | 372 | 0.868 | 0.866 | 0.49 | 0.50 |
-| distance 0-180 m | 315 | 0.940 | 0.917 | 0.50 | 0.50 |
+| fold 2 | 372 | 0.871 | 0.868 | 0.49 | 0.50 |
+| distance 0-180 m | 315 | 0.940 | 0.914 | 0.50 | 0.49 |
 | distance 180-240 m | 254 | 0.894 | 0.890 | 0.50 | 0.50 |
-| distance 240-330 m | 323 | 0.808 | 0.808 | 0.50 | 0.50 |
-| distance 330-577 m | 228 | 0.939 | 0.947 | 0.50 | 0.54 |
+| distance 240-330 m | 323 | 0.811 | 0.808 | 0.50 | 0.50 |
+| distance 330-577 m | 228 | 0.930 | 0.952 | 0.50 | 0.54 |
 
-**Stacker base weights (mean over folds):** ols 0.01, mgwr 0.02, gwrf 0.05, gam 0.08, physics 0.85; neural residual kept in 0/3 folds (gated off where it did not beat the convex base on held-out inner blocks).
+**Stacker base weights (mean over folds):** ols 0.01, mgwr 0.02, gwrf 0.04, gam 0.08, physics 0.85; neural residual kept in 0/3 folds (gated off where it did not beat the convex base on held-out inner blocks).
 
-**Physics (mean ± sd over folds):** L_m = 145.414 ± 26.132, vx_m = 0.000 ± 0.000, vy_m = 0.000 ± 0.000, a = 34.999 ± 9.069, gamma = 0.010 ± 0.004
+**Physics (mean ± sd over folds):** L_m = 145.381 ± 26.112, vx_m = 0.000 ± 0.000, vy_m = 0.000 ± 0.000, a = 34.991 ± 9.056, gamma = 0.010 ± 0.004
 
 **Forcing:** generic (SW↓ 800 W/m², net LW -100 W/m², wind [0.03333333333333333, 0.0]); run `sparc core forcing` for the campaign day.
 
-**Advection:** dropped — held-out RMSE with − without advection = 0.0302 ± 0.0372 degF (kept only if lower by > 1 SE).
+**Advection:** dropped — held-out RMSE with − without advection = 0.0301 ± 0.0372 degF (kept only if lower by > 1 SE).
 
 ### Stack vs standard baselines (same folds, paired by CV block)
 
 | baseline | RMSE | R² | ΔRMSE vs stack | ΔMSE ± SE (block-clustered) | blocks where stack better |
 |---|---|---|---|---|---|
-| gradient boosting, covariates + x,y | 0.675 | 0.278 | +0.336 | +0.341 ± 0.124 | 75% |
-| gradient boosting on the stack's inputs (covariates + neighbourhood features) | 0.470 | 0.651 | +0.130 | +0.105 ± 0.059 | 88% |
+| gradient boosting, covariates + x,y | 0.668 | 0.295 | +0.329 | +0.331 ± 0.120 | 75% |
+| gradient boosting on the stack's inputs (covariates + neighbourhood features) | 0.472 | 0.648 | +0.133 | +0.107 ± 0.059 | 88% |
 | inverse-distance interpolation (no covariates) | 0.644 | 0.343 | +0.305 | +0.300 ± 0.162 | 81% |
 
 Positive Δ = the stack is better. **Verdict:** stack not distinguishable from hgb_focal (|ΔMSE| ≤ 2 SE).
@@ -81,7 +81,7 @@ Positive Δ = the stack is better. **Verdict:** stack not distinguishable from h
 |---|---|---|---|---|---|---|---|
 | canopy | 1.00 | 0.00 | 0.00 | 31.84 | 1.854 | -0.0047 | -0.1359 |
 | impervious | 0.37 | 0.12 | 0.48 | 17.68 | 1.346 | 0.0004 | 0.0195 |
-| albedo | 0.25 | 0.20 | 0.75 | — | 4.091 | -0.2444 | -4.3858 |
+| albedo | 0.25 | 0.20 | 0.75 | — | 4.092 | -0.2436 | -4.3844 |
 
 *Own effect*: only the cell itself changes. *Footprint*: total change summed over the neighbourhood (drives the optimiser). Saturation is fitted to neighbourhood-adoption sweeps against the realised neighbourhood dose; 'censored' = no knee within the tested doses/headroom.
 
@@ -100,13 +100,13 @@ SPARC column: city-wide mean cooling of the closest uniform scenario, scaled to 
 
 | scenario | mean Δ (degF) | p10 | p90 | SE of mean (jackknife) | extrapolated | linear causal Δ (95%) |
 |---|---|---|---|---|---|---|
-| Canopy Increase +5 | -0.625 | -1.042 | -0.307 | 0.162 | 0.486 | -0.202 (-0.270 to -0.134) ⚑ |
-| Canopy Increase +10 | -1.033 | -1.696 | -0.508 | 0.279 | 0.728 | -0.403 (-0.539 to -0.267) ⚑ |
-| Canopy Increase +20 | -1.506 | -2.440 | -0.751 | 0.451 | 1.000 | -0.806 (-1.078 to -0.534) ⚑ |
+| Canopy Increase +5 | -0.625 | -1.041 | -0.307 | 0.162 | 0.486 | -0.203 (-0.270 to -0.135) ⚑ |
+| Canopy Increase +10 | -1.033 | -1.696 | -0.507 | 0.278 | 0.728 | -0.405 (-0.541 to -0.269) ⚑ |
+| Canopy Increase +20 | -1.506 | -2.439 | -0.751 | 0.451 | 1.000 | -0.810 (-1.082 to -0.538) ⚑ |
 | Impervious Decrease −10 | -0.184 | -0.247 | -0.120 | 0.153 | 0.342 | — |
 | Impervious Decrease −20 | -0.353 | -0.493 | -0.217 | 0.305 | 0.683 | — |
 | Albedo Increase +0.05 | -0.220 | -0.318 | -0.129 | 0.040 | 0.224 | — |
-| Albedo Increase +0.1 | -0.440 | -0.640 | -0.261 | 0.076 | 0.537 | — |
+| Albedo Increase +0.1 | -0.440 | -0.640 | -0.260 | 0.076 | 0.537 | — |
 | Cooling package | -1.310 | -2.068 | -0.685 | 0.373 | 0.749 | — |
 
 Linear causal Δ: the S6 own + neighbour effect × the mean realised change (a local-slope extrapolation); ⚑ = the model's mean Δ lies outside its 95% band.
@@ -137,14 +137,14 @@ Delta method: the adaptation effect is assumed not to change with background war
 
 | treatment | DML θ ± SE | θ_own | θ_nbr | θ_own+θ_nbr | audit |
 |---|---|---|---|---|---|
-| canopy | -0.0197 ± 0.0037 | -0.0154 | -0.0249 | -0.0403 | adoption_vs_theta_sum: magnitude differs; own_vs_theta_own: magnitude differs; own_pd_vs_dr_curve: consistent |
+| canopy | -0.0197 ± 0.0036 | -0.0154 | -0.0251 | -0.0405 | adoption_vs_theta_sum: magnitude differs; own_vs_theta_own: magnitude differs; own_pd_vs_dr_curve: consistent |
 
 The audit compares the model's implied effects with the causal estimates on matched estimands: neighbourhood-adoption slope ↔ θ_own + θ_nbr, own-only slope ↔ θ_own, own-only partial dependence ↔ doubly-robust dose-response.
 
 ## S7 — Budget allocation
 
-canopy: budget 2000 → 232 cells treated (mean dose 8.62); planned total cooling 586.73, closed-loop realised 626.81 (degF·cells). Constraint: plantable space (WorldCover open land + 20% of built-up area); objective: total cooling.
+canopy: budget 2000 → 232 cells treated (mean dose 8.62); planned total cooling 586.73, closed-loop realised 626.75 (degF·cells). Constraint: plantable space (WorldCover open land + 20% of built-up area); objective: total cooling.
 
 ## Timings (s)
 
-S0: 0.1, S1: 2.76, S2_S3: 24.89, baselines: 2.09, S4: 6.45, S5: 1.64, S6: 6.89, S7: 0.2
+S0: 0.1, S1: 2.4, S2_S3: 23.81, baselines: 1.84, S4: 6.05, S5: 1.61, S6: 5.98, S7: 0.21

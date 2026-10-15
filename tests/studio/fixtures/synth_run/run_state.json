@@ -1,11 +1,11 @@
 {
   "schema": 1,
   "status": "succeeded",
-  "pid": 12482,
+  "pid": 29317,
   "job": "j_fixture",
   "host": "vm",
-  "started_utc": "2026-10-15T15:48:00Z",
-  "updated_utc": "2026-10-15T15:48:45Z",
+  "started_utc": "2026-10-15T18:42:23Z",
+  "updated_utc": "2026-10-15T18:43:05Z",
   "stage": "finish",
   "done": [
     "S3",
@@ -15,7 +15,7 @@
     "baselines",
     "climate"
   ],
-  "fingerprint": "74f0d655df5c8fca",
+  "fingerprint": "3e066b826f81c23d",
   "events_path": "/tmp/sparc-fixture/events.jsonl",
   "error": null,
   "meta": {
