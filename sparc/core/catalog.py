@@ -189,6 +189,8 @@ OUTPUTS: list[OutputSpec] = [
        ("html",), optional=True),
     _S("reproduce", ("reproduce.json",), "Reproduction checklist", "trust", "study:reproduce", "json", ("json",),
        optional=True),
+    _S("identifiability", ("identifiability.json",), "Physics identifiability and prior sensitivity", "trust",
+       "study:identifiability", "json", ("json",), "identifiability", optional=True),
     # ---------------------------------------------------------------- studies (study dir)
     _S("placebo_study", ("placebo.json",), "Placebo suite", "trust", "study:placebo", "json", ("json",),
        root="study"),

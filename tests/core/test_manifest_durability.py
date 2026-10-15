@@ -53,7 +53,8 @@ def test_rerunning_a_subset_keeps_post_run_sections(cfg, tmp_path):
     placebo = {"rows": [], "n_pass_model": 2, "n_pass_causal": 3, "n_placebos": 3, "coarse_m": 60.0,
                "layer_correlation_with_original": {}}
     post = {"planner": {"n_cells": 1}, "uncertainty": {"scenarios": []}, "placebo": placebo,
-            "emulator": {"levers": {}}, "simcheck": {"n_rows": 2}, "multiverse": {"runs": {}}}
+            "emulator": {"levers": {}}, "simcheck": {"n_rows": 2}, "multiverse": {"runs": {}},
+            "identifiability": {"schema": 1, "parameters": []}}
     runio.update_manifest(run_dir, post, source="test")
     runio.update_manifest(run_dir, {"baselines": {"verdict": "post-run", "rows": {}}}, source="baselines")
     before = _manifest(run_dir)
@@ -151,7 +152,7 @@ def test_post_run_actions_record_their_sections_through_update_manifest(tmp_path
     again = _manifest(run_dir)
     for k in ("baselines", "emulator", "planner", "uncertainty", "post_run"):
         assert again[k] == m[k], k
-    assert set(POST_RUN_KEYS) - {"simcheck", "multiverse", "placebo"} <= set(again)
+    assert set(POST_RUN_KEYS) - {"simcheck", "multiverse", "placebo", "identifiability"} <= set(again)
 
 
 def test_git_commit_is_the_code_checkout_not_the_working_directory(tmp_path, monkeypatch):

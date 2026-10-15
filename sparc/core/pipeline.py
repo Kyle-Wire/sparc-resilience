@@ -96,7 +96,8 @@ RUN_STATE = "run_state.json"
 INPUT_FRAME = "input_frame.parquet"
 MANIFEST_SCHEMA = 2
 # Manifest sections written after the run (post-run actions, studies); a re-run keeps them.
-POST_RUN_KEYS = ("planner", "uncertainty", "simcheck", "multiverse", "placebo", "emulator", "post_run")
+POST_RUN_KEYS = ("planner", "uncertainty", "simcheck", "multiverse", "placebo", "emulator", "identifiability",
+                 "post_run")
 # Instrumentation modules: editing them must not invalidate saved fits.
 _FINGERPRINT_SKIP = frozenset({"progress.py", "runio.py"})
 FINGERPRINT_SECTIONS = ("data", "core", "s4", "s5", "climate", "s6", "s7", "code")

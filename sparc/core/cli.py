@@ -5,6 +5,8 @@
                        --station 72507014765 --out configs/forcing/providence_2020-07-18.json
     sparc core synth --out output/core/synthetic_city.csv [--seed 0]
     sparc core mechanisms -r RUN_DIR [-p CONFIG]  (physics mechanism register of a finished run)
+    sparc core identifiability -r RUN_DIR [-p CONFIG] [--params L,s,...] [--coarse M] [--max-points N]
+                               [--draws N] [--seed S]   (physics profile likelihood, prior sensitivity, conflict)
     sparc core studio [...]                         (SPARC Studio; same as `sparc studio`)
     python -m sparc.core run --project ...          (same, without the legacy CLI)
 
@@ -145,6 +147,23 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_me.add_argument("--project", "-p", default=None,
                       help="core config to use instead of the run's own (e.g. one that sets data.target_kind)")
     p_me.set_defaults(func=cmd_core_mechanisms)
+
+    p_id = subs.add_parser("identifiability", help="physics identifiability (block-adjusted profile likelihood), "
+                                                   "prior sensitivity and prior-data conflict of a finished run → "
+                                                   "identifiability.json + manifest")
+    p_id.add_argument("run_dir", nargs="?", default=None, help="run directory (or --run-dir)")
+    p_id.add_argument("--run-dir", "-r", dest="run_dir_opt", default=None, metavar="RUN_DIR")
+    p_id.add_argument("--project", "-p", default=None,
+                      help="the run's core config (default: rebuilt from the manifest)")
+    p_id.add_argument("--params", default="", help="comma list, e.g. L,s,kappa,a1,e1,e2,e3,w (default: every fitted "
+                                                   "nonlinear parameter)")
+    p_id.add_argument("--coarse", type=float, default=None, metavar="M",
+                      help="refit on M-metre cells (faster; clusters stay the run's CV blocks)")
+    p_id.add_argument("--max-points", type=int, default=None, help="profile points per side (default 12)")
+    p_id.add_argument("--draws", type=int, default=None, help="Laplace-posterior draws for power-scaling (default 2000)")
+    p_id.add_argument("--seed", type=int, default=0)
+    p_id.add_argument("--threads", type=int, default=0, help="torch threads (0 = the physics config's num_threads)")
+    p_id.set_defaults(func=cmd_core_identifiability)
 
     p_ly = subs.add_parser("layers", help="open-data layers on the study grid (HRSL people, WorldCover) → parquet")
     p_ly.add_argument("--project", "-p", required=True)
@@ -497,6 +516,32 @@ def cmd_core_mechanisms(args) -> int:
     print(mechanisms_markdown(reg))
     print(f"\nwrote {Path(run) / 'mechanisms.json'} and the manifest's mechanisms section; "
           f"`sparc core writeup {run}` re-renders methods.md and model_card.md")
+    return 0
+
+
+@tracked_command
+def cmd_core_identifiability(args) -> int:
+    from sparc.core.identifiability import identifiability_markdown, identifiability_report
+
+    run = args.run_dir_opt or args.run_dir
+    if not run or not (Path(run) / "manifest.json").is_file():
+        print(f"ERROR: {run} is not a run directory (no manifest.json)", file=sys.stderr)
+        return 2
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    cfg = None
+    if args.project:
+        from sparc.core.config import load_core_config
+
+        cfg = load_core_config(args.project)
+    settings = {}
+    if args.threads:
+        settings["num_threads"] = int(args.threads)
+    params = [p.strip() for p in args.params.split(",") if p.strip()] or None
+    rep = identifiability_report(run, cfg, params=params, coarse=args.coarse or None, max_points=args.max_points,
+                                 draws=args.draws, seed=args.seed, settings=settings)
+    print(identifiability_markdown(rep))
+    print(f"\nwrote {Path(run) / 'identifiability.json'} and the manifest's identifiability section "
+          f"({rep['timings'].get('wall_s', 0):.0f} s)")
     return 0
 
 
