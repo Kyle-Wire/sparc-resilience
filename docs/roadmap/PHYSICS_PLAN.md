@@ -26,7 +26,7 @@
   - The physics model predicts how an effect should change from one wavelength band to the next, so the physics and the causal estimates can check each other (§5, W5).
 - **This review found four problems** (§3):
   1. The physics is fitted to CAPA's interpolated map, not to measurements, so L and the canopy shading may partly describe the interpolation rather than the air.
-  2. The heat source is set to "average" everywhere outside the labelled cells, including the rivers on the city's east and south edges. Meanwhile, an indicative regression gives an elevation effect 2.7× the dry-adiabatic lapse rate.
+  2. The heat source is set to "average" everywhere outside the labelled cells, including the rivers on the city's east and south edges, and the model's water term does not work: on Providence its fitted water sink sits at zero, its lower bound, in 4 of 5 folds. (An earlier regression hinted that elevation was standing in for the bay. The physics model's own elevation term, −2.5 ± 5.7 K/km, does not show it; see §9.)
   3. The central-difference wind term produces negative Green's-function lobes, down to −81% of the peak, at short L and strong wind. A standard positive scheme removes them; SPARC now uses Patankar's hybrid scheme (W1, done).
   4. Fitted parameters are never converted into physical quantities. Once converted, they can be checked against the literature. The fitted gain implies an aerodynamic resistance of about 46 s/m, inside the roughly 20–100 s/m reported for urban surfaces. That is first evidence the term behaves physically, but it was fitted to the product.
 - **Sequence:**
@@ -108,7 +108,7 @@
 | # | Finding | Evidence | Why it matters | Fix |
 |---|---|---|---|---|
 | **F1** | **The physics may be fitted to the product, not the air** | `AAT_z` is CAPA's area-wide map. Traverse readings are extended to every cell by a machine-learning model on satellite predictors averaged over buffers of 50 m and up (Shandas et al. 2019). SPARC's emulation of it, a random forest, writes two thirds of the canopy artefact in the null simulation (Appendix D). | L, the shading strength s and the shade scale κ may describe the product's buffer radii. Every physics test run on the map partly tests CAPA's model. | W7 |
-| **F2** | **The heat source stops at the labelled cells** | The grid is 331 × 285 and 58% filled. Of the empty cells, 96% lie *outside* the study outline; holes enclosed by data in all four directions are 1.7% of the grid. The Seekonk River (east) and the Providence River / upper bay (south) sit at that edge. Outside the labelled cells the centred q is 0, i.e. average heating. The campaign wind was from the south. | The bay's cooling, carried inland by a south wind, can only be absorbed by the elevation, water-distance and linear-trend terms. Indicative check: an OLS of temperature on the six predictors plus x and y gives an elevation slope of **−26 K/km**. The physical range is −6.5 (standard atmosphere) to −9.8 K/km (dry adiabatic). | W2 |
+| **F2** | **The heat source stops at the labelled cells** | The grid is 331 × 285 and 58% filled. Of the empty cells, 96% lie *outside* the study outline; holes enclosed by data in all four directions are 1.7% of the grid. The Seekonk River (east) and the Providence River / upper bay (south) sit at that edge. Outside the labelled cells the centred q is 0, i.e. average heating. The campaign wind was from the south. | The bay's cooling, carried inland by a south wind, can only be absorbed by the elevation, water-distance and linear-trend terms. The first indicative check, an OLS of temperature on the six predictors plus x and y, gave an elevation slope of −26 K/km (the physical range is −6.5 to −9.8 K/km). **Superseded by the W0 register (§9):** the physics model's own γ is −2.5 ± 5.7 K/km, too imprecise to test and not anomalous. The direct evidence is the water term: its fitted sink sits at zero, its lower bound, in 4 of 5 folds. | W2 |
 | **F3** | **The wind term can make heating cool its neighbours** | Central differences for v·∇ give negative Green's-function lobes once the cell Péclet number \|v\|·dx/(2L²) exceeds about 1 (table below). This is the textbook failure of central differencing for convection–diffusion (Patankar 1980). A positive scheme (exponential fitting, Il'in 1969; or Patankar's hybrid scheme) removes the lobes and keeps the downwind shift. | No effect on Providence today (L = 256 m, advection dropped, Pe ≤ 0.23). But the fit box allows L down to 30 m with \|v\| up to 1 km, and the AQ plan needs sharp sources with wind. | W1 |
 | **F4** | **Parameters are not in physical units** | In the local limit ΔT = a·Q_H/SW↓, while bulk transfer gives ΔT = r_a·Q_H/(ρc_p). So **r_a = a·ρc_p/SW↓**. With a = 45 ± 5 °F, ρc_p ≈ 1170 J m⁻³ K⁻¹ and SW↓ = 636 W m⁻², r_a ≈ 41–51 s/m. Published values are about 20–100 s/m: Masson's (2000) canyon formula gives ≈ 100 s/m in calm air and ≈ 36 s/m at 5 m/s, and Crawford et al. (2018) measured ≈ 40 s/m in central London. Similarly L² = Kτ and r_a = τ/h. | The one number checkable today is in range. But a single afternoon map pins only two combinations (r_a and L), not τ, h and K separately; advection (v = u_c·τ) or a time lag (ωτ) would pin τ. The non-broadband albedo (F5) also biases r_a. Without units, nobody can tell whether a fit is physics or a smoother. | W3 |
 | **F5** | **The radiation term is approximate** | The albedo layer averages 0.40, against 0.155 for Sentinel-2 broadband. `albedo_map` rescales it linearly to an assumed range. There is no longwave trapping (sky view factor) and no anthropogenic heat. | Absorbed sunlight sets the scale of q, and with it a and r_a. Night and canyon effects are missing. | W8 |
@@ -173,8 +173,8 @@ A Contradicted mechanism is switched off, or reported as a statistical term rath
 | **M3** | **Heat storage** (impervious, OHM) | Impervious cover warms the 15–16 run less than its absorbed energy implies, and warms the 19–20 and 0–1 runs more. Fitted a1 and a2 fall inside the published OHM ranges (Grimmond & Oke 1999). | Multi-window fit; parameter panel (W3) | Not testable |
 | **M4** | **Horizontal mixing** (L) | (a) Band gains of ΔT on q fall as 1/(1 + L²k²). (b) The residual spectrum matches the implied Matérn ν = 1. (c) L fitted on the raw traverses ≈ L fitted on the map. | W4 (a, b); W7 (c) | Not tested |
 | **M5** | **Advection** (v) | (a) The q→ΔT cross-correlogram peaks *upwind* of the receptor, and the transfer phase is non-zero along the wind. (b) A street's cooling follows the canopy upwind of it when the wind changes between runs. | (a) W4; (b) `identify/windshift.py`, extended to the physics | (b) built; 8% power on one day |
-| **M6** | **Vertical exchange** (r_a = τ/h) | (a) The implied r_a lies in the published range for urban surfaces. (b) Across runs and campaigns, the gain a falls as wind speed rises; heat-island intensity weakens with wind (Oke 1973). | (a) W3; (b) multi-window and multi-campaign | (a) ≈ 46 s/m, inside ~20–100 s/m: **Supported, indicative** (fitted to the product) |
-| **M7** | **Elevation** (lapse rate) | γ lies between about −9.8 and −6.5 K/km in the well-mixed afternoon. At night it can be near zero or positive (inversions, cold-air pooling). | Parameter panel (W3); multi-window | **Indicative OLS −26 K/km: Contradicted as a pure lapse rate.** Elevation is standing in for something else, possibly the bay's cooling (F2). |
+| **M6** | **Vertical exchange** (r_a = τ/h) | (a) The implied r_a lies in the published range for urban surfaces. (b) Across runs and campaigns, the gain a falls as wind speed rises; heat-island intensity weakens with wind (Oke 1973). | (a) W3; (b) multi-window and multi-campaign | (a) Providence: r_a = 45.9 ± 9.4 s/m, inside ~20–100 s/m: **Supported, indicative** (fitted to the product; §9) |
+| **M7** | **Elevation** (lapse rate) | γ lies between about −9.8 and −6.5 K/km in the well-mixed afternoon. At night it can be near zero or positive (inversions, cold-air pooling). | Parameter panel (W3); multi-window | Providence: physics γ = −2.5 ± 5.7 K/km, **Not testable** (the ±2 SE interval, −13.8 to 8.8, is wider than the band). The OLS's −26 K/km belongs to a model without transport and does not apply here (§9). |
 | **M8** | **Water bodies** | Cooling near water is stronger *downwind* of it under the campaign wind, and water just outside the study area counts too. | Directional water-distance response after source completion (W2) | Not tested |
 | **M9** | **Longwave trapping** (sky view factor; missing) | After land cover is accounted for, the residual ΔT tracks sky view factor, mostly at night (Oke 1981). | Residual vs SVF by run (W8) | Not modelled |
 | **M10** | **Anthropogenic heat** (missing) | After land cover, the residual tracks a Q_F map at magnitudes inside published ranges (Sailor 2011). | Residual vs AH4GUC Q_F (Varquez et al. 2021) (W8) | Not modelled |
@@ -216,12 +216,12 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
   - Cover the whole raster plus a margin of at least 3·(L + |v|), using open layers. `features_open.py` already builds WorldCover land and water, Sentinel-2 and the Copernicus DEM.
   - Cells with features but no labels feed the source, never the loss. This is the rule `physics.py` already states.
 - **Model water as a source.** Replace the binary "within dx/2 of water" sink with a water-surface term from WorldCover's water class (a fitted negative sensible-heat source), so the rivers and bay enter through G and the wind.
-- **If–then test (M7, M8).** IF the bay's cooling is what elevation is absorbing, THEN completing the source (with advection allowed) should:
-  - move γ toward the lapse-rate range;
-  - shrink the linear trend;
-  - make cooling downwind of water exceed cooling upwind of it.
+- **If–then test (M8, with M7 as a check).** IF the rivers and bay cool the air nearby, THEN completing the source with a water class (with advection allowed) should:
+  - give a water term the data can pin down (today the binary sink sits at its lower bound, zero, in 4 of 5 Providence folds);
+  - make cooling downwind of water exceed cooling upwind of it;
+  - shrink the linear trend, and keep γ within, or move it toward, the lapse-rate band.
 
-  If γ does not move, elevation stands for something else, and γ is reported as a statistical term.
+  If the water term stays at its bound, open water does not show up in this product at 30 m, and that is reported.
 - **Exit:**
   - held-out physics R² is no worse;
   - the γ, trend and water-asymmetry results are written to `mechanisms.json`;
@@ -359,6 +359,43 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 | D4 | Require W7 (raw traverses) before any physics parameter is called "physical" | Yes. Until then the panel says "fitted to the product". |
 
 ---
+
+## 9. Status log
+
+### 2026-10-15: W0, W1 and the W3 parameter panel built; Providence register
+
+**How it was built.**
+- Two workstreams were built in parallel, in separate worktrees.
+- Each had two review rounds, with three lenses per round (numerics or science, integration, tests). Three independent skeptics checked every finding.
+- W1: 8 then 7 findings, of which 7 and 7 were confirmed and fixed.
+- W0 and the panel: 19 then 12 findings, of which 12 and 7 were confirmed and fixed.
+- Two decisions changed because of review:
+  - the default wind scheme (D1: hybrid, not exponential fitting);
+  - the range-test rule (§4: an uninformative interval is never Supported).
+
+**Providence, S0–S3 rerun with the new code** (`configs/core_providence.yml`, 2 km blocks):
+- **Accuracy is unchanged:** stacked R² 0.551, RMSE 1.146 °F, 90% interval coverage 89.5%, the same as `providence_core.md`. Advection was again dropped out of fold (ΔRMSE +0.003 ± 0.017 °F). Every fold uses the hybrid scheme with L resolved (cell Péclet number 0).
+- **Register.** One mechanism signature is Supported:
+  - **M6(a):** r_a = 45.9 ± 9.4 s/m against ≈ 20–100 s/m. This is indicative, because the target is an interpolated product.
+  - **M7(a)** is Not testable: γ = −2.5 ± 5.7 K/km, and the interval is wider than the lapse-rate band.
+  - Every other signature is Not testable with one time window, or Not yet tested (W2, W4, W7, W8).
+  - Nothing is Contradicted.
+- **Parameter panel** (fold mean ± jackknife SE):
+  - L = 256 ± 41 m;
+  - canopy shading s = 0.37 ± 0.19;
+  - impervious storage a1 = 0.32 ± 0.05.
+
+  Two parameters sit at a fit bound and are flagged "not identified":
+  - **The evaporative-fraction slope on canopy (e₂) is zero in all 5 folds.** The physics therefore attributes canopy's cooling to shade alone. This fits Appendix G's finding that canopy's own effect is not established by this product.
+  - **The water sink is zero in 4 of 5 folds.** This is direct evidence for F2, and the reason W2 now leads with the water term.
+- **Time scales** (assumption: canopy-layer depth h = 20–50 m): τ = r_a·h ≈ 15–38 min, so ωτ ≈ 0.07–0.17 for the daily cycle. That is a 4–9° phase lag, so the quasi-steady premise of W6 holds under that assumption. A multi-window fit is what would test it.
+- **Correction to this plan.** The first review used an OLS elevation slope (−26 K/km) as evidence that elevation stands in for the bay. The physics model's own γ does not show that, so F2, M7 and W2 were rewritten around the water term.
+
+**Not done in this round** (carried forward):
+- W3 profile likelihood and prior sensitivity;
+- a Studio view of the register (the file is listed, but there is no table yet);
+- the Studio report export does not include the register;
+- the Playwright end-to-end tests and the TypeScript side of the reducer contract were not run here.
 
 ## References
 
