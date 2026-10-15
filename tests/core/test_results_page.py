@@ -276,3 +276,119 @@ def test_page_passes_check_page(built, demo):
     assert "page OK" in res.stdout
     n = int(re.search(r"(\d+) map layers opened", res.stdout).group(1))
     assert n >= 30
+
+
+# ---------------------------------------------------------------------------
+# W3: "Can the data pin down the physics?" (identifiability card)
+# ---------------------------------------------------------------------------
+
+def _study_for(run: Path, *, L_mean=None) -> dict:
+    """A hand-made identifiability report that belongs to ``run`` (its cells, CV design and the physics fold
+    means), profiling L (identified) and s (on its lower bound, prior-dominated)."""
+    m = json.loads((run / "manifest.json").read_text())
+    folds = [p for p in json.loads((run / "physics.json").read_text()) if p["a"] > 0 and not p.get("fit_warning")]
+
+    def mean(k):
+        return float(np.mean([p[k] for p in folds]))
+
+    def row(key, label, unit, cls, ci, run_v, data_v, share, at_bound=None):
+        return {"key": key, "label": label, "unit": unit, "estimate_run": run_v, "estimate_data": data_v,
+                "at_bound": at_bound, "held": "bound" if at_bound else None, "se_robust": 0.1, "adjust_factor": 0.01,
+                "ci95": ci, "ci95_naive": [ci[0], ci[0] + 0.1 * (ci[1] - ci[0])], "identifiability": cls,
+                "open_sides": [], "sides_at_limit": [], "pull": 0.3, "prior": None, "prior_share_run": share,
+                "posterior": {"method": "laplace", "mean": run_v, "sd": 0.1},
+                "psens": {"prior": 0.1, "likelihood": 0.12, "diagnosis": "prior_data_conflict", "method": "profile"},
+                "conflict": {"z": None, "p": None, "flag": None, "reason": "on a fit bound"},
+                "profile": {"grid": [ci[0], 0.5 * (ci[0] + ci[1]), ci[1] * 1.2],
+                            "lambda_adj": [0.0, 1.0, 6.0], "lambda_naive": [0.0, 40.0, 300.0]}, "note": None}
+
+    L = mean("L_m")
+    params = [row("L", "Mixing length L", "m", "identified", [0.7 * L, 1.5 * L], L, 1.05 * L, 0.05),
+              row("s", "Canopy shading strength s", "fraction of absorbed sunlight", "identified", [0.0, 0.49],
+                  mean("s"), 0.0, 0.93, {"side": "lower", "bound": 0.0})]
+    a = mean("a")
+    lin = [{"key": "a", "label": "Source gain a", "unit": "target units per unit q", "estimate_data": a,
+            "se_naive_data": 0.5, "se_robust_data": 5.0, "estimate_run": a, "se_naive_run": 0.5, "se_robust_run": 5.0,
+            "adjust_factor": 0.01}]
+    return {"schema": 1, "status": "ok", "n": m["n_points"], "n_clusters": m["cv"]["n_blocks"], "coarse_m": None,
+            "units": m["config"]["data"]["target_units"], "window": "day",
+            "cluster": {"kind": "cv_block", "block_m": m["cv"]["block_m"]},
+            "settings": {"chi2_95": 3.841458820694124, "psens_threshold": 0.05}, "posterior": {"laplace_adequate": False},
+            "warnings": [], "parameters": params, "linear": lin,
+            "run": {"n_points_run": m["n_points"], "cv": m["cv"],
+                    "fold_means": {"L": L if L_mean is None else L_mean, "s": mean("s")}}}
+
+
+@pytest.fixture(scope="module")
+def studied(demo, tmp_path_factory):
+    """``(run dir, page html, blob)`` of a copy of the fixture run with an identifiability study."""
+    from sparc.core.results_page import collect, render_page
+
+    _, cfg = demo
+    run = tmp_path_factory.mktemp("ident") / "synth_run"
+    shutil.copytree(SYNTH, run)
+    (run / "identifiability.json").write_text(json.dumps(_study_for(run)))
+    blob = collect(run, cfg)
+    return run, render_page(blob, cfg), blob
+
+
+def test_identifiability_card_is_hidden_without_a_study(built):
+    path, blob = built
+    html = path.read_text("utf-8")
+    assert blob["identifiability"] is None and _data_blob(html)["identifiability"] is None
+    assert '<div class="card" id="identCard" hidden>' in html
+    assert blob["mechanisms"]["identifiability"]["status"] == "absent"
+
+
+def test_identifiability_card_shows_the_study_and_its_profiles(studied):
+    run, html, blob = studied
+    card = blob["identifiability"]
+    assert card["status"] == "used" and card["n_clusters"] == 16 and card["block_m"] == 390.0 and card["laplace_adequate"] is False
+    assert [r["key"] for r in card["rows"]] == ["L", "s"]
+    s = card["rows"][1]
+    assert s["class"] == "identified" and s["reaches_zero"] and s["prior_share_run"] == 0.93
+    assert s["profile"]["lambda_adj"] == [0.0, 1.0, 6.0] and s["ci95"] == [0.0, 0.49]
+    assert "set mostly by the penalty (prior share 0.93)" in s["text"]
+    assert card["sandwich"] and card["sandwich"][0]["label"] == "Aerodynamic resistance r_a"
+    assert card["sandwich"][0]["jackknife_se"] != card["sandwich"][0]["sandwich_se"]
+    # the register on the page was recomputed with the study (the fixture's manifest has none)
+    assert blob["mechanisms"]["identifiability"]["status"] == "used"
+    assert next(r for r in blob["mechanisms"]["panel"]["rows"] if r["key"] == "s")["identifiability"]["ci95"] == [0.0, 0.49]
+    data = _data_blob(html)
+    assert data["identifiability"]["rows"][0]["profile"]["grid"] == card["rows"][0]["profile"]["grid"]
+    assert "Can the data pin down the physics?" in html and "function identifiabilityCard()" in html
+    assert "identifiabilityCard();" in html and 'id="identProfiles"' in html
+
+
+def test_identifiability_card_with_a_study_of_another_fit_says_so(demo, tmp_path):
+    from sparc.core.results_page import collect
+
+    _, cfg = demo
+    run = tmp_path / "synth_run"
+    shutil.copytree(SYNTH, run)
+    (run / "identifiability.json").write_text(json.dumps(_study_for(run, L_mean=12345.0)))
+    card = collect(run, cfg)["identifiability"]
+    assert card["status"] == "ignored" and "different physics fit" in card["note"] and "rows" not in card
+
+
+@pytest.mark.slow
+def test_identifiability_card_renders_in_chromium(studied, tmp_path):
+    """The card's script runs without a console error and fills the table and one profile chart per parameter
+    (headless Chromium's ``--dump-dom``; no Playwright needed)."""
+    if not Path(CHROMIUM).exists():
+        pytest.skip(f"no Chromium at {CHROMIUM}")
+    _, html, _ = studied
+    page = tmp_path / "page.html"
+    page.write_text(html, encoding="utf-8")
+    res = subprocess.run([CHROMIUM, "--headless=new", "--no-sandbox", "--disable-gpu", "--enable-logging=stderr",
+                          "--v=0", "--virtual-time-budget=5000", "--dump-dom", page.as_uri()],
+                         capture_output=True, text=True, timeout=180)
+    assert res.returncode == 0, res.stderr[-2000:]
+    assert "CONSOLE" not in res.stderr and "Uncaught" not in res.stderr, res.stderr[-2000:]
+    dom = res.stdout
+    card = dom[dom.index('id="identCard"') - 30:]
+    card = card[:card.index('id="identWarn"') + 400]
+    assert 'id="identCard" hidden' not in dom
+    assert card.count("<figure>") == 2 and card.count('role="img"') == 2
+    assert "0 not excluded" in card and "identified" in card and "potential prior–data conflict" in card
+    assert "Laplace (Gaussian) approximation" in card

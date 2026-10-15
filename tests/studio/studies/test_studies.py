@@ -143,6 +143,33 @@ def test_emulator_refuses_an_untrusted_checkpoint(client, demo, synth, tmp_path,
     assert calls(job)[0]["n_patches"] == 3
 
 
+def test_identifiability_is_a_generic_job_kind(client, ctx, fixture_run, fake_studies, calls, wait_job):
+    """``post.identifiability`` (PHYSICS_PLAN W3) runs through ``POST /api/jobs`` on the launch snapshot, is
+    listed with its params schema in ``/api/meta``, and is not a row of the run's studies (that needs studio-web)."""
+    rid, rd = fixture_run
+    title = snapshot_title(rd)
+    kinds = {k["kind"]: k for k in client.get("/api/meta").json()["job_kinds"]}
+    k = kinds["post.identifiability"]
+    assert k["lane"] == "heavy" and set(k["params_schema"]["properties"]) == {"params", "coarse_m", "max_points",
+                                                                              "draws", "seed"}
+    job = _post(client, "/api/jobs", {"kind": "post.identifiability", "run_id": rid,
+                                      "params": {"params": ["L", "kappa"], "coarse_m": 60, "max_points": 4}})
+    assert job["kind"] == "post.identifiability" and job["label"] == "Physics identifiability"
+    _done(client, wait_job, job)
+    (call,) = calls(job)
+    assert call["fn"] == "identifiability_report" and Path(call["run_dir"]) == rd and call["cfg"]["title"] == title
+    assert call["params"] == ["L", "kappa"] and call["coarse"] == 60.0 and call["max_points"] == 4
+    assert call["draws"] is None and call["seed"] == 0 and call["settings"]["num_threads"] >= 1
+    res = client.get(f"/api/jobs/{job['id']}").json()["result"]
+    assert res["classes"] == {"L": "identified", "s": "structurally_non_identifiable"} and res["register"] == "used"
+    assert res["files"] == ["identifiability.json", "mechanisms.json"] and res["warnings"] == 1
+    assert (rd / "identifiability.json").exists()
+    assert "identifiability" not in {r["kind"] for r in client.get(f"/api/runs/{rid}/studies").json()}
+    r = client.post("/api/jobs", json={"kind": "post.identifiability", "run_id": rid, "params": {"params": ["nope"]}})
+    assert r.status_code == 422
+    assert client.post(f"/api/runs/{rid}/actions/identifiability", json={}).json()["error"]["code"] == "unknown_kind"
+
+
 def test_unknown_kinds_and_params(client, fixture_run):
     rid, _ = fixture_run
     assert client.post(f"/api/runs/{rid}/actions/nope", json={}).json()["error"]["code"] == "unknown_kind"

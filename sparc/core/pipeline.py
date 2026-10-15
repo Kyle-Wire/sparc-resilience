@@ -1525,12 +1525,17 @@ def _finish(result: CoreResult, timings: dict, fast: bool, folds=None, extras: d
         path = result.run_dir / "manifest.json"
         with runio.run_lock(result.run_dir):
             old = _read_json(path) or {}
-            for k in POST_RUN_KEYS:
-                if k in old and k not in result.manifest:
-                    result.manifest[k] = old[k]
+            carried = [k for k in POST_RUN_KEYS if k in old and k not in result.manifest]
+            for k in carried:
+                result.manifest[k] = old[k]
             post_sections = {e.get("section") for e in (old.get("post_run") or []) if isinstance(e, dict)}
             if not result.baselines and "baselines" in old and "baselines" in post_sections:
                 result.manifest["baselines"] = old["baselines"]
+            if "identifiability" in carried:
+                # the register again, with the kept study (ignored, with a warning, if it belongs to an earlier fit)
+                from sparc.core.report import _mechanisms
+
+                result.manifest["mechanisms"] = _mechanisms(result, result.manifest)
             _write_json(path, result.manifest)
         _write_json(result.run_dir / "mechanisms.json", result.manifest.get("mechanisms") or {})
         runio.write_text_atomic(result.run_dir / "environment.txt", environment_lock())

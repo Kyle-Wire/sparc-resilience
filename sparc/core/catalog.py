@@ -190,7 +190,7 @@ OUTPUTS: list[OutputSpec] = [
     _S("reproduce", ("reproduce.json",), "Reproduction checklist", "trust", "study:reproduce", "json", ("json",),
        optional=True),
     _S("identifiability", ("identifiability.json",), "Physics identifiability and prior sensitivity", "trust",
-       "study:identifiability", "json", ("json",), "identifiability", optional=True),
+       "post:identifiability", "json", ("json",), "identifiability", "identifiability.json", optional=True),
     # ---------------------------------------------------------------- studies (study dir)
     _S("placebo_study", ("placebo.json",), "Placebo suite", "trust", "study:placebo", "json", ("json",),
        root="study"),
@@ -461,6 +461,19 @@ DATA_DICTIONARY: dict[str, dict[str, tuple[str, str, str]]] = {
                            "|LW_net| at night; a_K = a in kelvin per unit q, × 5/9 for a °F target)"),
         "gamma": ("K/km", "", "Elevation coefficient in kelvin per kilometre"),
         "basis": ("", "", "What the verdicts rest on (an interpolated product makes them indicative)"),
+    },
+    "identifiability.json": {
+        "ci95": ("", "", "Data-only 95% profile-likelihood interval of the parameter, in its own unit, with the "
+                         "likelihood adjusted for spatial dependence over the CV blocks (Λ_A ≤ 3.84; Raue et al. 2009, "
+                         "Chandler & Bate 2007)"),
+        "identifiability": ("", "", "identified, practically_non_identifiable (the profile stays below 3.84 on a "
+                                    "side) or structurally_non_identifiable (flat profile)"),
+        "prior_share_run": ("1", "", "The penalty's share of the run objective's curvature in the parameter: above "
+                                     "0.5 the run's value is set mostly by its prior"),
+        "adjust_factor": ("1", "", "Naive / block-adjusted variance: how much the spatial dependence shrinks the "
+                                   "information"),
+        "psens": ("1", "≥ 0.05 flags the component", "Power-scaling sensitivity of the prior and the likelihood "
+                                                     "(Kallioinen et al. 2024)"),
     },
     "baselines.json": {
         "delta_mse": ("{target}²", "positive = stack better", "MSE(baseline) − MSE(stack)"),

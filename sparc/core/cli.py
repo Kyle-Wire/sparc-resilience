@@ -540,8 +540,13 @@ def cmd_core_identifiability(args) -> int:
     rep = identifiability_report(run, cfg, params=params, coarse=args.coarse or None, max_points=args.max_points,
                                  draws=args.draws, seed=args.seed, settings=settings)
     print(identifiability_markdown(rep))
+    reg = rep.get("register") or {}
     print(f"\nwrote {Path(run) / 'identifiability.json'} and the manifest's identifiability section "
-          f"({rep['timings'].get('wall_s', 0):.0f} s)")
+          f"({rep['timings'].get('wall_s', 0):.0f} s)"
+          + ("; refreshed mechanisms.json and the manifest's mechanisms section (the register "
+             + ("uses this study" if reg.get("identifiability") == "used" else f"ignores it: {reg.get('note')}")
+             + f"); `sparc core writeup {run}` re-renders methods.md and model_card.md"
+             if reg.get("refreshed") else "; the mechanism register was not refreshed (see the warning)"))
     return 0
 
 

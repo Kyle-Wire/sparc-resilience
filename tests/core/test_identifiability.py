@@ -408,7 +408,18 @@ def test_cli_writes_identifiability_json_and_the_manifest_section(small_run, cap
     rep = json.loads((run / "identifiability.json").read_text())
     man = json.loads((run / "manifest.json").read_text())
     assert man["identifiability"]["parameters"] == rep["parameters"]
-    assert man["post_run"][-1] == {**man["post_run"][-1], "section": "identifiability", "source": "identifiability"}
+    # the register is refreshed with the study in the same manifest update (PHYSICS_PLAN W3, part 2)
+    assert [(e["section"], e["source"]) for e in man["post_run"][-2:]] == [("identifiability", "identifiability"),
+                                                                           ("mechanisms", "identifiability")]
+    assert "refreshed mechanisms.json and the manifest's mechanisms section (the register uses this study)" in printed
+    assert rep["register"] == {"refreshed": True, "identifiability": "used", "note": None}
+    reg = json.loads((run / "mechanisms.json").read_text())
+    assert reg == man["mechanisms"] and reg["identifiability"]["status"] == "used"
+    assert reg["identifiability"]["source"] == "manifest" and set(reg["identifiability"]["parameters"]) <= {
+        "L", "s", "kappa_canopy"}
+    assert reg["panel"]["identifiability_study"] and "raue2009" in reg["references"]
+    profiled = {r["key"] for r in rep["parameters"] if r["estimate_data"] is not None}
+    assert profiled and profiled == {r["key"] for r in reg["panel"]["rows"] if r.get("identifiability")}
     assert "identifiability" in POST_RUN_KEYS
     assert [r["key"] for r in rep["parameters"]] == ["L", "s", "kappa_canopy"]
     assert rep["n_clusters"] == man["cv"]["n_blocks"] and rep["cluster"]["block_m"] == man["cv"]["block_m"]
@@ -432,3 +443,46 @@ def test_cli_writes_identifiability_json_and_the_manifest_section(small_run, cap
     man2 = json.loads((run / "manifest.json").read_text())
     assert [e["section"] for e in man2["post_run"]].count("identifiability") == 2
     assert cli.main(["identifiability", "-r", str(run / "missing")]) == 2
+    # `sparc core mechanisms` reads the study from the manifest by itself
+    (run / "mechanisms.json").unlink()
+    assert cli.main(["mechanisms", "-r", str(run)]) == 0
+    assert "**Identifiability from the data alone (W3).**" in capsys.readouterr().out
+    assert json.loads((run / "mechanisms.json").read_text())["identifiability"]["status"] == "used"
+
+
+def test_a_rerun_keeps_the_study_but_the_register_ignores_it_once_the_fit_changes(small_run, tmp_path,
+                                                                                    monkeypatch):
+    """A re-run keeps the post-run ``identifiability`` section (POST_RUN_KEYS); when it refits the physics, the
+    register (recomputed with the kept study) ignores it with a note and a ``physics.identifiability_stale``
+    warning, and methods.md says it is not used."""
+    import shutil
+
+    from sparc.core import cli, progress
+    from sparc.core.config import load_core_config
+    from sparc.core.pipeline import run_core
+
+    config_path, run0 = small_run
+    run = tmp_path / "rerun"
+    shutil.copytree(run0, run)
+    if not (run / "identifiability.json").exists():
+        assert cli.main(["identifiability", "-r", str(run), "--params", "L", "--max-points", "3", "--draws",
+                         "200"]) == 0
+    study = json.loads((run / "identifiability.json").read_text())
+    warned = []
+    real_warn = progress.warn
+    monkeypatch.setattr(progress, "warn", lambda code, msg, **kw: (warned.append((code, msg)),
+                                                                   real_warn(code, msg, **kw)))
+    cfg = load_core_config(config_path)
+    cfg.raw["models"] = {"ols": True, "mgwr": False, "gwrf": False, "gam": False, "physics": True}
+    cfg.raw["stacker"]["epochs"] = 30
+    cfg.raw["stacker"]["tune_lambda"] = [0.0]
+    cfg.raw["cv"]["baselines"] = False
+    cfg.raw["physics"]["max_iter"] = 3                       # a different physics fit on the same cells and folds
+    run_core(cfg, stages=("S0", "S1", "S2", "S3"), fast=True, run_dir=run)
+    man = json.loads((run / "manifest.json").read_text())
+    assert man["identifiability"]["run"] == study["run"]                 # kept (POST_RUN_KEYS)
+    ib = man["mechanisms"]["identifiability"]
+    assert ib["status"] == "ignored" and "different physics fit" in ib["note"], ib
+    assert json.loads((run / "mechanisms.json").read_text())["identifiability"] == ib
+    assert [c for c, _ in warned if c == "physics.identifiability_stale"] == ["physics.identifiability_stale"]
+    assert "## Identifiability\n\nNot used: identifiability study ignored" in (run / "methods.md").read_text()

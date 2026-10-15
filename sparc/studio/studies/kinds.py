@@ -8,6 +8,7 @@ Kind                Lane    Library call (against the parent run's launch-snapsh
 ``post.emulator``   heavy   ``emulator.emulator_for_run(run_dir, cfg, n_patches)``                 run dir
 ``post.uncertainty`` medium ``uncertainty.uncertainty_report(run_dir, mv, sc, placebo, gate)``     run dir
 ``post.writeup``    medium  ``writeup.methods_markdown`` / ``model_card_markdown``                 run dir
+``post.identifiability`` heavy ``identifiability.identifiability_report(run_dir, cfg, …)``      run dir
 ``study.placebo``   heavy   ``placebo.run_placebo_suite(cfg, …, children_dir, resume=True, meta)`` study dir
 ``study.simcheck``  heavy   ``simcheck.run_simcheck(cfg, design, out_dir, …)`` (resumable)         study dir
 ``study.multiverse`` heavy  ``multiverse.run_multiverse(cfg, out_dir, …, extra_variants, meta)``   study dir
@@ -19,6 +20,11 @@ The config is the run's launch snapshot (``<studio_dir>/launch.json``), else its
 config given at import (:func:`run_config`), never the project's current config.  The kinds write the
 ``.md`` / ``.json`` files the CLI used to (``placebo.json/.md``, ``simcheck_summary.md``,
 ``multiverse_summary.md``, ``benchmark.json/.md``) with :mod:`sparc.core.runio`.
+
+``post.identifiability`` (PHYSICS_PLAN W3) is a job kind only: the generic job API (``POST /api/jobs``), the
+job tracker and ``/api/meta`` list it, and its ``identifiability.json`` is in the output catalog, but it is not a
+row of ``GET /runs/{rid}/studies`` (:data:`service.ROW_KINDS`): a Validation-tab card needs a ``studio-web``
+change and a new value in the wire contract's kind enum.
 
 Server-side hooks: ``on_event`` registers each child run of a study as soon as its ``run.dir`` event
 arrives (``origin = study_child``, ``study_id``, ``parent_run_id``) and follows the job's status;
@@ -48,7 +54,8 @@ from sparc.studio.workspace import read_json
 log = logging.getLogger("sparc.studio.studies")
 
 __all__ = ["BaselinesParams", "PlannerParams", "EmulatorParams", "UncertaintyParams", "WriteupParams",
-           "PlaceboParams", "SimcheckParams", "MultiverseParams", "ReproduceParams", "BenchmarkParams",
+           "IdentifiabilityParams", "PlaceboParams", "SimcheckParams", "MultiverseParams", "ReproduceParams",
+           "BenchmarkParams",
            "PARAMS", "run_config", "merged_manifest", "estimate_kind", "enqueue_uncertainty", "child_meta",
            "GHCN_HOST", "BASELINE_MODELS", "CORE_STAGES"]
 
@@ -57,6 +64,12 @@ GHCN_HOST = "noaa-ghcn-pds.s3.amazonaws.com"
 BASELINE_MODELS = ("regression_kriging", "hgb_xy", "hgb", "idw", "hgb_focal")
 CORE_STAGES = ("S0", "S1", "S2", "S3", "S4", "S5", "S6", "S7")
 SIM_GENERATORS = ("physics", "additive", "own_only", "coarse_scale", "confounded", "null")
+#: ``sparc.core.identifiability.PARAMS`` and ``ALIASES`` (kept here so validating params never imports the core)
+IDENT_PARAMS = ("L", "v", "s", "kappa_canopy", "shade_c0", "shade_width", "a1", "a1n", "e0", "e1", "e2", "e3", "w",
+                "kappa", "kc", "c0", "cw", "width", "|v|", "v_norm", "v_norm_m", "L_m")
+#: Providence's full-resolution identifiability study (54,701 cells, 10 parameters): 410 s wall, of which 53 s for
+#: the 2000 posterior draws (one model evaluation each); the estimate scales both with the cells refitted.
+IDENT_REF_S, IDENT_REF_CELLS, IDENT_DRAW_S = 410.0, 54701.0, 53.0 / 2000.0
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +121,26 @@ class UncertaintyParams(BaseModel):
 
 class WriteupParams(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class IdentifiabilityParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    params: list[str] | None = Field(None, description="physics parameters to profile (default: every fitted one)")
+    coarse_m: float | None = Field(None, gt=0, description="refit on cells of this size (m); clusters stay the CV "
+                                                            "blocks")
+    max_points: int | None = Field(None, ge=2, le=50, description="profile points per side (default 12)")
+    draws: int | None = Field(None, ge=100, le=20000, description="Laplace-posterior draws (default 2000)")
+    seed: int = 0
+
+    @field_validator("params")
+    @classmethod
+    def _known(cls, v):
+        if v is not None:
+            bad = [p for p in v if p not in IDENT_PARAMS]
+            if bad or not v:
+                raise ValueError(f"params must be a non-empty subset of {list(IDENT_PARAMS)}"
+                                 + (f" (unknown: {bad})" if bad else ""))
+        return v
 
 
 class PlaceboParams(BaseModel):
@@ -185,7 +218,8 @@ class BenchmarkParams(BaseModel):
 
 PARAMS: dict[str, type[BaseModel]] = {
     "baselines": BaselinesParams, "planner": PlannerParams, "emulator": EmulatorParams,
-    "uncertainty": UncertaintyParams, "writeup": WriteupParams, "placebo": PlaceboParams,
+    "uncertainty": UncertaintyParams, "writeup": WriteupParams, "identifiability": IdentifiabilityParams,
+    "placebo": PlaceboParams,
     "simcheck": SimcheckParams, "multiverse": MultiverseParams, "reproduce": ReproduceParams,
     "benchmark": BenchmarkParams,
 }
@@ -450,6 +484,24 @@ def post_writeup(ctx, params: WriteupParams) -> dict:
         progress.artifact(run_dir / name, role="docs")
         files.append(name)
     return {"files": files}
+
+
+@job_kind("post.identifiability", lane="heavy", label="Physics identifiability", params=IdentifiabilityParams,
+          needs_run=True, locks_run=True, long=True, on_finish=_post_on_finish,
+          estimate=_post_estimate("identifiability"))
+def post_identifiability(ctx, params: IdentifiabilityParams) -> dict:
+    """PHYSICS_PLAN W3 on the run's launch-snapshot config: ``identifiability.json``, the manifest section, and the
+    mechanism register refreshed with it (``mechanisms.json``, the manifest's ``mechanisms``)."""
+    from sparc.core.identifiability import identifiability_report
+
+    rep = identifiability_report(Path(ctx.run_dir), run_config(ctx), params=params.params, coarse=params.coarse_m,
+                                 max_points=params.max_points, draws=params.draws, seed=int(params.seed),
+                                 settings={"num_threads": max(1, int(ctx.threads))})
+    reg = rep.get("register") or {}
+    return {"status": rep.get("status"), "n": rep.get("n"), "n_clusters": rep.get("n_clusters"),
+            "classes": {r["key"]: r.get("identifiability") for r in rep.get("parameters") or []},
+            "register": reg.get("identifiability"), "warnings": len(rep.get("warnings") or []),
+            "files": ["identifiability.json"] + (["mechanisms.json"] if reg.get("refreshed") else [])}
 
 
 # ---------------------------------------------------------------------------
@@ -894,6 +946,12 @@ def estimate_kind(db, kind: str, run_row: dict | None, params=None, *, study_id:
         patches = int(_p(params, "patches", 8) or 8)
         est = 26.0 * n_run / REF_CELLS + levers * (2 + patches) * 13.0 * (n_run / REF_CELLS)
         ram = peak_ram_gb(n_run, 5)
+    elif kind == "identifiability":
+        cm = _p(params, "coarse_m")
+        nc = _coarse_cells(n_fine, cell, cm) if cm else n_run
+        draws = float(_p(params, "draws", 2000) or 2000)
+        est = (IDENT_REF_S - 2000.0 * IDENT_DRAW_S + draws * IDENT_DRAW_S) * nc / IDENT_REF_CELLS
+        ram = peak_ram_gb(nc, 5)
     elif kind == "uncertainty":
         est = 5.0
     elif kind == "writeup":

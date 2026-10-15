@@ -1,8 +1,11 @@
 """Identifiability, prior sensitivity and prior–data conflict of the physics model (PHYSICS_PLAN W3).
 
-A post-run study of a finished run (``sparc core identifiability -r RUN_DIR``): it refits the physics model of
-:mod:`sparc.core.physics` on *all* labelled cells and asks, per fitted parameter, how much the data alone say
-about it, how much the run's priors decide it, and whether the two disagree.
+A post-run study of a finished run (``sparc core identifiability -r RUN_DIR``; Studio job ``post.identifiability``):
+it refits the physics model of :mod:`sparc.core.physics` on *all* labelled cells and asks, per fitted parameter,
+how much the data alone say about it, how much the run's priors decide it, and whether the two disagree.  The
+run's mechanism register is refreshed with it (:mod:`sparc.core.mechanisms`: the parameter panel's identifiability
+columns, the rule that a mechanism whose key parameter the data cannot pin down cannot be Supported, and the lever
+statements), and the results page, ``methods.md`` and ``model_card.md`` report it.
 
 Why the likelihood must be adjusted
 -----------------------------------
@@ -1860,11 +1863,15 @@ def _blocks_at(coords: np.ndarray, origin: tuple[float, float], block_m: float) 
 
 def identifiability_report(run_dir, cfg=None, *, params=None, coarse: float | None = None,
                            max_points: int | None = None, draws: int | None = None, seed: int = 0,
-                           settings: dict | None = None, posterior: bool = True, write: bool = True) -> dict:
+                           settings: dict | None = None, posterior: bool = True, write: bool = True,
+                           refresh_register: bool = True) -> dict:
     """The identifiability study of a finished run (module docstring): refits on the run's data (at
     ``coarse`` m cells when given), clusters = the run's CV blocks.  ``cfg``: the run's CoreConfig (default:
     rebuilt from the manifest).  With ``write``, stores ``identifiability.json`` and the manifest section
-    ``identifiability`` (``runio.update_manifest``)."""
+    ``identifiability`` (``runio.update_manifest``); with ``refresh_register`` too, the mechanism register is
+    recomputed with the study (:func:`sparc.core.mechanisms.mechanisms_for_run`; with the given ``cfg``'s raw
+    config, else the manifest's) and ``mechanisms.json`` and the manifest's ``mechanisms`` section are written in
+    the same manifest update.  ``rep["register"]`` records whether the register used the study."""
     from sparc.core import mechanisms as M
     from sparc.core import runio
     from sparc.core.baselines import load_run
@@ -1872,6 +1879,7 @@ def identifiability_report(run_dir, cfg=None, *, params=None, coarse: float | No
 
     run_dir = Path(run_dir)
     m0 = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    register_cfg = copy.deepcopy(cfg.raw) if cfg is not None else None
     cfg = _config_from_manifest(m0, run_dir) if cfg is None else copy.deepcopy(cfg)
     t0 = time.perf_counter()
     with progress.run_dir_scope(run_dir):
@@ -1910,13 +1918,40 @@ def identifiability_report(run_dir, cfg=None, *, params=None, coarse: float | No
         rep["timings"]["wall_s"] = round(time.perf_counter() - t0, 2)
         rep["run"] = {"run_dir": str(run_dir), "name": m.get("name"), "n_points_run": int(data.n),
                       "cv": m.get("cv"), "L_prior_m": L_init, "physics_json": params_note or "used",
-                      "fold_means": {r["key"]: r.get("estimate_run_folds") for r in rep.get("parameters", [])}}
+                      "fold_means": {r["key"]: r.get("estimate_run_folds") for r in rep.get("parameters", [])},
+                      "input_sha256": (m.get("provenance") or {}).get("input_sha256"),
+                      "manifest_created_utc": m.get("created_utc")}
         if write:
+            sections = {"identifiability": rep}
+            reg = _register_with(run_dir, register_cfg, rep) if refresh_register else None
+            if reg is not None:
+                ib = reg.get("identifiability") or {}
+                rep["register"] = {"refreshed": True, "identifiability": ib.get("status"), "note": ib.get("note")}
             runio.write_json_atomic(run_dir / "identifiability.json", rep, indent=1)
             progress.artifact(run_dir / "identifiability.json", role="identifiability")
-            runio.update_manifest(run_dir, {"identifiability": rep}, source="identifiability")
+            if reg is not None:
+                runio.write_json_atomic(run_dir / "mechanisms.json", reg, indent=1)
+                progress.artifact(run_dir / "mechanisms.json", role="mechanisms")
+                sections["mechanisms"] = reg
+            runio.update_manifest(run_dir, sections, source="identifiability")
             progress.artifact(run_dir / "manifest.json", role="manifest")
     return rep
+
+
+def _register_with(run_dir: Path, config_raw: dict | None, rep: dict) -> dict | None:
+    """The mechanism register of the run recomputed with this study (not written); None, with a
+    ``physics.mechanisms_failed`` warning, when it cannot be computed (the study's own results still are)."""
+    from sparc.core import mechanisms as M
+
+    try:
+        return M.mechanisms_for_run(run_dir, config_raw, write=False, identifiability=rep,
+                                    identifiability_source="manifest")
+    except Exception as exc:                         # noqa: BLE001 - the register must never fail the study
+        msg = f"{type(exc).__name__}: {exc}"
+        log.warning("mechanism register not refreshed: %s", msg)
+        progress.warn("physics.mechanisms_failed", f"physics mechanism register not refreshed: {msg}",
+                      error=msg[:300])
+        return None
 
 
 # --------------------------------------------------------------------------- markdown

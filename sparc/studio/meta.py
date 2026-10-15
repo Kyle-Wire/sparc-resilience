@@ -93,6 +93,8 @@ WARNING_CODES: list[dict] = [
     {"code": "physics.antiphysical_a", "label": "Anti-physical physics coefficient", "view": "accuracy"},
     {"code": "physics.grid_peclet", "label": "Grid too coarse for the fitted relaxation length", "view": "accuracy"},
     {"code": "physics.mechanisms_failed", "label": "Physics mechanism register not computed", "view": "accuracy"},
+    {"code": "physics.identifiability_stale", "label": "Identifiability study belongs to an earlier physics fit",
+     "view": "accuracy"},
     {"code": "causal.hole_scale", "label": "Causal hole scale", "view": "causal"},
     {"code": "causal.blp_constant", "label": "Constant best linear predictor", "view": "causal"},
     {"code": "causal.dag_unavailable", "label": "DAG audit unavailable", "view": "causal"},

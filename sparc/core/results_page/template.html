@@ -125,6 +125,10 @@ select { font: inherit; font-size: 0.86rem; padding: 6px 10px; border-radius: 8p
 .legend-row { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.82rem; color: var(--ink-2); }
 .legend-row i { display: inline-block; width: 16px; height: 2px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
 .legend-row i.box { height: 10px; width: 10px; border-radius: 2px; }
+.legend-row i.dash { background: none; border-top: 2px dashed var(--gray-mark); height: 0; }
+.profiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 14px; }
+.profiles figure { margin: 0; min-width: 0; }
+.profiles figcaption { font-size: 0.8rem; color: var(--ink-2); margin-bottom: 2px; min-height: 2.6em; }
 .tip { position: fixed; z-index: 50; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 0.8rem; box-shadow: 0 6px 20px rgba(0,0,0,0.12); max-width: 260px; }
 .tip .v { font-weight: 600; font-size: 0.92rem; }
 .tip .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
@@ -371,7 +375,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
   <section class="block" id="validation">
     <header>
       <h2>Methods &amp; validation</h2>
-      <p class="prose">What a reviewer would ask before trusting the numbers: what is in the data, which weather drove the physics, whether the model beats standard tools on the same held-out areas, whether it finds effects for layers that cannot matter, whether it recovers effects planted on this city's own layout, whether its conclusions survive other reasonable analysis choices, how it compares with published cooling rates, which physics mechanisms pass their if–then tests, and whether a run can be reproduced.</p>
+      <p class="prose">What a reviewer would ask before trusting the numbers: what is in the data, which weather drove the physics, whether the model beats standard tools on the same held-out areas, whether it finds effects for layers that cannot matter, whether it recovers effects planted on this city's own layout, whether its conclusions survive other reasonable analysis choices, how it compares with published cooling rates, which physics mechanisms pass their if–then tests, which physics parameters the data alone can pin down, and whether a run can be reproduced.</p>
     </header>
     <div class="grid2">
       <div class="card"><h3>Data findings</h3><ul class="flags" id="flagList"></ul></div>
@@ -384,6 +388,9 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     <div class="card" id="litCard" hidden><h3>Against published cooling rates</h3><p class="cap" id="litCap"></p><div class="tablewrap" id="tbl-lit"></div></div>
     <div class="card" id="mechCard" hidden><h3>Physics: what holds</h3><p class="cap" id="mechCap"></p><div class="tablewrap" id="tbl-mech"></div><p class="cap" id="mechGates" hidden></p>
       <h3 style="margin-top:18px">Fitted physics in physical units</h3><p class="cap" id="mechPanelCap"></p><div class="tablewrap" id="tbl-mechpanel"></div><p class="cap" id="mechTimeCap" hidden></p></div>
+    <div class="card" id="identCard" hidden><h3>Can the data pin down the physics?</h3><p class="cap" id="identCap"></p><div class="tablewrap" id="tbl-ident"></div><p class="cap" id="identSand" hidden></p>
+      <div class="legend-row" id="identLegend" hidden style="margin-top:14px"><span><i style="background:var(--accent)"></i>block-adjusted profile Λ_A</span><span><i class="dash"></i>naive (cells independent)</span><span><i class="dash" style="border-top-color:var(--ink-2)"></i>95% threshold 3.84</span><span><i style="background:var(--s2)"></i>run's value</span></div>
+      <div class="profiles" id="identProfiles"></div><p class="cap" id="identWarn" hidden></p></div>
     <div class="card"><h3>Reproducibility</h3><dl class="kv" id="reproBox" style="grid-template-columns:auto 1fr"></dl><p class="cap" style="margin-top:8px">Re-run and compare with <span class="mono">sparc core reproduce &lt;run dir&gt;</span>; the run directory's <span class="mono">environment.txt</span> pins every package version, and <span class="mono">methods.md</span> / <span class="mono">model_card.md</span> carry this run's numbers.</p></div>
   </section>
 
@@ -1321,11 +1328,11 @@ function mechanisms() {
   const G = R.gates || {}; if ((G.statements || []).length) { $("mechGates").hidden = false; $("mechGates").textContent = "Gates for scenario text: " + G.statements.join(" "); }
   const P = R.panel || {}; if (!(P.rows || []).length) return;
   const ra = P.rows.find((r) => r.key === "r_a");
-  $("mechPanelCap").textContent = (P.n_active ? `Mean ± delete-a-group jackknife SE over the ${P.n_active} fold models with the physics term on (${P.window} window). ` : "") + (ra && ra.derivation ? `${ra.derivation}. ` : "") + `${P.identified_products || ""} Whether each parameter is identified by this map (profile likelihood) and how far its prior moves it (power-scaling) are not yet tested. Priors are shown as information.` + ((P.notes || []).length ? " " + P.notes.join(" ") : "");
+  $("mechPanelCap").textContent = (P.n_active ? `Mean ± delete-a-group jackknife SE over the ${P.n_active} fold models with the physics term on (${P.window} window). ` : "") + (ra && ra.derivation ? `${ra.derivation}. ` : "") + `${P.identified_products || ""} ` + (P.identifiability_study ? "Whether the data alone identify each parameter, and how far its prior moves the run's value, are in the next card (Can the data pin down the physics?)." : "Whether each parameter is identified by this map (profile likelihood) and how far its prior moves it (power-scaling) are not yet tested.") + " Priors are shown as information." + ((P.notes || []).length ? " " + P.notes.join(" ") : "");
   const dec = (k) => ["L", "v", "w"].includes(k) ? 0 : ["r_a", "gamma"].includes(k) ? 1 : 3;
   const prow = P.rows.map((r) => {
     const d = dec(r.key); const val = r.value == null ? "—" : `${fmt(r.value, d)}${r.se != null ? ` ± ${fmt(r.se, d)}` : ""} ${r.unit}`;
-    const ab = r.at_bound; const vwhy = [ab ? `at the ${ab.side} fit bound in ${ab.k} of ${ab.n} folds: not identified` + (ab.every_fold ? " (no SE)" : "") : "", r.prior ? `prior N(${r.prior.mean}, ${r.prior.sd}²)` : ""].filter(Boolean).join("; ");
+    const ab = r.at_bound; const idn = r.identifiability; const vwhy = [ab ? `at the ${ab.side} fit bound in ${ab.k} of ${ab.n} folds: not identified` + (ab.every_fold ? " (no SE)" : "") : "", r.prior ? `prior N(${r.prior.mean}, ${r.prior.sd}²)` : "", idn ? `data alone: ${idn.class_label}` + (idn.reaches_zero ? ", 0 not excluded" : "") + (idn.prior_share_run != null ? `; prior share ${fmt(idn.prior_share_run, 2)}` : "") : "", r.sandwich ? `block sandwich ± ${fmt(r.sandwich.se, 1)}` + (r.sandwich.note ? " (differs from the jackknife by more than ×2)" : "") : ""].filter(Boolean).join("; ");
     const vcell = withWhy(document.createTextNode(val), vwhy);
     const status = ab ? "at fit bound" : ({ inside: "inside", outside: "outside", not_comparable: "not comparable" }[r.status] || r.status) + (r.interval_informative === false ? " (imprecise)" : "");
     return [withWhy(document.createTextNode(r.label), r.status_note), vcell, r.published ? r.published.text : "—", r.published ? r.published.source : "—", mechPill(ab ? "at_bound" : r.interval_informative === false ? "imprecise" : r.status, status)];
@@ -1333,6 +1340,70 @@ function mechanisms() {
   $("tbl-mechpanel").append(table(["Quantity", "Value ± SE", "Published range", "Source", "Status"], prow, (i) => i === 1));
   const ts = P.timescales; if (ts && (ts.rows || []).length) { $("mechTimeCap").hidden = false;
     $("mechTimeCap").textContent = `Implied time scales (assumptions, not fits): ${ts.assumption} ` + (ts.caveat ? `${ts.caveat}. ` : "") + ts.rows.map((t) => `With h = ${fmt(t.h_m, 0)} m, τ = r_a·h ≈ ${fmt(t.tau_min, 0)} min and ωτ ≈ ${fmt(t.omega_tau, 2)} for the daily cycle (phase lag ≈ ${fmt(t.phase_lag_deg, 0)}°)` + (t.tau_min_range && t.omega_tau_range ? `; ±2 SE: τ ${fmt(t.tau_min_range[0], 0)}–${fmt(t.tau_min_range[1], 0)} min, ωτ ${fmt(t.omega_tau_range[0], 2)}–${fmt(t.omega_tau_range[1], 2)}` : "")).join(". ") + "." + (ts.advection_bound ? ` ${ts.advection_bound.text}.` : "") + (ts.advection_note ? ` ${ts.advection_note}.` : ""); }
+}
+
+/* ---------- identifiability (PHYSICS_PLAN W3) ---------- */
+const sig3 = (v) => (v === null || v === undefined || !isFinite(v)) ? "—" : Math.abs(v) < 5e-4 ? "0" : Math.abs(v) >= 100 ? nfmt(v, 0) : (v < 0 ? "−" : "") + Number(Math.abs(v).toPrecision(3)).toString();
+const ciText = (ci, u) => ci ? `${ci[0] == null ? "open" : sig3(ci[0])} to ${ci[1] == null ? "open" : sig3(ci[1])}${u ? " " + u : ""}` : "—";
+function identPill(r) {
+  if (r.class === "identified" && !r.reaches_zero) return pill("good", "identified");
+  if (r.class === "identified") return pill("warn", "0 not excluded");
+  if (r.class === "practically_non_identifiable" || r.class === "structurally_non_identifiable") return pill("crit", r.class === "structurally_non_identifiable" ? "not identified (flat)" : "not identified");
+  return mechPill("na", r.class_label || "—");
+}
+const PS_TXT = { prior_data_conflict: "potential prior–data conflict", weak_likelihood: "strong prior, weak likelihood" };
+function profileChart(r, thr) {
+  // one y scale for every panel (0 to 2.5 × the threshold, steeper parts clipped) so the panels compare; κ and the
+  // shade width are profiled on the log scale, so their x axis is logarithmic when it spans more than a decade
+  const pr = r.profile; const W = 260, H = 182, ml = 38, mr = 12, mt = 8, mb = 40; const iw = W - ml - mr, ih = H - mt - mb;
+  const xs = pr.grid, ya = pr.lambda_adj, yn = pr.lambda_naive;
+  const cand = [...xs, ...(r.estimate_run != null ? [r.estimate_run] : [])].filter((v) => v != null && isFinite(v));
+  let lo = Math.min(...cand), hi = Math.max(...cand);
+  const logx = ["kappa_canopy", "shade_width"].includes(r.key) && lo > 0 && hi / lo > 10;
+  const tf = (v) => logx ? Math.log10(v) : v, inv = (t) => logx ? Math.pow(10, t) : t;
+  let x0 = tf(lo), x1 = tf(hi); if (!(x1 > x0)) { x0 -= 1; x1 += 1; } const pad = 0.04 * (x1 - x0);
+  const ymax = 2.5 * thr;
+  const x = (v) => ml + iw * (tf(v) - x0 + pad) / (x1 - x0 + 2 * pad), y = (v) => mt + ih * (1 - Math.min(v, 2 * ymax) / ymax);
+  const u = (r.unit === "m" || r.unit === "W/m²") ? r.unit : ""; const sym = r.label.split(" ").slice(-1)[0];
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Profile of ${r.label}: block-adjusted 95% interval ${ciText(r.ci95, u)}; naive ${ciText(r.ci95_naive, u)}` });
+  const cid = `clip-${r.key}`; const defs = sv("defs"); const cp = sv("clipPath", { id: cid }); cp.append(sv("rect", { x: ml, y: mt - 2, width: iw, height: ih + 2 })); defs.append(cp); svg.append(defs);
+  svg.append(sv("line", { x1: ml, x2: W - mr, y1: y(0), y2: y(0), stroke: V("--axis") }), sv("line", { x1: ml, x2: W - mr, y1: y(ymax), y2: y(ymax), stroke: V("--grid") }));
+  svg.append(sv("text", { x: ml - 5, y: y(0) + 4, "text-anchor": "end", class: "t-axis" }, "0"), sv("text", { x: ml - 5, y: y(thr) + 4, "text-anchor": "end", class: "t-axis" }, fmt(thr, 2)));
+  [x0, (x0 + x1) / 2, x1].forEach((t, i) => svg.append(sv("text", { x: x(inv(t)), y: H - mb + 14, "text-anchor": ["start", "middle", "end"][i], class: "t-axis" }, sig3(inv(t)))));
+  svg.append(sv("text", { x: ml + iw / 2, y: H - 6, "text-anchor": "middle", class: "t-label" }, `${sym}${u ? ` (${u})` : ""}${logx ? ", log scale" : ""}  ·  y: Λ`));
+  const g = sv("g", { "clip-path": `url(#${cid})` });
+  const path = (ys) => xs.map((v, i) => ys[i] == null ? null : `${x(v)} ${y(ys[i])}`).filter(Boolean).map((q, i) => `${i ? "L" : "M"} ${q}`).join(" ");
+  g.append(sv("line", { x1: ml, x2: W - mr, y1: y(thr), y2: y(thr), stroke: V("--ink-2"), "stroke-width": 1.2, "stroke-dasharray": "2 3" }));
+  if (r.estimate_run != null && isFinite(r.estimate_run)) g.append(sv("line", { x1: x(r.estimate_run), x2: x(r.estimate_run), y1: mt, y2: y(0), stroke: V("--s2"), "stroke-width": 1.5 }));
+  g.append(sv("path", { d: path(yn), fill: "none", stroke: V("--gray-mark"), "stroke-width": 1.5, "stroke-dasharray": "5 4" }));
+  g.append(sv("path", { d: path(ya), fill: "none", stroke: V("--accent"), "stroke-width": 2, "stroke-linejoin": "round" }));
+  xs.forEach((v, i) => { if (ya[i] == null) return; const c = sv("circle", { cx: x(v), cy: y(ya[i]), r: 3, fill: V("--accent"), stroke: V("--surface"), "stroke-width": 1.5 });
+    c.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `Λ_A ${fmt(ya[i], 2)}`), el("div", {}, `${r.label} = ${sig3(v)}${u ? " " + u : ""}`), el("div", { class: "cap" }, `naive Λ ${fmt(yn[i], 1)}`)); }));
+    c.addEventListener("pointerleave", hideTip); g.append(c); });
+  svg.append(g);
+  const fig = el("figure"); fig.append(el("figcaption", {}, `${r.label}: ${ciText(r.ci95, u)}`), svg); return fig;
+}
+function identifiabilityCard() {
+  const I = DATA.identifiability; if (!I) return;
+  $("identCard").hidden = false;
+  if (I.status !== "used") { $("identCap").textContent = `An identifiability study exists for this run directory but is not used here: ${I.note || "it belongs to another fit"}.`; return; }
+  const thr = I.chi2_95 || 3.841; const blk = I.block_m ? ` of ${fmt(I.block_m / 1000, I.block_m % 1000 ? 1 : 0)} km` : "";
+  $("identCap").textContent = `Each physics parameter was refitted on all ${I.n != null ? Number(I.n).toLocaleString("en-US") : ""} labelled cells${I.coarse_m ? ` (${fmt(I.coarse_m, 0)} m cells)` : ""} with every prior switched off, then profiled: moved step by step with the other parameters refitted, its profile statistic Λ_A is twice the drop in log-likelihood. Neighbouring cells are not independent, so the likelihood is adjusted by treating the run's ${I.n_clusters} cross-validation blocks${blk} as independent clusters (Chandler & Bate 2007). The 95% interval is where Λ_A stays below ${fmt(thr, 2)} (Raue et al. 2009): a curve that never crosses that line on a side leaves that side open (not identified), a flat curve means the data carry no information on the parameter, and an interval reaching 0 means the data do not exclude "no effect". The grey dashed curves treat every cell as independent: their intervals are far too narrow. Curves above ${fmt(2.5 * thr, 1)} are cut off. Prior share: the penalty's share of the run objective's curvature in the parameter; above one half, the run's value is set mostly by its prior rather than by the data. Power-scaling (Kallioinen et al. 2024): a sensitivity of ${fmt(I.psens_threshold || 0.05, 2)} or more flags the prior (informative) or the likelihood; both together suggest a prior–data conflict. Conflict p: Evans & Moshonov (2006) prior-predictive tail probability of the data-only estimate (not testable when that estimate sits on a fit bound). A mechanism whose key parameter is not identified cannot be Supported.` + ((I.gated || []).length ? ` Downgraded for that reason: ${I.gated.join(", ")}.` : "");
+  const rows = (I.rows || []).map((r) => {
+    const u = (r.unit === "m" || r.unit === "W/m²") ? r.unit : ""; const ps = r.psens || {}; const cf = r.conflict || {}; const post = r.posterior || {};
+    const pss = r.psens ? `${fmt(ps.prior, 3)} / ${fmt(ps.likelihood, 3)}` + (PS_TXT[ps.diagnosis] ? ` — ${PS_TXT[ps.diagnosis]}` : "") : "—";
+    const cfs = cf.p != null ? fmt(cf.p, 2) + (cf.flag ? " (conflict)" : "") : r.conflict ? "not testable" : "—";
+    const why = (r.text || "").startsWith(r.label + ": ") ? r.text.slice(r.label.length + 2) : r.text; const whyCap = why ? why[0].toUpperCase() + why.slice(1) : why;
+    return [withWhy(document.createTextNode(r.label), whyCap), `${sig3(r.estimate_run)}${u ? " " + u : ""}`, withWhy(document.createTextNode(ciText(r.ci95, u)), `naive ${ciText(r.ci95_naive, u)}`), withWhy(identPill(r), r.at_bound ? `data-only fit on its ${r.at_bound.side} bound` : ""),
+      r.prior_share_run != null ? fmt(r.prior_share_run, 2) : "—", post.mean != null ? `${sig3(post.mean)} ± ${sig3(post.sd)}` : "—", pss, cfs];
+  });
+  $("tbl-ident").append(table(["Parameter", "Run value", "Data-only 95% CI", "Data alone", "Prior share", "Posterior mean ± sd", "Power-scaling prior / likelihood", "Conflict p"], rows, (i) => i === 1 || i === 4 || i === 5 || i === 7));
+  if ((I.sandwich || []).length) { $("identSand").hidden = false;
+    $("identSand").textContent = I.sandwich.map((s) => `${s.label}: ${nfmt(s.sandwich_value, 1)} ± ${fmt(s.sandwich_se, 1)} ${s.unit} from the full-data fit with the block-adjusted (sandwich) SE, beside the fold jackknife ${nfmt(s.jackknife_value, 1)} ± ${fmt(s.jackknife_se, 1)} ${s.unit}` + (s.note ? " — the two SEs differ by more than a factor of 2, so the jackknife interval the verdict uses is itself uncertain" : "")).join(". ") + ". The range tests use the jackknife."; }
+  const withProf = (I.rows || []).filter((r) => r.profile && (r.profile.grid || []).length > 1);
+  if (withProf.length) { $("identLegend").hidden = false; for (const r of withProf) $("identProfiles").append(profileChart(r, thr)); }
+  const warn = [...(I.laplace_adequate === false ? ["The posterior mean ± sd and the power-scaling columns describe a Laplace (Gaussian) approximation of the calibrated posterior (Ribatet, Cooley & Davison 2012), which is poor for this run; the profile intervals do not rely on it."] : [])];
+  if (warn.length) { $("identWarn").hidden = false; $("identWarn").textContent = warn.join(" "); }
 }
 
 /* ---------- caveats & footer ---------- */
@@ -1362,7 +1433,7 @@ function caveats() {
 }
 
 function init() {
-  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); uncertainty(); heatStress(); climate(); causal(); identify(); budget(); planner(); validation(); mechanisms(); caveats();
+  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); uncertainty(); heatStress(); climate(); causal(); identify(); budget(); planner(); validation(); mechanisms(); identifiabilityCard(); caveats();
   let g0 = GROUPS[0]; try { const s = localStorage.getItem("phm-group"); if (s && GROUPS.includes(s)) g0 = s; } catch (e) {}
   setGroup(g0);
 }

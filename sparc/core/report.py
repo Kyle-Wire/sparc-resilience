@@ -71,7 +71,9 @@ def _causal_summary(causal: dict) -> dict:
 
 def _mechanisms(result, m: dict) -> dict:
     """The physics mechanism register (:func:`sparc.core.mechanisms.evaluate`) from the fold models' physics
-    parameters.  It is reporting: a failure is a warning and an ``{"error": ...}`` section, never a failed run."""
+    parameters, with the manifest's identifiability study when ``m`` carries one (a re-run keeps it; the register
+    ignores it, with a ``physics.identifiability_stale`` warning, when it belongs to an earlier fit).  It is
+    reporting: a failure is a warning and an ``{"error": ...}`` section, never a failed run."""
     from sparc.core import progress
 
     try:
@@ -79,7 +81,11 @@ def _mechanisms(result, m: dict) -> dict:
 
         ens = result.ensemble
         params = [st.physics.params for st in ens.stacks] if ens is not None and ens.has_physics else None
-        return evaluate(m, params, result.cfg.raw, units=result.data.target_units)
+        reg = evaluate(m, params, result.cfg.raw, units=result.data.target_units)
+        ib = reg.get("identifiability") or {}
+        if ib.get("status") == "ignored":
+            progress.warn("physics.identifiability_stale", str(ib.get("note")), source=ib.get("source"))
+        return reg
     except Exception as exc:                         # noqa: BLE001 - the register must never fail a run
         msg = f"{type(exc).__name__}: {exc}"
         log.warning("mechanism register failed: %s", msg)

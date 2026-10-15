@@ -486,7 +486,7 @@ Envelope, present on every line:
   - `cv.block_raised`, `cv.partition_skipped`
   - `checkpoint.mismatch`
   - `influence.few_cells`, `influence.constant_predictor` (emitted by `influence.py`, which is instrumented, §11 item 7)
-  - `physics.missing_roles`, `physics.antiphysical_a`, `physics.grid_peclet` (once per run, after advection selection, when a delivered fold's fit has a cell Péclet number above 1: L is then weakly or not identified along that axis, or the central scheme's kernel has negative lobes; the per-fold texts are in `physics.json` `resolution_warning`), `physics.mechanisms_failed`
+  - `physics.missing_roles`, `physics.antiphysical_a`, `physics.grid_peclet` (once per run, after advection selection, when a delivered fold's fit has a cell Péclet number above 1: L is then weakly or not identified along that axis, or the central scheme's kernel has negative lobes; the per-fold texts are in `physics.json` `resolution_warning`), `physics.mechanisms_failed` (also when `sparc core identifiability` cannot refresh the register), `physics.identifiability_stale` (a re-run keeps an earlier identifiability study whose cells, CV design, input or physics fit differ from the new run's: the register ignores it until `sparc core identifiability` is re-run)
 - Causal:
   - `causal.hole_scale`, `causal.blp_constant`, `causal.dag_unavailable`
   - `causal.no_confounders`, `causal.controls_missing`, `causal.treatment_missing`
@@ -585,6 +585,7 @@ seconds(unit) = rate(host, unit) × (n_cells / 54_701)^α(unit) × (4 / threads)
 - `post.emulator`: per lever (2 + channels + 2·n_patches + 1) `engine_pass`, plus `unpickle` for the checkpoint;
 - `post.baselines`: `baseline_fit:<m>` × K per model;
 - `post.planner`, `post.uncertainty`, `post.writeup`: fixed 30 s / 2 s / 1 s;
+- `post.identifiability`: Providence's full-resolution study (410 s for 54,701 cells, of which 53 s for 2000 posterior draws) scaled by the cells refitted (`coarse_m`) and the draws;
 - `engine.open`: `unpickle` + `mediator_fit` + 1 `engine_pass`; `engine.scenario`: 1 `engine_pass`;
 - `study.placebo`: kinds × `plan_stages(S0–S6)` at the study's coarse size;
 - `study.multiverse`: `variant` × variants not yet done; `study.simcheck`: `replicate` × pending pairs ÷ workers;
@@ -1590,6 +1591,7 @@ All of these are tracked jobs. They run against the **parent run's launch snapsh
 | `post.emulator` | action | `emulator.emulator_for_run(run_dir, cfg, n_patches)` | heavy | emulator.npz/.json | Requires checkpoint, checked when the job starts (so it can wait in a Launch "then" chain) |
 | `post.uncertainty` | action | `uncertainty.uncertainty_report(run_dir, multiverse_dir, simcheck_dirs, placebo_path, real_r2_gate)` | medium | uncertainty.json/.md, placebo.json; manifest | **Auto-enqueued** when an attached study finishes (setting `auto_uncertainty`, default on) |
 | `post.writeup` | action | `writeup.methods_markdown` / `model_card_markdown` on the merged manifest | medium | methods.md, model_card.md | report.md is not re-rendered (frozen at run end) |
+| `post.identifiability` | action (job kind only) | `identifiability.identifiability_report(run_dir, cfg, params, coarse, max_points, draws, seed)` | heavy | identifiability.json, mechanisms.json; manifest `identifiability` + `mechanisms` in one `update_manifest` | PHYSICS_PLAN W3. Enqueued through `POST /api/jobs` (no `/actions/{kind}` route and no `GET /runs/{rid}/studies` row: a Validation-tab card needs a `studio-web` change and a new kind in the wire contract) |
 | `study.placebo` | study | `placebo.run_placebo_suite(cfg, kinds, coarse, seed, grf_range_m, children_dir, resume=True, run_meta)` | heavy | study dir: placebo.json/.md (written by the kind with `placebo_markdown`, as the CLI does) + 1 child run per kind | Needs canopy/impervious roles |
 | `study.simcheck` | study | `simcheck.run_simcheck(cfg, design, out_dir, coarse, epochs, workers, threads)` | heavy | simcheck.jsonl, simcheck_summary.json (by core); simcheck_summary.md (by the kind, `simcheck_markdown`) | Resumable; `simcheck_merge` across studies is inline |
 | `study.multiverse` | study | `multiverse.run_multiverse(cfg, out_dir, variants, coarse, workers, threads, extra_variants, run_meta)` | heavy | <variant>.json/_maps.npz, multiverse_summary.json (by core); multiverse_summary.md (by the kind, `multiverse_markdown`) + child runs | Custom variants as dotted overrides |
@@ -1827,7 +1829,7 @@ Params schemas are in `api.md` §8.
 | `run.core` (launch and resume) | heavy | process | runs | ✓ |
 | `run.external` (read-only pseudo-job for a live CLI run, §5.14; never queued or cancellable) | none | external | runs | — |
 | `post.baselines`, `post.planner`, `post.uncertainty`, `post.writeup` | medium | process | studies | ✓ |
-| `post.emulator` | heavy | process | studies | ✓ |
+| `post.emulator`, `post.identifiability` | heavy | process | studies | ✓ |
 | `study.placebo`, `study.simcheck`, `study.multiverse`, `study.reproduce`, `study.benchmark` | heavy | process | studies | — |
 | `export.bundle`, `export.gis`, `export.page`, `export.report`, `export.findings` | medium | process | studies | — |
 | `engine.open`, `engine.scenario`, `engine.batch`, `engine.rerun_configured`, `engine.sweep`, `engine.plan_verify`, `engine.plan_frontier` | engine | engine | engine | — |
