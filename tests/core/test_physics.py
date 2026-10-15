@@ -316,6 +316,31 @@ def test_grid_peclet_warning_is_run_level_and_only_for_delivered_models(city_fol
     assert msg.startswith("2 of 4 fold physics fits") and p["resolution_warning"] in msg
 
 
+def test_pipeline_emits_one_grid_peclet_warning_per_run(synthetic_city, monkeypatch):
+    """With the grid report stubbed to 'past Pe = 1', every fold fit and every
+    advection-selection refit lands there, yet the run emits
+    ``physics.grid_peclet`` exactly once, for the delivered fold models."""
+    from sparc.core import progress
+    from sparc.core.config import core_config_from_dict
+    from sparc.core.pipeline import run_core
+
+    cfg = core_config_from_dict(synthetic_city_config())
+    cfg.raw["models"] = {"ols": True, "mgwr": False, "gwrf": False, "gam": False, "physics": True}
+    cfg.raw["stacker"].update(epochs=5, tune_lambda=[0.0])
+    cfg.raw["cv"]["baselines"] = False
+    cfg.raw["physics"]["max_iter"] = 8
+    unresolved = {"cell_peclet_x": 3.0, "cell_peclet_y": 2.0, "L_eff_x_m": 104.0, "L_eff_y_m": 90.0,
+                  "L_elasticity_x": 0.0, "L_elasticity_y": 0.0, "L_min_resolved_m": 104.0, "L_resolved": False}
+    monkeypatch.setattr(ops, "grid_resolution", lambda *a, **k: dict(unresolved))
+    seen = []
+    monkeypatch.setattr(progress, "warn", lambda code, message, **kw: seen.append((code, kw)))
+    r = run_core(cfg, stages=("S0", "S1", "S2", "S3"), frame=synthetic_city.frame, write=False)
+    assert r.ensemble.physics_selection is not None                 # the advection check refitted every fold
+    hits = [kw for code, kw in seen if code == "physics.grid_peclet"]
+    K = len(r.ensemble.stacks)
+    assert len(hits) == 1 and hits[0]["folds"] == list(range(K)) and hits[0]["n_folds"] == K
+
+
 def test_source_points_centred_and_rasterised_equals_source_raster(city_model, city_fold):
     data, _, _ = city_fold
     g = data.grid
