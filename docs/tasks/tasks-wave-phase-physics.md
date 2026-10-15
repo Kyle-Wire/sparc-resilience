@@ -1,5 +1,7 @@
 # Tasks: Wave-Phase Physics
 
+> **Status: retired (2026-10-15).** Superseded by [`PHYSICS_PLAN.md`](../roadmap/PHYSICS_PLAN.md) (see its §2.3). No task below was started, and none will be.
+
 Related PRD: docs/prd/prd-wave-phase-physics.md
 
 ---
@@ -65,4 +67,4 @@ Related PRD: docs/prd/prd-wave-phase-physics.md
 
 ## Status
 
-All tasks: `[ ]` not started
+Retired 2026-10-15 before any task was started; superseded by `docs/roadmap/PHYSICS_PLAN.md`.

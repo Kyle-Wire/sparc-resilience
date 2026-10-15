@@ -1,8 +1,8 @@
 # SPARC Physics: Plan
 
-**Status:** proposal, nothing implemented · **Date:** 2026-10-15 · **Scope:** the physics base model in `sparc/core/` (`physics.py`, `operators.py`) and the checks that decide how far to trust it · **Builds on:** [`CORE_ROADMAP.md`](CORE_ROADMAP.md) §2.1 and Appendices C–G
+**Status:** in progress: W0, W1 and the W3 parameter panel started 2026-10-15 · **Date:** 2026-10-15 · **Scope:** the physics base model in `sparc/core/` (`physics.py`, `operators.py`) and the checks that decide how far to trust it · **Builds on:** [`CORE_ROADMAP.md`](CORE_ROADMAP.md) §2.1 and Appendices C–G
 
-> Proposes retiring [`prd-wave-phase-physics.md`](../prd/prd-wave-phase-physics.md) and its task list (none of its tasks were started); see §2.3.
+> Supersedes [`prd-wave-phase-physics.md`](../prd/prd-wave-phase-physics.md) and its task list, retired 2026-10-15 before any of its tasks were started; see §2.3.
 
 ---
 
@@ -99,7 +99,7 @@
 | A 1/r regime for air quality and wildfire | Wrong mechanism (§2.2) | AQ plan; out of scope here |
 | A source-coherence diagnostic | The sound part: does the field point back at its sources? | The cross-correlogram peak offset and the cross-spectral phase (W4) |
 
-**Recommendation:** mark the PRD and its task list *superseded by this plan*.
+**Decision (2026-10-15):** the PRD and its task list are retired and marked *superseded by this plan*.
 
 ---
 
@@ -345,7 +345,7 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 |---|---|---|
 | D1 | Wind-term scheme | Exponential fitting in the operator, with the analytic K₀ Green's function as a test oracle only. This keeps the residual identity and the spectral speed. |
 | D2 | Lapse-rate prior on γ | Report γ against the lapse rate first. Add the prior only as a multiverse variant. |
-| D3 | Retire the wave-phase PRD | Yes, superseded by this plan |
+| D3 | Retire the wave-phase PRD | **Decided 2026-10-15:** retired, superseded by this plan |
 | D4 | Require W7 (raw traverses) before any physics parameter is called "physical" | Yes. Until then the panel says "fitted to the product". |
 
 ---

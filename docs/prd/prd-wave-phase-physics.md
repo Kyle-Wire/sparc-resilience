@@ -1,5 +1,7 @@
 # PRD: Wave-Phase Physics for SPARC Spatial Regression
 
+> **Status: retired (2026-10-15).** Superseded by [`PHYSICS_PLAN.md`](../roadmap/PHYSICS_PLAN.md). §2.3 of that plan explains, idea by idea, what was dropped and what replaced it. In short, the phase field, the Schrödinger residual and the probability current have nothing measurable behind them, while the wind's directional signature is kept as a testable cross-correlogram and transfer-function phase (PHYSICS_PLAN W4). None of this PRD's tasks were started; it is kept for reference only.
+
 ## Problem Statement
 
 SPARC's spatial regression pipeline uses a Matérn covariance kernel (via the screened-Poisson
