@@ -181,11 +181,11 @@ class PhysicsInformedStacker:
 
         use_pde = self.physics is not None and self.lambda_pde > 0
         if use_pde:
-            from sparc.core.operators import apply_operator_torch, stencil_valid
+            from sparc.core.operators import apply_operator_torch, params_scheme, stencil_valid
 
             pp = self.physics.params
             L, vx, vy = float(pp["L_m"]), float(pp.get("vx_m", 0.0)), float(pp.get("vy_m", 0.0))
-            scheme = pp.get("advection_scheme", "central")      # the fitted operator's; old runs were central
+            scheme = params_scheme(pp)      # the fitted operator's; old runs (no key) were central
             interior = torch.as_tensor(stencil_valid(self.grid.mask)[1:-1, 1:-1])
             # Normalise by the operator roughness of the data's own misfit
             # (y − ΔT_phys) on training cells: λ = 1 then penalises a learned

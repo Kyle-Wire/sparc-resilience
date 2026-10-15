@@ -41,13 +41,32 @@ Why fit the diffusion.  With D = L² a neighbour's stencil weight is
 convection–diffusion (Patankar 1980).  Because x·coth(x) ≥ |x|, the fitted
 D ≥ |v_axis|·d/2, every off-diagonal weight is ≤ 0, and with the +1
 relaxation term the matrix is a strictly diagonally dominant M-matrix, so
-G ≥ 0.  For small Pe, D = L²·(1 + Pe²/3 − …): the schemes agree to O(Pe²)
-and coincide at v = 0.  The first moment of G is v for both schemes
-(λ′(0) = 0, adv′(0) = v), so the downwind shift is kept, and Ĝ(0) = 1.
-Both schemes are second order; the price of positivity is the O(Pe²)
-extra diffusion, which on a smooth manufactured solution at Pe = 1.25 makes
-the fitted scheme's error about 8× the central one's (still < 1 %), while
-near a point source it is slightly more accurate (the verification tests).
+G ≥ 0.  The first moment of G is v for both schemes (λ′(0) = 0,
+adv′(0) = v), so the downwind shift is kept, and Ĝ(0) = 1.
+
+The price of positivity.  The fitted scheme adds L²·(Pe·coth Pe − 1) of
+diffusion on each axis.  For small Pe that is ≈ L²·Pe²/3: the schemes agree
+to O(Pe²) and coincide at v = 0.  For large Pe it is ≈ L²·(Pe − 1), and D
+tends to the first-order upwind value |v_axis|·d/2, which does not depend on
+L.  So once an axis' cell Péclet number exceeds 1, its diffusion is set by
+the grid rather than by L (√D_x = 122 m for L = 30 m, v = (1000, 0) m,
+dx = 30 m, while √D_y = 30 m): the operator is anisotropic with respect to
+the grid axes, by an amount that depends on the wind's angle to them.  When
+both axes exceed 1 (an oblique wind), L below √(|v_axis|·d/2) is not
+identified at all.  The central scheme does no better there; it keeps
+D = L² only by giving G negative lobes.  Representing such an L needs
+d ≤ 2L²/|v_axis|.  :func:`grid_resolution` reports the cell Péclet numbers,
+√D_x, √D_y and the smallest L this grid resolves at a given wind, and the
+physics model warns when a fit lands beyond it.
+
+The fitted scheme's advantage is positivity, not accuracy.  Both schemes
+are second order.  Against the oracle below at L = 256 m (Pe = 0.07), the
+median relative error on the 1.5L–2L ring is 0.15 % fitted vs 0.21 %
+central, and the mass-weighted L1 error beyond two cells of the source is
+0.22 % for both.  From Pe ≈ 0.3 up the central scheme's mass-weighted L1
+error is as low or lower (L = 60 m, v = (300, 0) m, Pe = 1.25: 2.9 % central
+vs 4.5 % fitted), and on a smooth manufactured solution at Pe = 1.25 the
+fitted scheme's error is about 8× the central one's (both < 1 %).
 
 Adjoint.  The second differences are symmetric and the central first
 differences antisymmetric, and D depends on v only through the even
@@ -76,6 +95,8 @@ import numpy as np
 #: Advection schemes: exponentially fitted diffusion (default) or plain central.
 SCHEMES = ("exponential", "central")
 DEFAULT_SCHEME = "exponential"
+#: The scheme of every model fitted before ``advection_scheme`` existed.
+LEGACY_SCHEME = "central"
 # Below this |Pe| the series 1 + Pe²/3 − Pe⁴/45 replaces Pe·coth(Pe): exact to
 # rounding there (next term 2Pe⁶/945), and it keeps autograd finite at Pe = 0.
 _SERIES_PE = 1e-2
@@ -87,6 +108,18 @@ def check_scheme(scheme: str) -> str:
     if s not in SCHEMES:
         raise ValueError(f"unknown advection scheme {scheme!r}; expected one of {SCHEMES}")
     return s
+
+
+def params_scheme(params) -> str:
+    """Advection scheme of a fitted physics model, from its ``params`` dict.
+
+    Every caller that re-applies a fitted operator (stacker PDE penalty,
+    response G0 / G-mass / adjoint, emulator kernel) resolves the scheme
+    here.  A dict without the key (or with None) is a run fitted before the
+    scheme existed, so it gets :data:`LEGACY_SCHEME`, never the default.
+    """
+    s = (params or {}).get("advection_scheme")
+    return LEGACY_SCHEME if s is None else check_scheme(s)
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +230,30 @@ def axis_diffusion(L: float, v: tuple[float, float], dx: float, dy: float | None
     if check_scheme(scheme) == "central":
         return float(L) ** 2, float(L) ** 2
     return fitted_diffusion(L, v[0], dx), fitted_diffusion(L, v[1], dy)
+
+
+def grid_resolution(L: float, v: tuple[float, float], dx: float, dy: float | None = None,
+                    scheme: str = DEFAULT_SCHEME) -> dict:
+    """How faithfully the grid represents the operator at (L, v).
+
+    * ``cell_peclet_x``, ``cell_peclet_y``: |v_axis|·d/(2L²) per axis;
+    * ``L_eff_x_m``, ``L_eff_y_m``: √D_x, √D_y of ``scheme`` (L for
+      "central"), the diffusion length the discrete operator actually has;
+    * ``L_min_resolved_m``: √(max(|vx|·dx, |vy|·dy)/2), the smallest L with
+      every cell Péclet number ≤ 1 at this wind;
+    * ``L_resolved``: max cell Péclet number ≤ 1.
+
+    When ``L_resolved`` is False the fitted scheme's diffusion along the
+    offending axis is set by the grid rather than by L (and the central
+    scheme's G has negative lobes): see the module docstring.
+    """
+    dy = dx if dy is None else dy
+    L2 = float(L) ** 2
+    half = (abs(float(v[0])) * float(dx) / 2.0, abs(float(v[1])) * float(dy) / 2.0)
+    pe = tuple(h / L2 if L2 > 0 else (math.inf if h > 0 else 0.0) for h in half)
+    Dx, Dy = axis_diffusion(L, v, dx, dy, scheme)
+    return {"cell_peclet_x": pe[0], "cell_peclet_y": pe[1], "L_eff_x_m": math.sqrt(Dx), "L_eff_y_m": math.sqrt(Dy),
+            "L_min_resolved_m": math.sqrt(max(half)), "L_resolved": max(pe) <= 1.0}
 
 
 # ---------------------------------------------------------------------------

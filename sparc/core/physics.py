@@ -12,8 +12,13 @@ see :mod:`sparc.core.operators`), so the PDE residual used by the stacker
 (:meth:`PhysicsModel.operator_residual_torch`) is exactly zero on this
 model's own prediction.  The fitted diffusion keeps the Green's function
 non-negative at any cell Péclet number |v|·dx/(2L²) the fit box allows; it
-equals L² at v = 0.  Models pickled before the scheme existed were fitted
-with ``"central"`` (D = L²) and keep it when unpickled.
+equals L² at v = 0.  Above a cell Péclet number of 1 the grid, not L, sets
+the diffusion along that axis, so L below √(|v_axis|·dx/2) is not resolved;
+:attr:`PhysicsModel.params` reports the cell Péclet numbers and effective
+lengths (:func:`operators.grid_resolution`) and the fit warns
+(``physics.grid_peclet``) when it lands there.  Models pickled before the
+scheme existed were fitted with ``"central"`` (D = L²) and keep it when
+unpickled.
 
 Source (normalised sensible heat, per point, from the configured roles)
 ----------------------------------------------------------------------
@@ -186,7 +191,7 @@ class _SpectralSolver:
         import torch
 
         lam_x, lam_y, sx, sy = ops.symbols_axes(self.py, self.px, self.dx, self.dx)
-        if getattr(self, "scheme", "central") == "central":
+        if getattr(self, "scheme", ops.LEGACY_SCHEME) == "central":
             self.lam = torch.as_tensor(lam_x + lam_y, dtype=torch.float64)
         else:
             self.lam_x = torch.as_tensor(lam_x, dtype=torch.float64)
@@ -196,12 +201,12 @@ class _SpectralSolver:
 
     def __setstate__(self, state: dict) -> None:
         self.__dict__.update(state)
-        self.__dict__.setdefault("scheme", "central")       # pre-scheme pickles were fitted with central
+        self.__dict__.setdefault("scheme", ops.LEGACY_SCHEME)       # pre-scheme pickles were fitted with central
 
     def __call__(self, q, L, vx, vy):
         import torch
 
-        central = getattr(self, "scheme", "central") == "central"
+        central = getattr(self, "scheme", ops.LEGACY_SCHEME) == "central"
         if any(getattr(self, n, None) is None for n in (("lam",) if central else ("lam_x", "lam_y")) + ("sx", "sy")):
             self._build_symbols()
         p, ny, nx = self.pad, self.ny, self.nx
@@ -299,6 +304,34 @@ def _uL_from_L(L: float, lo: float, hi: float) -> float:
     return _logit(f)
 
 
+def grid_resolution_report(L: float, vx: float, vy: float, dx: float, scheme: str) -> tuple[dict, str | None]:
+    """:func:`operators.grid_resolution` at a fitted (L, v) on a square grid,
+    plus a warning text when a cell Péclet number exceeds 1 (None otherwise).
+
+    Past that point the data cannot tell L apart below
+    ``L_min_resolved_m``: the fitted scheme's diffusion along that axis is
+    ≈ |v_axis|·dx/2 whatever L is (on both axes for an oblique wind, so L is
+    then not identified at all), and the central scheme's G has negative
+    lobes.  A finer grid (dx ≤ 2L²/|v_axis|) is the remedy, not the scheme.
+    """
+    info = ops.grid_resolution(L, (vx, vy), dx, dx, scheme)
+    if info["L_resolved"]:
+        return info, None
+    pe_x, pe_y = info["cell_peclet_x"], info["cell_peclet_y"]
+    if scheme == "central":
+        what = "the central scheme's Green's function has negative lobes here"
+    elif min(pe_x, pe_y) > 1.0:
+        what = (f"the grid, not L, sets the diffusion on both axes (√D_x = {info['L_eff_x_m']:.0f} m, "
+                f"√D_y = {info['L_eff_y_m']:.0f} m), so L is not identified")
+    else:
+        ax, other = ("x", "y") if pe_x > pe_y else ("y", "x")
+        what = (f"the grid, not L, sets the diffusion along {ax} (√D_{ax} = {info[f'L_eff_{ax}_m']:.0f} m), "
+                f"so L rests on the spread along {other} only")
+    msg = (f"cell Péclet number {max(pe_x, pe_y):.2g} > 1 at L = {L:.0f} m, v = ({vx:.0f}, {vy:.0f}) m on the "
+           f"{dx:g} m grid: {what}; this grid resolves L ≥ {info['L_min_resolved_m']:.0f} m at this wind")
+    return info, msg
+
+
 # ---------------------------------------------------------------------------
 # Known-source operator fit (tests / diagnostics)
 # ---------------------------------------------------------------------------
@@ -313,7 +346,10 @@ def fit_operator(q: np.ndarray, y_raster: np.ndarray, mask: np.ndarray, dx: floa
     ``v_penalty``·(|v|/v_max)²), a and b by variable projection; log L is
     bounded to [log dx, log min(L_max, extent/4)].  ``scheme`` is the
     advection discretisation (:data:`operators.SCHEMES`).  Returns L_m, vx_m,
-    vy_m, v_norm_m, a, b, rmse, loss, pad_cells, advection_scheme.
+    vy_m, v_norm_m, a, b, rmse, loss, pad_cells, advection_scheme, the
+    :func:`operators.grid_resolution` keys at the fitted (L, v) and
+    ``resolution_warning`` (None unless a cell Péclet number exceeds 1, where
+    L_m is not resolved by the grid and is logged as such).
     """
     scheme = ops.check_scheme(scheme)
     with _torch_threads(num_threads):
@@ -365,10 +401,13 @@ def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, ma
     with torch.no_grad():
         _, coef, mse = evaluate(P)
         L, vx, vy = unpack(P)
+    res, warning = grid_resolution_report(float(L), float(vx), float(vy), dx, scheme)
+    if warning:
+        log.warning("fit_operator: %s", warning)
     return {
         "L_m": float(L), "vx_m": float(vx), "vy_m": float(vy), "v_norm_m": float(math.hypot(float(vx), float(vy))),
         "a": float(coef[0]), "b": float(coef[1]), "rmse": float(math.sqrt(float(mse))), "loss": float(loss),
-        "pad_cells": int(pad), "advection_scheme": scheme,
+        "pad_cells": int(pad), "advection_scheme": scheme, **res, "resolution_warning": warning,
     }
 
 
@@ -751,6 +790,12 @@ class PhysicsModel:
             self.train_rmse = float(math.sqrt(mse0))
             self.train_r2 = float(1.0 - mse0 / var_y)
         self._fitted = True
+        res, grid_warning = grid_resolution_report(self._T["L"], self._T["vx"], self._T["vy"], self.dx, self._scheme())
+        if grid_warning and self.a > 0:
+            log.warning("physics: %s", grid_warning)
+            progress.warn("physics.grid_peclet", grid_warning, L_m=float(self._T["L"]),
+                          cell_peclet=float(max(res["cell_peclet_x"], res["cell_peclet_y"])),
+                          L_min_resolved_m=float(res["L_min_resolved_m"]), scheme=self._scheme())
         self._store_operator_rasters(frame)
         self.fit_info = {"loss": float(loss), "start_losses": losses, "starts": starts,
                          "n_train": int(tr.size), "seconds": time.perf_counter() - t0, "pad_cells": int(self.pad)}
@@ -765,7 +810,7 @@ class PhysicsModel:
     def _scheme(self) -> str:
         """The advection scheme this model was fitted with.  Models pickled
         before the scheme existed have no attribute and were central."""
-        return getattr(self, "advection_scheme", "central")
+        return getattr(self, "advection_scheme", ops.LEGACY_SCHEME)
 
     def _store_operator_rasters(self, frame: pd.DataFrame) -> None:
         """Rasters needed by :meth:`operator_residual_torch` (fit frame)."""
@@ -862,9 +907,13 @@ class PhysicsModel:
     def params(self) -> dict:
         self._require_fit()
         T = self._T
+        # How well the grid resolves L at the fitted wind (cell Péclet numbers, √D per axis); computed
+        # here rather than stored so models pickled before these keys existed report them too.  The
+        # warning is dropped with the physics term (a = 0), as in fit().
+        res, grid_warning = grid_resolution_report(T["L"], T["vx"], T["vy"], self.dx, self._scheme())
         return {
             "L_m": T["L"], "vx_m": T["vx"], "vy_m": T["vy"], "v_norm_m": float(math.hypot(T["vx"], T["vy"])),
-            "advection_scheme": self._scheme(),
+            "advection_scheme": self._scheme(), **res, "resolution_warning": grid_warning if self.a > 0 else None,
             "a": self.a, "b": self.b, "gamma": self.gamma, "beta_x": self.beta_x, "beta_y": self.beta_y,
             "s": T["s"], "shade_form": self.shade_form, "kappa_canopy": T["kc"],
             "shade_c0": T["c0"], "shade_width": T["cw"], "a1": T["a1"], "a1n": T["a1n"], "e0": T["e0"], "e1": T["e1"], "e2": T["e2"],

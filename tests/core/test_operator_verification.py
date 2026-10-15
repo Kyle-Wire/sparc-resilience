@@ -2,7 +2,9 @@
 (physics plan W1): positivity of the exponentially fitted scheme over the
 fit box, convergence to the analytic K₀ Green's function, manufactured
 solutions, padding truncation, the residual and adjoint identities, the
-downwind shift, the torch twins and the legacy central scheme."""
+downwind shift, the torch twins, the legacy central scheme, and what the
+fitted scheme costs: accuracy at moderate cell Péclet numbers and the
+identifiability of L above Pe = 1 (``grid_resolution``)."""
 
 from __future__ import annotations
 
@@ -59,9 +61,44 @@ def test_fitted_diffusion_bounds_and_limits():
     below, above = float(ops._xcothx(x0 * (1 - 1e-9))), float(ops._xcothx(x0 * (1 + 1e-9)))
     assert abs(above - below) < 1e-12
     assert ops.axis_diffusion(60.0, (300.0, -30.0), 30.0, 20.0, "central") == (3600.0, 3600.0)
+    # each axis is fitted with its own cell side: D_x from dx, D_y from dy
+    assert ops.axis_diffusion(60.0, (300.0, -250.0), 30.0, 20.0, "exponential") == (
+        ops.fitted_diffusion(60.0, 300.0, 30.0), ops.fitted_diffusion(60.0, -250.0, 20.0))
+    assert ops.fitted_diffusion(60.0, -250.0, 20.0) < 0.9 * ops.fitted_diffusion(60.0, -250.0, 30.0)
 
 
-@pytest.mark.parametrize("dx,dy", [(30.0, 30.0), (30.0, 20.0)])
+def test_each_axis_is_fitted_with_its_own_cell_side():
+    """solve, apply_operator and the torch twins against a hand-built operator
+    with D_x = fitted(L, vx, dx) and D_y = fitted(L, vy, dy) at Pe_y ≈ 1 on a
+    dx ≠ dy grid.  (Building D_y from dx instead stays consistent between
+    solve and apply and second order, so only a direct check catches it.)"""
+    torch = pytest.importorskip("torch")
+    rng = np.random.default_rng(12)
+    L, v, dx, dy = 60.0, (120.0, 360.0), 30.0, 20.0          # Pe_x = 0.5 on dx, Pe_y = 1.0 on dy
+    Dx, Dy = ops.fitted_diffusion(L, v[0], dx), ops.fitted_diffusion(L, v[1], dy)
+    q = rng.standard_normal((24, 30))
+    pad = ops.pad_cells(L, math.hypot(*v), dy)
+    py, px = ops._padded_shape(*q.shape, pad)
+    buf = np.zeros((py, px))
+    buf[pad:pad + 24, pad:pad + 30] = q
+    lam_x, lam_y, sx, sy = ops.symbols_axes(py, px, dy, dx)
+    Ghat = 1.0 / (1.0 + Dx * lam_x + Dy * lam_y + 1j * (v[0] * sx + v[1] * sy))
+    want = np.fft.irfft2(np.fft.rfft2(buf) * Ghat, s=(py, px))[pad:pad + 24, pad:pad + 30]
+    got = ops.solve(q, L, v, dx=dx, dy=dy, pad=pad, scheme="exponential")
+    assert np.max(np.abs(got - want)) < 1e-12 * np.max(np.abs(want))
+    t = lambda x: torch.tensor(x, dtype=torch.float64)  # noqa: E731
+    got = ops.solve_torch(torch.tensor(q), t(L), t(v[0]), t(v[1]), dx, dy, pad=pad, scheme="exponential").numpy()
+    assert np.max(np.abs(got - want)) < 1e-12 * np.max(np.abs(want))
+    d2x, d2y = ops.second_differences(q, dx, dy)
+    gx, gy = ops.central_gradient(q, dx, dy)
+    want = (q - Dx * d2x - Dy * d2y + v[0] * gx + v[1] * gy)[1:-1, 1:-1]
+    got = ops.apply_operator(q, L, v, dx=dx, dy=dy, scheme="exponential")[1:-1, 1:-1]
+    assert np.max(np.abs(got - want)) < 1e-12 * np.max(np.abs(want))
+    got = ops.apply_operator_torch(torch.tensor(q), t(L), t(v[0]), t(v[1]), dx, dy, scheme="exponential").numpy()
+    assert np.max(np.abs(got - want)) < 1e-12 * np.max(np.abs(want))
+
+
+@pytest.mark.parametrize("dx,dy", [(30.0, 30.0), (30.0, 20.0), (20.0, 30.0)])
 def test_exponential_green_function_is_non_negative_over_the_fit_box(dx, dy):
     worst = (0.0, None)
     for f in FIT_BOX_L:
@@ -129,10 +166,21 @@ def _mms_error(L, v, s, dx, dy, scheme):
     return float(np.max(np.abs(ops.solve(q, L, v, dx=dx, dy=dy, scheme=scheme) - phi)))
 
 
+def _mms_case(L, v, s, dx, dy):
+    """A parameter set whose id states its per-axis cell Péclet numbers |v_axis|·d/(2L²)."""
+    pe_x, pe_y = abs(v[0]) * dx / (2.0 * L * L), abs(v[1]) * dy / (2.0 * L * L)
+    return pytest.param(L, v, s, dx, dy, id=f"L{L:g}_dx{dx:g}_dy{dy:g}_Pe{pe_x:.2f},{pe_y:.2f}")
+
+
+# Oblique wind with Pe ≈ 0.3–0.5; Pe 1.25 along x; Pe 1.25 along y on the
+# dx ≠ dy grid (so D_y, built from dy, carries the fitted correction).
+MMS_CASES = [_mms_case(90.0, (150.0, -260.0), 330.0, 30.0, 30.0), _mms_case(90.0, (150.0, -260.0), 330.0, 30.0, 20.0),
+             _mms_case(60.0, (300.0, 0.0), 300.0, 30.0, 30.0), _mms_case(60.0, (300.0, 0.0), 300.0, 30.0, 20.0),
+             _mms_case(60.0, (0.0, 450.0), 300.0, 30.0, 20.0)]
+
+
 @pytest.mark.parametrize("scheme", ops.SCHEMES)
-@pytest.mark.parametrize("L,v,s", [(120.0, (200.0, -100.0), 360.0), (60.0, (300.0, 0.0), 300.0)],
-                         ids=["Pe0.4", "Pe1.25"])
-@pytest.mark.parametrize("dx,dy", [(30.0, 30.0), (30.0, 20.0)])
+@pytest.mark.parametrize("L,v,s,dx,dy", MMS_CASES)
 def test_manufactured_solution_converges_at_second_order(L, v, s, dx, dy, scheme):
     coarse = _mms_error(L, v, s, dx, dy, scheme)
     fine = _mms_error(L, v, s, dx / 2.0, dy / 2.0, scheme)
@@ -266,6 +314,67 @@ def test_green_function_centroid_sits_v_downwind(L, v):
 
 
 # ---------------------------------------------------------------------------
+# What the fitted scheme costs: accuracy, and L above a cell Péclet number of 1
+# ---------------------------------------------------------------------------
+
+
+def _mass_l1_error(L, v, dx, scheme):
+    """Mass-weighted L1 error of G/dx² against the oracle beyond two cells of the source."""
+    G, h = _unit_response(L, v, dx, dx, scheme)
+    c = np.arange(-h, h + 1) * dx
+    X, Y = np.meshgrid(c, c)
+    far = np.hypot(X, Y) > 2.0 * dx
+    exact = _green_exact(X[far], Y[far], L, v)
+    return float(np.abs(G[far] / dx**2 - exact).sum() / exact.sum())
+
+
+def test_positivity_is_not_bought_with_accuracy_at_small_peclet_but_is_at_moderate_peclet():
+    """The module docstring's trade-off: at Pe = 0.07 the schemes are equally
+    accurate (mass-weighted), at Pe = 1.25 the central scheme is more accurate."""
+    small = [_mass_l1_error(256.0, (300.0, 0.0), DX, s) for s in ("exponential", "central")]
+    assert small[0] < 3e-3 and small[1] < 3e-3 and abs(small[0] - small[1]) < 2e-4, small
+    moderate = [_mass_l1_error(60.0, (300.0, 0.0), DX, s) for s in ("exponential", "central")]
+    assert moderate[1] < moderate[0] < 0.06, moderate
+
+
+def test_grid_resolution_reports_cell_peclet_and_effective_lengths():
+    r = ops.grid_resolution(30.0, (1000.0, 0.0), DX)                 # the F3 worst case, wind along x
+    assert r["cell_peclet_x"] == pytest.approx(1000.0 * DX / (2.0 * 900.0)) and r["cell_peclet_y"] == 0.0
+    assert r["L_eff_x_m"] == pytest.approx(math.sqrt(ops.fitted_diffusion(30.0, 1000.0, DX)), rel=1e-14)
+    assert r["L_eff_x_m"] == pytest.approx(122.47, abs=0.01) and r["L_eff_y_m"] == 30.0
+    assert r["L_min_resolved_m"] == pytest.approx(math.sqrt(1000.0 * DX / 2.0)) and r["L_resolved"] is False
+    c = ops.grid_resolution(30.0, (1000.0, 0.0), DX, scheme="central")
+    assert (c["L_eff_x_m"], c["L_eff_y_m"]) == (30.0, 30.0) and c["L_resolved"] is False
+    z = ops.grid_resolution(30.0, (0.0, 0.0), DX)
+    assert (z["cell_peclet_x"], z["L_eff_x_m"], z["L_min_resolved_m"], z["L_resolved"]) == (0.0, 30.0, 0.0, True)
+    # per-axis cell sides, and L_min_resolved_m is the Pe = 1 boundary
+    r = ops.grid_resolution(60.0, (300.0, -300.0), 30.0, 20.0)
+    assert r["cell_peclet_x"] == pytest.approx(1.25) and r["cell_peclet_y"] == pytest.approx(300.0 * 20.0 / 7200.0)
+    Lb = r["L_min_resolved_m"]
+    assert ops.grid_resolution(Lb * (1 + 1e-9), (300.0, -300.0), 30.0, 20.0)["L_resolved"] is True
+    assert ops.grid_resolution(Lb * (1 - 1e-9), (300.0, -300.0), 30.0, 20.0)["L_resolved"] is False
+
+
+def test_above_cell_peclet_one_the_grid_not_L_sets_the_fitted_diffusion():
+    """Oblique wind of |v| = 1 km on 30 m cells: both axes have Pe > 1 at
+    L = 30–45 m, and the fitted operator is the same for both L (L is not
+    identified there), while the central one differs (through its negative
+    lobes).  At L ≥ L_min_resolved_m (≈ 103 m here) L matters again."""
+    q = np.random.default_rng(11).standard_normal((40, 40))
+    v = (707.1, 707.1)
+
+    def change(L1, L2, scheme):
+        a, b = (ops.solve(q, L, v, dx=DX, scheme=scheme) for L in (L1, L2))
+        return np.linalg.norm(a - b) / np.linalg.norm(b)
+
+    assert ops.grid_resolution(45.0, v, DX)["L_resolved"] is False
+    assert change(30.0, 45.0, "exponential") < 1e-3
+    assert change(30.0, 45.0, "central") > 0.2
+    assert ops.grid_resolution(150.0, v, DX)["L_resolved"] is True
+    assert change(150.0, 225.0, "exponential") > 0.2
+
+
+# ---------------------------------------------------------------------------
 # h. Legacy central scheme and scheme names
 # ---------------------------------------------------------------------------
 
@@ -326,6 +435,19 @@ def test_central_torch_twins_reproduce_the_legacy_formulas_exactly():
     gx, gy = (q[1:-1, 2:] - q[1:-1, :-2]) / (2.0 * 30.0), (q[2:, 1:-1] - q[:-2, 1:-1]) / (2.0 * 30.0)
     legacy = c - (L**2) * lap + vx * gx + vy * gy
     assert torch.equal(ops.apply_operator_torch(q, L, vx, vy, 30.0, scheme="central"), legacy)
+
+
+def test_params_scheme_falls_back_to_the_legacy_central_scheme():
+    """Callers that re-apply a fitted operator resolve its scheme from the
+    model's params; a dict without the key is a run fitted before the scheme
+    existed (central), never the current default."""
+    assert ops.LEGACY_SCHEME == "central" != ops.DEFAULT_SCHEME
+    for old in ({}, None, {"advection_scheme": None}, {"L_m": 45.0, "vx_m": 400.0, "vy_m": -250.0}):
+        assert ops.params_scheme(old) == "central"
+    assert ops.params_scheme({"advection_scheme": "Exponential"}) == "exponential"
+    assert ops.params_scheme({"advection_scheme": "central"}) == "central"
+    with pytest.raises(ValueError, match="advection scheme"):
+        ops.params_scheme({"advection_scheme": "upwind"})
 
 
 def test_unknown_scheme_is_rejected():

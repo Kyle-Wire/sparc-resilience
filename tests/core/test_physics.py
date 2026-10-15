@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import logging
+import math
 import pickle
 import time
 
@@ -12,7 +14,7 @@ import torch
 
 from sparc.core import operators as ops
 from sparc.core.cv import make_spatial_folds
-from sparc.core.physics import PhysicsModel, _SpectralSolver, fit_operator
+from sparc.core.physics import PhysicsModel, _SpectralSolver, fit_operator, grid_resolution_report
 from sparc.core.synthetic import make_operator_fixture, synthetic_city_config
 
 
@@ -66,6 +68,36 @@ def test_fit_operator_recovers_planted_L_v_a():
     assert v_err <= 0.25 * np.hypot(*t["v"])
     assert res["a"] == pytest.approx(t["a"], rel=0.20)
     assert res["b"] == pytest.approx(t["b"], abs=0.1)
+    # cell Péclet ≈ 0.06: the grid resolves L, and the result says so
+    assert res["L_resolved"] is True and res["resolution_warning"] is None
+    assert max(res["cell_peclet_x"], res["cell_peclet_y"]) < 0.2 and res["L_eff_x_m"] >= res["L_m"]
+
+
+def test_fit_operator_flags_an_L_the_grid_cannot_resolve(caplog):
+    """Planted L = 40 m with an oblique 1 km wind on 30 m cells: both cell
+    Péclet numbers exceed 1, so the fitted scheme's diffusion is
+    ≈ |v_axis|·dx/2 whatever L is.  The noise-free data are fitted exactly,
+    but the L the fit lands on depends on where it starts, and the result
+    says L is not identified instead of passing L_m off as the relaxation length."""
+    fx = make_operator_fixture(n=48, L=40.0, v=(707.0, 707.0), noise=0.0)
+    with caplog.at_level(logging.WARNING, logger="sparc.core.physics"):
+        res = fit_operator(fx["q"], fx["y"], np.ones_like(fx["y"], dtype=bool), 30.0, L_init=30.0, v_max=1000.0,
+                           v_penalty=0.0, max_iter=30)
+    assert res["rmse"] < 1e-3 * np.std(fx["y"])
+    assert res["L_resolved"] is False and min(res["cell_peclet_x"], res["cell_peclet_y"]) > 1.0
+    assert res["L_m"] < res["L_min_resolved_m"] == pytest.approx(math.sqrt(707.0 * 30.0 / 2.0), rel=0.01)
+    assert "not identified" in res["resolution_warning"] and res["resolution_warning"] in caplog.text
+
+
+def test_grid_resolution_report_names_what_the_grid_cannot_resolve():
+    info, msg = grid_resolution_report(256.0, 300.0, 0.0, 30.0, "exponential")      # Providence-like: Pe 0.07
+    assert info["L_resolved"] is True and msg is None
+    info, msg = grid_resolution_report(30.0, 1000.0, 0.0, 30.0, "exponential")      # along x only
+    assert info["L_resolved"] is False and "along x (√D_x = 122 m)" in msg and "spread along y only" in msg
+    _, msg = grid_resolution_report(30.0, 707.1, 707.1, 30.0, "exponential")         # oblique: both axes
+    assert "on both axes" in msg and "L is not identified" in msg and "resolves L ≥ 103 m" in msg
+    _, msg = grid_resolution_report(30.0, 1000.0, 0.0, 30.0, "central")
+    assert "negative lobes" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +114,8 @@ def test_physics_model_generalises_to_held_out_blocks(city_fold, city_model, syn
     L_true = synthetic_city.truth["L"]
     assert L_true / 2 <= p["L_m"] <= 2 * L_true
     assert p["a"] > 0 and p["fit_warning"] is None
+    assert p["L_resolved"] is True and p["resolution_warning"] is None and p["cell_peclet_x"] < 1.0
+    assert p["L_eff_x_m"] >= p["L_m"] and p["L_eff_y_m"] >= p["L_m"]
     for key in ("L_m", "vx_m", "vy_m", "v_norm_m", "a", "b", "gamma", "beta_x", "beta_y",
                 "s", "a1", "e0", "e1", "e2", "e3", "w", "train_rmse"):
         assert isinstance(p[key], float) and np.isfinite(p[key]), key
@@ -147,6 +181,9 @@ def test_pre_scheme_pickle_keeps_the_central_operator(city_model, city_fold):
     assert not hasattr(loaded, "advection_scheme") and loaded._solver.scheme == "central"
     assert np.array_equal(loaded.predict(data.frame, data.coords), ref)
     assert loaded.params["advection_scheme"] == "central"
+    # an old model reports its grid resolution too (here: central with Pe > 1, i.e. negative lobes)
+    assert loaded.params["L_resolved"] is False and "negative lobes" in loaded.params["resolution_warning"]
+    assert "L is not identified" in m_exp.params["resolution_warning"]
     dT, valid = g.rasterize_torch(torch.as_tensor(ref))
     R = loaded.operator_residual_torch(dT, valid)
     assert R.abs().max().item() < 1e-6 * np.abs(loaded.source_raster(data.frame)).max()
@@ -154,6 +191,29 @@ def test_pre_scheme_pickle_keeps_the_central_operator(city_model, city_fold):
     for name in ("lam", "sx", "sy"):
         delattr(loaded._solver, name)
     assert np.array_equal(loaded.predict(data.frame, data.coords), ref)
+
+
+def test_fit_warns_when_the_fitted_L_is_below_what_the_grid_resolves(city_fold, monkeypatch):
+    """The fit emits ``physics.grid_peclet`` (and params carry the text) when
+    the fitted (L, v) has a cell Péclet number above 1.  The synthetic city's
+    fit sits at Pe ≈ 0.04, so the grid report is stubbed to say otherwise."""
+    from sparc.core import progress
+
+    data, train, _ = city_fold
+    unresolved = {"cell_peclet_x": 3.0, "cell_peclet_y": 2.0, "L_eff_x_m": 104.0, "L_eff_y_m": 90.0,
+                  "L_min_resolved_m": 104.0, "L_resolved": False}
+    monkeypatch.setattr(ops, "grid_resolution", lambda *a, **k: dict(unresolved))
+    seen = []
+    monkeypatch.setattr(progress, "warn", lambda code, message, **kw: seen.append((code, message, kw)))
+    cfg = {**synthetic_city_config()["physics"], "fit_advection": False, "max_iter": 5}
+    m = PhysicsModel(data.grid, cfg).fit(data.frame, data.y, train, data.coords)
+    assert m.a > 0
+    hits = [(msg, kw) for code, msg, kw in seen if code == "physics.grid_peclet"]
+    assert len(hits) == 1
+    msg, kw = hits[0]
+    assert "L is not identified" in msg and kw["cell_peclet"] == 3.0 and kw["L_min_resolved_m"] == 104.0
+    assert kw["scheme"] == "exponential"
+    assert m.params["resolution_warning"] == msg and m.params["L_resolved"] is False
 
 
 def test_source_points_centred_and_rasterised_equals_source_raster(city_model, city_fold):

@@ -116,6 +116,7 @@ def test_meta_document(client):
     assert [m["id"] for m in body["modes"]] == ["fast", "coarse", "full"]
     assert "fill_headroom" in body["edit_modes"] and "buffer" in body["selection_kinds"]
     assert any(w["code"] == "qa.coarse" for w in body["warning_codes"])
+    assert {"physics.antiphysical_a", "physics.grid_peclet"} <= {w["code"] for w in body["warning_codes"]}
     assert set(body["run_tab_outputs"]) == set(meta.RUN_TAB_IDS)
 
 

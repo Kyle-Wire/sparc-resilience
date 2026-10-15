@@ -486,7 +486,7 @@ Envelope, present on every line:
   - `cv.block_raised`, `cv.partition_skipped`
   - `checkpoint.mismatch`
   - `influence.few_cells`, `influence.constant_predictor` (emitted by `influence.py`, which is instrumented, §11 item 7)
-  - `physics.missing_roles`, `physics.antiphysical_a`
+  - `physics.missing_roles`, `physics.antiphysical_a`, `physics.grid_peclet` (a cell Péclet number above 1 at the fitted L and wind: the grid, not L, sets the diffusion along that axis)
 - Causal:
   - `causal.hole_scale`, `causal.blp_constant`, `causal.dag_unavailable`
   - `causal.no_confounders`, `causal.controls_missing`, `causal.treatment_missing`
