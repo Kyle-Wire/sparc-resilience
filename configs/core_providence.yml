@@ -20,6 +20,8 @@ core:
     path: ../brown4.csv
     target: AAT_z
     target_units: degF
+    target_kind: product        # CAPA's interpolated area-wide map, not the traverse readings: physics
+                                # verdicts are labelled indicative until W7 fits the raw traverses
     id: OBJECTID
     x: POINT_X
     y: POINT_Y

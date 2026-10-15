@@ -139,7 +139,8 @@ td.r, th.r { text-align: right; font-variant-numeric: tabular-nums; }
 tr.hl td { background: color-mix(in srgb, var(--accent) 8%, transparent); }
 .wbar { display: inline-block; height: 8px; border-radius: 0 3px 3px 0; background: var(--accent); vertical-align: middle; margin-right: 8px; }
 .pill { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 0.78rem; font-weight: 600; background: var(--chip); white-space: nowrap; }
-.pill.good { color: var(--good-ink); } .pill.warn { color: var(--warn-ink); } .pill.crit { color: var(--crit-ink); }
+.pill.good { color: var(--good-ink); } .pill.warn { color: var(--warn-ink); } .pill.crit { color: var(--crit-ink); } .pill.na { color: var(--ink-2); font-weight: 500; }
+.why { font-size: 0.78rem; color: var(--ink-2); margin-top: 3px; white-space: normal; }
 .pill svg { width: 12px; height: 12px; }
 details { font-size: 0.86rem; }
 details summary { cursor: pointer; color: var(--accent-ink); }
@@ -370,7 +371,7 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
   <section class="block" id="validation">
     <header>
       <h2>Methods &amp; validation</h2>
-      <p class="prose">What a reviewer would ask before trusting the numbers: what is in the data, which weather drove the physics, whether the model beats standard tools on the same held-out areas, whether it finds effects for layers that cannot matter, whether it recovers effects planted on this city's own layout, whether its conclusions survive other reasonable analysis choices, how it compares with published cooling rates, and whether a run can be reproduced.</p>
+      <p class="prose">What a reviewer would ask before trusting the numbers: what is in the data, which weather drove the physics, whether the model beats standard tools on the same held-out areas, whether it finds effects for layers that cannot matter, whether it recovers effects planted on this city's own layout, whether its conclusions survive other reasonable analysis choices, how it compares with published cooling rates, which physics mechanisms pass their if–then tests, and whether a run can be reproduced.</p>
     </header>
     <div class="grid2">
       <div class="card"><h3>Data findings</h3><ul class="flags" id="flagList"></ul></div>
@@ -381,6 +382,8 @@ footer { padding-block: 48px 0; color: var(--muted); font-size: 0.8rem; }
     <div class="card" id="simCard" hidden><h3>Simulation check on this city's layout</h3><p class="cap" id="simCap"></p><div class="tablewrap" id="tbl-sim"></div></div>
     <div class="card" id="mvCard" hidden><h3>Multiverse: other reasonable analysis choices</h3><p class="cap" id="mvCap"></p><div class="tablewrap" id="tbl-mv"></div><div class="tablewrap" id="tbl-mv2" style="margin-top:12px"></div></div>
     <div class="card" id="litCard" hidden><h3>Against published cooling rates</h3><p class="cap" id="litCap"></p><div class="tablewrap" id="tbl-lit"></div></div>
+    <div class="card" id="mechCard" hidden><h3>Physics: what holds</h3><p class="cap" id="mechCap"></p><div class="tablewrap" id="tbl-mech"></div><p class="cap" id="mechGates" hidden></p>
+      <h3 style="margin-top:18px">Fitted physics in physical units</h3><p class="cap" id="mechPanelCap"></p><div class="tablewrap" id="tbl-mechpanel"></div><p class="cap" id="mechTimeCap" hidden></p></div>
     <div class="card"><h3>Reproducibility</h3><dl class="kv" id="reproBox" style="grid-template-columns:auto 1fr"></dl><p class="cap" style="margin-top:8px">Re-run and compare with <span class="mono">sparc core reproduce &lt;run dir&gt;</span>; the run directory's <span class="mono">environment.txt</span> pins every package version, and <span class="mono">methods.md</span> / <span class="mono">model_card.md</span> carry this run's numbers.</p></div>
   </section>
 
@@ -1295,6 +1298,43 @@ function validation() {
   rr("Python", (pv.platform || {}).python);
 }
 
+/* ---------- physics: what holds (mechanism register) ---------- */
+const naIcon = () => { const s = sv("svg", { viewBox: "0 0 12 12", "aria-hidden": "true" }); s.append(sv("line", { x1: 3, y1: 6, x2: 9, y2: 6, stroke: "currentColor", "stroke-width": 1.6, "stroke-linecap": "round" })); return s; };
+function mechPill(status, label) {
+  if (status === "supported" || status === "inside") return pill("good", label);
+  if (status === "contradicted" || status === "outside") return pill("crit", label);
+  const p = el("span", { class: "pill na" }); p.append(naIcon(), document.createTextNode(label)); return p;
+}
+const nfmt = (v, d = 1) => (v != null && v < 0 ? "−" + fmt(-v, d) : fmt(v, d));
+const withWhy = (node, why) => { const d = el("div"); d.append(node); if (why) d.append(el("div", { class: "why" }, why)); return d; };
+const MECH_BASIS = { product: "The target is an interpolated area-wide product, not measurements, so every Supported or Contradicted verdict is indicative until the physics is fitted to the raw readings.", simulated: "The target is simulated data with planted truths.", measurements: "The target is measurements." };
+function mechanisms() {
+  const R = DATA.mechanisms; if (!R || !(R.rows || []).length) return;
+  $("mechCard").hidden = false;
+  $("mechCap").textContent = "Each physics term is written as an if–then claim: IF the mechanism holds, THEN a signature must appear that fitting this map did not force. Supported: the signature appears. Contradicted: it is absent or reversed, so the term is read as a statistical term, not physics, and is not used to explain scenarios. Not testable with this data: this run cannot measure the signature, or the estimate is too uncertain to test it (the reason is given); a fitted value counts as Supported against a published range only when its point estimate lies inside the range and its ±2 SE interval (from at least three folds) is no wider than the range itself, and as Contradicted when that interval lies entirely outside the range. Not yet tested: the test belongs to a later step of the physics plan (named). " + (MECH_BASIS[R.target_kind] || "The config does not say whether the target is measurements or an interpolated product (data.target_kind), so the basis of the verdicts is unspecified.");
+  const rows = R.rows.map((r) => {
+    const st = el("div"); st.textContent = r.statistic_text || "—";
+    if (r.interval) st.append(el("div", { class: "why" }, `±2 SE: ${nfmt(r.interval[0], 1)} to ${nfmt(r.interval[1], 1)}` + (r.reference ? `; range ${r.reference.text}` : "")));
+    return [`${r.mechanism}(${r.sig}) ${r.name}`, withWhy(document.createTextNode(r.then), r.context), `${r.test} (${r.workstream})`, withWhy(mechPill(r.status, r.label), [r.reason || r.basis, r.note].filter(Boolean).join("; ")), st];
+  });
+  $("tbl-mech").append(table(["Mechanism", "IF it holds, THEN …", "Test", "Verdict", "Statistic"], rows, () => false));
+  const G = R.gates || {}; if ((G.statements || []).length) { $("mechGates").hidden = false; $("mechGates").textContent = "Gates for scenario text: " + G.statements.join(" "); }
+  const P = R.panel || {}; if (!(P.rows || []).length) return;
+  const ra = P.rows.find((r) => r.key === "r_a");
+  $("mechPanelCap").textContent = (P.n_active ? `Mean ± delete-a-group jackknife SE over the ${P.n_active} fold models with the physics term on (${P.window} window). ` : "") + (ra && ra.derivation ? `${ra.derivation}. ` : "") + `${P.identified_products || ""} Whether each parameter is identified by this map (profile likelihood) and how far its prior moves it (power-scaling) are not yet tested. Priors are shown as information.` + ((P.notes || []).length ? " " + P.notes.join(" ") : "");
+  const dec = (k) => ["L", "v", "w"].includes(k) ? 0 : ["r_a", "gamma"].includes(k) ? 1 : 3;
+  const prow = P.rows.map((r) => {
+    const d = dec(r.key); const val = r.value == null ? "—" : `${fmt(r.value, d)}${r.se != null ? ` ± ${fmt(r.se, d)}` : ""} ${r.unit}`;
+    const ab = r.at_bound; const vwhy = [ab ? `at the ${ab.side} fit bound in ${ab.k} of ${ab.n} folds: not identified` + (ab.every_fold ? " (no SE)" : "") : "", r.prior ? `prior N(${r.prior.mean}, ${r.prior.sd}²)` : ""].filter(Boolean).join("; ");
+    const vcell = withWhy(document.createTextNode(val), vwhy);
+    const status = ab ? "at fit bound" : ({ inside: "inside", outside: "outside", not_comparable: "not comparable" }[r.status] || r.status) + (r.interval_informative === false ? " (imprecise)" : "");
+    return [withWhy(document.createTextNode(r.label), r.status_note), vcell, r.published ? r.published.text : "—", r.published ? r.published.source : "—", mechPill(ab ? "at_bound" : r.interval_informative === false ? "imprecise" : r.status, status)];
+  });
+  $("tbl-mechpanel").append(table(["Quantity", "Value ± SE", "Published range", "Source", "Status"], prow, (i) => i === 1));
+  const ts = P.timescales; if (ts && (ts.rows || []).length) { $("mechTimeCap").hidden = false;
+    $("mechTimeCap").textContent = `Implied time scales (assumptions, not fits): ${ts.assumption} ` + (ts.caveat ? `${ts.caveat}. ` : "") + ts.rows.map((t) => `With h = ${fmt(t.h_m, 0)} m, τ = r_a·h ≈ ${fmt(t.tau_min, 0)} min and ωτ ≈ ${fmt(t.omega_tau, 2)} for the daily cycle (phase lag ≈ ${fmt(t.phase_lag_deg, 0)}°)` + (t.tau_min_range && t.omega_tau_range ? `; ±2 SE: τ ${fmt(t.tau_min_range[0], 0)}–${fmt(t.tau_min_range[1], 0)} min, ωτ ${fmt(t.omega_tau_range[0], 2)}–${fmt(t.omega_tau_range[1], 2)}` : "")).join(". ") + "." + (ts.advection_bound ? ` ${ts.advection_bound.text}.` : "") + (ts.advection_note ? ` ${ts.advection_note}.` : ""); }
+}
+
 /* ---------- caveats & footer ---------- */
 function caveats() {
   const ul = $("caveatList"); const qa = DATA.qa || {}; const items = [];
@@ -1308,6 +1348,7 @@ function caveats() {
   const nu = ((DATA.uncertainty && DATA.uncertainty.scenarios) || []).filter((r) => (r.null_artifact || []).some((a) => a.product === "rf" && !a.distinguishable));
   if (nu.length) { const r0 = nu.find((r) => /\+10\b/.test(r.scenario)) || nu[0]; const a = r0.null_artifact.find((x) => x.product === "rf"), d = r0.null_artifact.find((x) => x.product === "direct");
     items.push(`Canopy effects are not established by this data: when the simulation plants no canopy effect at all and imitates how the temperature product was made (a land-cover model filling unsampled streets), the pipeline still reports ${sfmt(a.delta, 2)} ${U} for "${r0.scenario}", as large as the real estimate (${sfmt(r0.estimate, 2)} ${U}).` + (d ? ` Without that land-cover fill the spurious change is ${sfmt(d.delta, 2)} ${U}, so most of it is written into the target by the product itself.` : "") + " Raw traverse readings, not the gridded product, are needed to settle canopy" + (DATA.identify ? " (see Isolating canopy)." : ".")); }
+  const mg = (DATA.mechanisms && DATA.mechanisms.gates) || {}; if ((mg.statements || []).length) items.push(`Part of the physics fails its if–then test: ${mg.statements.join(" ")} Read that part of the model as statistical, not physical (see Physics: what holds).`);
   const pz = DATA.placebo; if (pz && pz.n_placebos && pz.n_pass_model < pz.n_placebos) items.push(`Placebo layers (canopy and paving moved to the wrong place) still received some modelled effect in ${pz.n_placebos - pz.n_pass_model} of ${pz.n_placebos} tests: a smooth layer can pick up chance large-scale patterns. Compare real effects with that floor, and lean on the causal check, which passed ${pz.n_pass_causal} of ${pz.n_placebos}.`);
   const ext = (DATA.scenarios || []).filter((x) => x.frac_extrapolated > 0.2).map((x) => x.name);
   if (ext.length) items.push(`These scenarios push more than 20% of edited cells beyond observed conditions: ${ext.join(", ")}. Treat them as extrapolation, not predictions.`);
@@ -1321,7 +1362,7 @@ function caveats() {
 }
 
 function init() {
-  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); uncertainty(); heatStress(); climate(); causal(); identify(); budget(); planner(); validation(); caveats();
+  buildLuts(); facts(); kpis(); accuracy(); influence(); curves(); scenarios(); uncertainty(); heatStress(); climate(); causal(); identify(); budget(); planner(); validation(); mechanisms(); caveats();
   let g0 = GROUPS[0]; try { const s = localStorage.getItem("phm-group"); if (s && GROUPS.includes(s)) g0 = s; } catch (e) {}
   setGroup(g0);
 }

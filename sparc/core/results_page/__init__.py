@@ -14,8 +14,9 @@ Nothing here is tied to one city:
 
 * the data and the CV folds are rebuilt with :func:`sparc.core.baselines.load_run` (the checkpoint is never
   unpickled), and the held-out / buffer cells of each fold travel as one u8 mask per fold;
-* ``causal``, ``cv_distance``, ``optimize``, ``influence``, ``baselines``, ``climate`` and ``scenarios`` fall
-  back to their stage files when the manifest lacks them (runs stopped before the manifest was finalised);
+* ``causal``, ``cv_distance``, ``optimize``, ``influence``, ``baselines``, ``climate``, ``scenarios`` and
+  ``mechanisms`` fall back to their stage files when the manifest lacks them (runs stopped before the manifest
+  was finalised); the physics mechanism register is recomputed from ``physics.json`` for runs made before it;
 * the map's layer catalogue (:func:`layer_catalog`) and the variable names come from the config's physics
   roles and actionable levers;
 * the Pareto caption is written from the frontier's numbers (:func:`pareto_caption`).
@@ -431,6 +432,20 @@ def _causal_section(m: dict, run: Path) -> dict | None:
     return _causal_summary(raw) or None
 
 
+def _mechanisms_section(m: dict, run: Path, cfg) -> dict | None:
+    """The manifest's physics mechanism register, else ``mechanisms.json``, else recomputed from the manifest and
+    ``physics.json`` with the page's config (runs made before the register existed)."""
+    for sec in (m.get("mechanisms"), _stage_file(run, "mechanisms.json")):
+        if isinstance(sec, dict) and sec.get("rows"):
+            return sec
+    try:
+        from sparc.core.mechanisms import mechanisms_for_run
+
+        return mechanisms_for_run(run, copy.deepcopy(cfg.raw), write=False)
+    except Exception:                                     # noqa: BLE001 - the page builds without it
+        return None
+
+
 def _identify_section(run: Path) -> dict | None:
     """Canopy identification (``python -m sparc.core.identify``): the lab's verdicts, the map designs on the
     real target and, when a campaign's traverses were analysed, their estimate.  Read from ``identify/``
@@ -642,6 +657,7 @@ def collect(run, cfg, placebo_path=None) -> dict:
         "causal": _causal_section(m, run), "identify": _identify_section(run), "optimize": optimize, "climate": climate,
         "baselines": m.get("baselines") or jl("baselines.json"), "provenance": m.get("provenance"),
         "literature": m.get("literature"), "planner": m.get("planner"), "uncertainty": m.get("uncertainty"),
+        "mechanisms": _mechanisms_section(m, run, cfg),
         "heat": heat_risk, "verdicts": verdicts,
         "simcheck": m.get("simcheck"), "multiverse": m.get("multiverse"), "placebo": placebo, "design": design,
         "sites": sites, "physics_advection": m.get("physics_advection"),

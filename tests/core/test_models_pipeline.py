@@ -430,6 +430,21 @@ def test_providence_fast_run(providence_config_path, brown_csv, tmp_path):
     assert 0.8 <= m["stacker"]["interval_coverage"] <= 0.97
     assert (res.run_dir / "report.md").exists()
     assert (res.run_dir / "predictions.parquet").exists()
+    # mechanism register on the real config: an interpolated product with the campaign day's forcing
+    import re
+
+    reg = json.loads((res.run_dir / "mechanisms.json").read_text())
+    assert reg["target_kind"] == "product" and reg["basis"].startswith("indicative")
+    P = reg["panel"]
+    assert P["forcing_known"] and P["t2m_known"] and P["norm_label"] == "SW↓" and P["afternoon"]
+    for r in P["rows"]:
+        if (r.get("at_bound") or {}).get("every_fold"):         # stopped by a fit bound: never "± 0"
+            assert r["se"] is None and r["interval"] is None, r["key"]
+    texts = [(res.run_dir / f).read_text() for f in ("report.md", "methods.md")]
+    assert not any(re.search(r"L = \d+ ± 0 m", t) for t in texts)
+    ts = P.get("timescales")
+    if ts and not ts["informative"]:
+        assert "not pinned down" in ts["caveat"]
 
 
 def test_emulator_matches_exact_engine_on_patches(synthetic_run):

@@ -7,6 +7,8 @@ Outputs (``run_dir``, by default ``cfg.output.dir``/<run name>/):
   prediction, conformal interval
 * ``influence.json`` — S1 ranges, anisotropy, target ACF
 * ``physics.json`` — per-fold fitted physics parameters
+* ``mechanisms.json`` — the physics mechanism register (if–then verdicts) and the
+  physical-units parameter panel (:mod:`sparc.core.mechanisms`)
 * ``response_<var>.parquet`` + ``response_curves.json`` — S4 maps and curves
 * ``scenarios.json`` (+ ``scenario_deltas.parquet``, ``scenario_detail.npz``) — S5
 * ``cv_distance.json`` — optional skill-vs-distance CV curve
@@ -561,14 +563,23 @@ def _data_identity(cfg: CoreConfig, frame: pd.DataFrame | None) -> str:
     return h.hexdigest()[:16]
 
 
+def _fit_config(raw: dict) -> dict:
+    """The config minus reporting-only keys that never change a fitted state (``data.target_kind`` only labels
+    the mechanism verdicts), so setting them does not invalidate a checkpoint."""
+    from sparc.core.provenance import _str_keys
+
+    out = _str_keys(raw)
+    if isinstance(out.get("data"), dict) and "target_kind" in out["data"]:
+        out = {**out, "data": {k: v for k, v in out["data"].items() if k != "target_kind"}}
+    return out
+
+
 def _fingerprint(cfg: CoreConfig, fast: bool, frame: pd.DataFrame | None, data_id: str | None = None) -> str:
     """Identity of a run for resuming: effective config, input data and the
     core source code (a code change invalidates saved fits; a docs commit
     does not, and neither do edits of ``progress.py`` / ``runio.py``)."""
-    from sparc.core.provenance import _str_keys
-
     h = hashlib.sha256()
-    h.update(json.dumps(_str_keys(cfg.raw), sort_keys=True, default=str).encode())
+    h.update(json.dumps(_fit_config(cfg.raw), sort_keys=True, default=str).encode())
     h.update(str(bool(fast)).encode())
     h.update((data_id or _data_identity(cfg, frame)).encode())
     h.update(_code_digest().encode())
@@ -579,18 +590,17 @@ def fingerprint_sections(cfg: CoreConfig, fast: bool, frame: pd.DataFrame | None
                          coarse: float | None = None, cv_curve: bool | None = None) -> dict[str, str]:
     """Per-section hashes of what a checkpoint depends on (SPEC §11 item 6).
 
-    ``data`` the input identity; ``core`` the data/qa/encodings/predictors/
-    influence/cv (minus ``distance_curve.enabled``) and models/physics/stacker
+    ``data`` the input identity; ``core`` the data (minus the reporting-only
+    ``target_kind``)/qa/encodings/predictors/influence/cv (minus
+    ``distance_curve.enabled``) and models/physics/stacker
     config plus the fast flag; ``s4`` actionable/response/mediators/coupling;
     ``s5`` scenarios; ``climate``; ``s6`` causal; ``s7`` optimize/planner;
     ``code`` the core sources.  Mode overrides are applied first (they are
     idempotent), so a raw project config and the effective config of the run
     give the same sections."""
-    from sparc.core.provenance import _str_keys
-
     c = apply_mode_overrides(copy.deepcopy(cfg), fast=fast, coarse=coarse, cv_curve=cv_curve,
                              frame_given=frame is not None)
-    raw = _str_keys(c.raw)
+    raw = _fit_config(c.raw)
     core = {k: copy.deepcopy(raw.get(k)) for k in _CORE_KEYS}
     cv = dict(core.get("cv") or {})
     dc = dict(cv.get("distance_curve") or {})
@@ -1330,8 +1340,9 @@ class _Run:
         r = self.result
         with self.stage("finish"):
             _finish(r, self.timings, self.fast, folds=getattr(self, "folds", None), extras=self.manifest_extras())
-            for name, role in (("manifest.json", "manifest"), ("environment.txt", "environment"),
-                               ("methods.md", "methods"), ("model_card.md", "model_card"), ("report.md", "report")):
+            for name, role in (("manifest.json", "manifest"), ("mechanisms.json", "mechanisms"),
+                               ("environment.txt", "environment"), ("methods.md", "methods"),
+                               ("model_card.md", "model_card"), ("report.md", "report")):
                 if r.run_dir is not None:
                     self.artifact(r.run_dir / name, role, "finish")
         return r
@@ -1520,6 +1531,7 @@ def _finish(result: CoreResult, timings: dict, fast: bool, folds=None, extras: d
             if not result.baselines and "baselines" in old and "baselines" in post_sections:
                 result.manifest["baselines"] = old["baselines"]
             _write_json(path, result.manifest)
+        _write_json(result.run_dir / "mechanisms.json", result.manifest.get("mechanisms") or {})
         runio.write_text_atomic(result.run_dir / "environment.txt", environment_lock())
         runio.write_text_atomic(result.run_dir / "methods.md", methods_markdown(result.manifest))
         runio.write_text_atomic(result.run_dir / "model_card.md", model_card_markdown(result.manifest))
