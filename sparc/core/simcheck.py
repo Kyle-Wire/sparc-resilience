@@ -175,6 +175,8 @@ class Generator:
             self._q0_mean = float(self._source(self.C0, self.I0).mean())   # uniform edit is not removed
         r = np.zeros(g.shape)
         r[g.iy, g.ix] = self._source(C, imp) - self._q0_mean
+        # default (exponentially fitted) scheme: G ≥ 0; at L = 300 m, |v| = 300 m the cell
+        # Péclet number is dx/600, so it is within O(Pe²) of the central scheme.
         return ops.solve(r, 300.0, self.v, dx=g.dx)[g.iy, g.ix]
 
     def _parts(self, C: np.ndarray, imp: np.ndarray):

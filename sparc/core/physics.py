@@ -5,10 +5,15 @@ The anomaly obeys the steady advection–diffusion–relaxation equation of
 
     (1 − L²∇² + v·∇) φ = q,        ΔT_phys = a·φ + b + γ·elev_c + βx·x_c + βy·y_c
 
-solved spectrally with the *same* discrete operator (5-point Laplacian,
-central-difference advection, Ĝ = 1/(1 + L²λ + i·adv)), so the PDE residual
-used by the stacker (:meth:`PhysicsModel.operator_residual_torch`) is exactly
-zero on this model's own prediction.
+solved spectrally with the *same* discrete operator (3-point second
+differences with exponentially fitted diffusion D_x, D_y, central-difference
+advection, Ĝ = 1/(1 + D_x·λ_x + D_y·λ_y + i·adv); ``physics.advection_scheme``,
+see :mod:`sparc.core.operators`), so the PDE residual used by the stacker
+(:meth:`PhysicsModel.operator_residual_torch`) is exactly zero on this
+model's own prediction.  The fitted diffusion keeps the Green's function
+non-negative at any cell Péclet number |v|·dx/(2L²) the fit box allows; it
+equals L² at v = 0.  Models pickled before the scheme existed were fitted
+with ``"central"`` (D = L²) and keep it when unpickled.
 
 Source (normalised sensible heat, per point, from the configured roles)
 ----------------------------------------------------------------------
@@ -91,6 +96,9 @@ PHYSICS_DEFAULTS: dict[str, Any] = {
     "L_max_m": 2000.0,
     "v_max_m": 1000.0,
     "fit_advection": True,
+    # Wind-term discretisation (operators.SCHEMES): "exponential" keeps G ≥ 0 at large
+    # cell Péclet numbers; "central" is the legacy scheme (negative lobes once Pe > 1).
+    "advection_scheme": "exponential",
     "max_iter": 60,
     "start_iter": 0,             # iterations per multi-start probe (0 → max(8, max_iter // 4))
     # torch intra-op threads during fit/predict (capped, restored afterwards).  The
@@ -158,25 +166,55 @@ def _inv_softplus(y: float) -> float:
 
 class _SpectralSolver:
     """:func:`operators.solve_torch` with the symbols cached for a fixed
-    (shape, dx, pad): identical operator, no per-call symbol rebuild."""
+    (shape, dx, pad, scheme): identical operator, no per-call symbol rebuild.
 
-    def __init__(self, ny: int, nx: int, dx: float, pad: int):
+    The fitted diffusion D_x, D_y is recomputed from (L, vx, vy) on every
+    call, so the solve stays differentiable in all three.  Solvers pickled
+    before the scheme existed hold only ``lam``/``sx``/``sy``; they unpickle
+    as ``"central"`` (the scheme they were fitted with), and any symbol a
+    scheme needs but the state lacks is rebuilt on first use."""
+
+    def __init__(self, ny: int, nx: int, dx: float, pad: int, scheme: str = ops.DEFAULT_SCHEME):
+        self.ny, self.nx, self.dx, self.pad = ny, nx, float(dx), int(pad)
+        self.scheme = ops.check_scheme(scheme)
+        self.py, self.px = ops._padded_shape(ny, nx, self.pad)
+        self._build_symbols()
+
+    def _build_symbols(self) -> None:
+        """Cache the symbols this scheme uses: λ = λ_x + λ_y for "central"
+        (bit-identical to the pre-scheme solver), λ_x and λ_y otherwise."""
         import torch
 
-        self.ny, self.nx, self.dx, self.pad = ny, nx, float(dx), int(pad)
-        self.py, self.px = ops._padded_shape(ny, nx, self.pad)
-        lam, sx, sy = ops.symbols(self.py, self.px, self.dx, self.dx)
-        self.lam = torch.as_tensor(lam, dtype=torch.float64)
+        lam_x, lam_y, sx, sy = ops.symbols_axes(self.py, self.px, self.dx, self.dx)
+        if getattr(self, "scheme", "central") == "central":
+            self.lam = torch.as_tensor(lam_x + lam_y, dtype=torch.float64)
+        else:
+            self.lam_x = torch.as_tensor(lam_x, dtype=torch.float64)
+            self.lam_y = torch.as_tensor(lam_y, dtype=torch.float64)
         self.sx = torch.as_tensor(sx, dtype=torch.float64)
         self.sy = torch.as_tensor(sy, dtype=torch.float64)
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self.__dict__.setdefault("scheme", "central")       # pre-scheme pickles were fitted with central
 
     def __call__(self, q, L, vx, vy):
         import torch
 
+        central = getattr(self, "scheme", "central") == "central"
+        if any(getattr(self, n, None) is None for n in (("lam",) if central else ("lam_x", "lam_y")) + ("sx", "sy")):
+            self._build_symbols()
         p, ny, nx = self.pad, self.ny, self.nx
         buf = q.new_zeros((self.py, self.px))
         buf[p:p + ny, p:p + nx] = q
-        denom = torch.complex(1.0 + (L**2) * self.lam, vx * self.sx + vy * self.sy)
+        if central:
+            re = 1.0 + (L**2) * self.lam
+        else:
+            # float64 for the fitted diffusion whatever the callers pass (as_tensor keeps the graph).
+            L, vx, vy = (torch.as_tensor(x, dtype=torch.float64) for x in (L, vx, vy))
+            re = (1.0 + ops.fitted_diffusion_torch(L, vx, self.dx) * self.lam_x
+                  + ops.fitted_diffusion_torch(L, vy, self.dx) * self.lam_y)
+        denom = torch.complex(re, vx * self.sx + vy * self.sy)
         phi = torch.fft.irfft2(torch.fft.rfft2(buf) / denom, s=(self.py, self.px))
         return phi[p:p + ny, p:p + nx]
 
@@ -268,19 +306,21 @@ def _uL_from_L(L: float, lo: float, hi: float) -> float:
 
 def fit_operator(q: np.ndarray, y_raster: np.ndarray, mask: np.ndarray, dx: float, L_init: float, v_max: float,
                  fit_advection: bool = True, L_max: float = 2000.0, max_iter: int = 60,
-                 v_penalty: float = 1e-2, num_threads: int | None = 1) -> dict:
+                 v_penalty: float = 1e-2, num_threads: int | None = 1, scheme: str = ops.DEFAULT_SCHEME) -> dict:
     """Fit y ≈ a·solve(q; L, v) + b on ``mask`` cells for a *known* source.
 
     L and v are found by L-BFGS (multi-start over v, penalty
     ``v_penalty``·(|v|/v_max)²), a and b by variable projection; log L is
-    bounded to [log dx, log min(L_max, extent/4)].  Returns L_m, vx_m, vy_m,
-    v_norm_m, a, b, rmse, loss, pad_cells.
+    bounded to [log dx, log min(L_max, extent/4)].  ``scheme`` is the
+    advection discretisation (:data:`operators.SCHEMES`).  Returns L_m, vx_m,
+    vy_m, v_norm_m, a, b, rmse, loss, pad_cells, advection_scheme.
     """
+    scheme = ops.check_scheme(scheme)
     with _torch_threads(num_threads):
-        return _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty)
+        return _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty, scheme)
 
 
-def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty) -> dict:
+def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, max_iter, v_penalty, scheme) -> dict:
     import torch
 
     q = np.asarray(q, dtype=np.float64)
@@ -289,7 +329,7 @@ def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, ma
     ny, nx = q.shape
     lo, hi = _L_bounds(dx, L_max, min(ny, nx) * dx)
     pad = ops.pad_cells(math.exp(hi), v_max if fit_advection else 0.0, dx)
-    solver = _SpectralSolver(ny, nx, dx, pad)
+    solver = _SpectralSolver(ny, nx, dx, pad, scheme)
     qt = torch.as_tensor(np.nan_to_num(q), dtype=torch.float64)
     idx = torch.as_tensor(np.flatnonzero(m.ravel()))
     yt = torch.as_tensor(yr.ravel()[m.ravel()], dtype=torch.float64)
@@ -328,7 +368,7 @@ def _fit_operator(q, y_raster, mask, dx, L_init, v_max, fit_advection, L_max, ma
     return {
         "L_m": float(L), "vx_m": float(vx), "vy_m": float(vy), "v_norm_m": float(math.hypot(float(vx), float(vy))),
         "a": float(coef[0]), "b": float(coef[1]), "rmse": float(math.sqrt(float(mse))), "loss": float(loss),
-        "pad_cells": int(pad),
+        "pad_cells": int(pad), "advection_scheme": scheme,
     }
 
 
@@ -365,6 +405,10 @@ class PhysicsModel:
             raise ValueError(f"physics.shade_form must be 'saturating' or 'sigmoid', got {self.shade_form!r}")
         if self.window not in ("day", "night"):
             raise ValueError(f"physics.window must be 'day' or 'night', got {self.window!r}")
+        scheme = str(self.cfg.get("advection_scheme") or ops.DEFAULT_SCHEME).lower()
+        if scheme not in ops.SCHEMES:
+            raise ValueError(f"physics.advection_scheme must be one of {ops.SCHEMES}, got {scheme!r}")
+        self.advection_scheme = scheme
         self.roles = {k: v for k, v in (self.cfg.get("roles") or {}).items() if v and k in _ROLES}
         self.v_max = float(self.cfg["v_max_m"])
         fa = self.cfg.get("fit_advection", "auto")
@@ -604,7 +648,7 @@ class PhysicsModel:
         self._valid_flat_t = torch.as_tensor(self._valid_flat)
         self._valid_flat_f = torch.as_tensor(self._valid_flat.astype(np.float64))
         if self._solver is None:
-            self._solver = _SpectralSolver(g.ny, g.nx, self.dx, self.pad)
+            self._solver = _SpectralSolver(g.ny, g.nx, self.dx, self.pad, self._scheme())
 
     def _linear_columns(self, feats: dict[str, np.ndarray], coords: np.ndarray) -> np.ndarray:
         cols = []
@@ -718,6 +762,11 @@ class PhysicsModel:
         if not self._fitted:
             raise RuntimeError("PhysicsModel is not fitted")
 
+    def _scheme(self) -> str:
+        """The advection scheme this model was fitted with.  Models pickled
+        before the scheme existed have no attribute and were central."""
+        return getattr(self, "advection_scheme", "central")
+
     def _store_operator_rasters(self, frame: pd.DataFrame) -> None:
         """Rasters needed by :meth:`operator_residual_torch` (fit frame)."""
         g = self.grid
@@ -802,7 +851,8 @@ class PhysicsModel:
         base = (self.b + self.gamma * self._elev_c_raster + self.beta_x * self._xc_raster
                 + self.beta_y * self._yc_raster)
         field = dT_raster - torch.as_tensor(base, dtype=dt, device=dev)
-        Lop = ops.apply_operator_torch(field, self._T["L"], self._T["vx"], self._T["vy"], self.dx)
+        Lop = ops.apply_operator_torch(field, self._T["L"], self._T["vx"], self._T["vy"], self.dx,
+                                       scheme=self._scheme())
         R = Lop - self.a * torch.as_tensor(q[1:-1, 1:-1], dtype=dt, device=dev)
         a = self.a if abs(self.a) > 1e-12 else math.copysign(1e-12, self.a or 1.0)
         return R[torch.as_tensor(sv, device=dev)] / a
@@ -814,6 +864,7 @@ class PhysicsModel:
         T = self._T
         return {
             "L_m": T["L"], "vx_m": T["vx"], "vy_m": T["vy"], "v_norm_m": float(math.hypot(T["vx"], T["vy"])),
+            "advection_scheme": self._scheme(),
             "a": self.a, "b": self.b, "gamma": self.gamma, "beta_x": self.beta_x, "beta_y": self.beta_y,
             "s": T["s"], "shade_form": self.shade_form, "kappa_canopy": T["kc"],
             "shade_c0": T["c0"], "shade_width": T["cw"], "a1": T["a1"], "a1n": T["a1n"], "e0": T["e0"], "e1": T["e1"], "e2": T["e2"],

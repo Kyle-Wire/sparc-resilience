@@ -16,6 +16,12 @@ These drive the core unit tests: every stage must recover what was planted.
   the committed Studio fixture and the event-invariant tests.
 
 Target units are "°F-like" (arbitrary but realistic magnitudes).
+
+Physics truths are planted (and their exact footprints computed) with the
+default advection scheme of :mod:`sparc.core.operators` (exponentially
+fitted), the one the physics model fits by default.  At the planted cell
+Péclet numbers (|v|·dx/2L² ≤ 0.06) it differs from the central scheme by
+< 0.2 % in the diffusion coefficient.
 """
 
 from __future__ import annotations

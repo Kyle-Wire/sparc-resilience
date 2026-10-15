@@ -65,6 +65,7 @@ DEFAULTS: dict[str, Any] = {
         "v_max_m": 1000.0,
         "fit_advection": "auto",    # True only when a wind record is configured
         "select_advection": True,   # keep advection only if it beats v = 0 out of fold
+        "advection_scheme": "exponential",  # "exponential" (G ≥ 0 at any cell Péclet number) | "central" (legacy)
         "max_iter": 60,
     },
     "influence": {"max_lag_m": 2000.0, "n_rings": 10, "n_perm": 19, "scales": [0.5, 1.0, 2.0], "mass": 0.9},
@@ -227,6 +228,12 @@ class CoreConfig:
             for p in spec.get("parents", []):
                 if p not in self.predictors:
                     raise ValueError(f"mediator parent {p!r} is not a predictor")
+        scheme = (self.raw.get("physics") or {}).get("advection_scheme")
+        if scheme is not None:
+            from sparc.core.operators import SCHEMES
+
+            if str(scheme).lower() not in SCHEMES:
+                raise ValueError(f"core config: physics.advection_scheme must be one of {SCHEMES}, got {scheme!r}")
 
 
 def core_config_from_dict(raw: dict, base_dir: str | Path | None = None) -> CoreConfig:

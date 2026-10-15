@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import pickle
 import time
 
 import numpy as np
@@ -38,14 +40,21 @@ def city_model(city_fold):
 # ---------------------------------------------------------------------------
 
 
-def test_cached_solver_is_operators_solve_torch():
+@pytest.mark.parametrize("scheme", ops.SCHEMES)
+def test_cached_solver_is_operators_solve_torch(scheme):
     rng = np.random.default_rng(0)
     q = torch.as_tensor(rng.standard_normal((30, 26)))
     pad = ops.pad_cells(200.0, 150.0, 30.0)
-    solver = _SpectralSolver(30, 26, 30.0, pad)
+    solver = _SpectralSolver(30, 26, 30.0, pad, scheme)
     L, vx, vy = torch.tensor(120.0, dtype=torch.float64), torch.tensor(40.0, dtype=torch.float64), torch.tensor(-25.0, dtype=torch.float64)
-    ref = ops.solve_torch(q, L, vx, vy, 30.0, pad=pad)
+    ref = ops.solve_torch(q, L, vx, vy, 30.0, pad=pad, scheme=scheme)
     assert torch.max(torch.abs(solver(q, L, vx, vy) - ref)) < 1e-12
+    # strong wind, short L: the schemes differ, and the solver follows its own
+    L, vx = torch.tensor(30.0, dtype=torch.float64), torch.tensor(600.0, dtype=torch.float64)
+    ref = ops.solve_torch(q, L, vx, vy, 30.0, pad=pad, scheme=scheme)
+    assert torch.max(torch.abs(solver(q, L, vx, vy) - ref)) < 1e-12
+    other = ops.solve_torch(q, L, vx, vy, 30.0, pad=pad, scheme=next(s for s in ops.SCHEMES if s != scheme))
+    assert torch.max(torch.abs(other - ref)) > 1e-3 * torch.max(torch.abs(ref))
 
 
 def test_fit_operator_recovers_planted_L_v_a():
@@ -92,6 +101,59 @@ def test_operator_residual_vanishes_on_own_prediction(city_model, city_fold):
     dT = dT.clone().requires_grad_(True)
     city_model.operator_residual_torch(dT, valid).pow(2).sum().backward()
     assert dT.grad is not None and torch.isfinite(dT.grad).all()
+
+
+def test_advection_scheme_is_configured_validated_and_reported(city_model, city_fold):
+    from sparc.core.config import DEFAULTS, core_config_from_dict
+
+    data, _, _ = city_fold
+    assert city_model.advection_scheme == ops.DEFAULT_SCHEME == "exponential"
+    assert city_model.params["advection_scheme"] == "exponential"
+    assert DEFAULTS["physics"]["advection_scheme"] == ops.DEFAULT_SCHEME
+    assert PhysicsModel(data.grid, {"advection_scheme": "Central"}).advection_scheme == "central"
+    with pytest.raises(ValueError, match="advection_scheme"):
+        PhysicsModel(data.grid, {"advection_scheme": "upwind"})
+    raw = synthetic_city_config()
+    raw["physics"]["advection_scheme"] = "upwind"
+    with pytest.raises(ValueError, match="advection_scheme"):
+        core_config_from_dict(raw)
+
+
+def test_pre_scheme_pickle_keeps_the_central_operator(city_model, city_fold):
+    """Checkpoints written before ``advection_scheme`` existed hold a model
+    without the attribute and a solver with only lam/sx/sy.  They were fitted
+    with central differences, so they must predict exactly as the central
+    scheme does, and their PDE residual must use the same operator."""
+    data, _, _ = city_fold
+    g = data.grid
+    m = copy.deepcopy(city_model)
+    m._T.update(L=45.0, vx=400.0, vy=-250.0)          # cell Péclet > 1: the schemes differ visibly
+    m.advection_scheme = "central"
+    m._solver = _SpectralSolver(g.ny, g.nx, m.dx, m.pad, "central")
+    ref = m.predict(data.frame, data.coords)
+    m_exp = copy.deepcopy(m)
+    m_exp.advection_scheme = "exponential"
+    m_exp._solver = _SpectralSolver(g.ny, g.nx, m.dx, m.pad, "exponential")
+    assert np.max(np.abs(m_exp.predict(data.frame, data.coords) - ref)) > 1e-3 * np.std(ref)
+
+    old = copy.deepcopy(m)
+    del old.advection_scheme
+    old.cfg.pop("advection_scheme", None)
+    old_solver = _SpectralSolver.__new__(_SpectralSolver)
+    old_solver.__dict__.update({k: m._solver.__dict__[k]
+                                for k in ("ny", "nx", "dx", "pad", "py", "px", "lam", "sx", "sy")})
+    old._solver = old_solver
+    loaded = pickle.loads(pickle.dumps(old))
+    assert not hasattr(loaded, "advection_scheme") and loaded._solver.scheme == "central"
+    assert np.array_equal(loaded.predict(data.frame, data.coords), ref)
+    assert loaded.params["advection_scheme"] == "central"
+    dT, valid = g.rasterize_torch(torch.as_tensor(ref))
+    R = loaded.operator_residual_torch(dT, valid)
+    assert R.abs().max().item() < 1e-6 * np.abs(loaded.source_raster(data.frame)).max()
+    # a solver that lost its cached symbols rebuilds them for its scheme
+    for name in ("lam", "sx", "sy"):
+        delattr(loaded._solver, name)
+    assert np.array_equal(loaded.predict(data.frame, data.coords), ref)
 
 
 def test_source_points_centred_and_rasterised_equals_source_raster(city_model, city_fold):

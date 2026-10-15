@@ -149,6 +149,10 @@ class PhysicsSection(_Section):
     fit_advection: bool | Literal["auto"] = F("auto", "physics", "Fit advection (auto: when a wind is set)",
                                               advanced=True)
     select_advection: bool = F(True, "physics", "Keep advection only if it beats v = 0 out of fold", advanced=True)
+    advection_scheme: Literal["exponential", "central"] = F(
+        "exponential", "physics", "Wind-term discretisation: exponential fitting keeps the heat kernel non-negative "
+        "at strong wind and short mixing length", advanced=True,
+        enum_labels={"exponential": "exponentially fitted", "central": "central (legacy)"})
     max_iter: int = F(60, "physics", "L-BFGS iterations", advanced=True)
     # extras core reads but DEFAULTS leaves out (sparc.core.physics.PHYSICS_DEFAULTS)
     albedo_map: dict[str, Any] | None = F(None, "physics", "Linear rescale of a non-broadband albedo layer, "
