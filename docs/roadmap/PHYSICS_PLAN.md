@@ -1,6 +1,6 @@
 # SPARC Physics: Plan
 
-**Status:** in progress: W0, W1 and the W3 parameter panel started 2026-10-15 · **Date:** 2026-10-15 · **Scope:** the physics base model in `sparc/core/` (`physics.py`, `operators.py`) and the checks that decide how far to trust it · **Builds on:** [`CORE_ROADMAP.md`](CORE_ROADMAP.md) §2.1 and Appendices C–G
+**Status:** in progress: W0, W1 and the W3 parameter panel done 2026-10-15 (§9); W3 profile likelihood and prior sensitivity are next · **Date:** 2026-10-15 · **Scope:** the physics base model in `sparc/core/` (`physics.py`, `operators.py`) and the checks that decide how far to trust it · **Builds on:** [`CORE_ROADMAP.md`](CORE_ROADMAP.md) §2.1 and Appendices C–G
 
 > Supersedes [`prd-wave-phase-physics.md`](../prd/prd-wave-phase-physics.md) and its task list, retired 2026-10-15 before any of its tasks were started; see §2.3.
 
@@ -27,7 +27,7 @@
 - **This review found four problems** (§3):
   1. The physics is fitted to CAPA's interpolated map, not to measurements, so L and the canopy shading may partly describe the interpolation rather than the air.
   2. The heat source is set to "average" everywhere outside the labelled cells, including the rivers on the city's east and south edges. Meanwhile, an indicative regression gives an elevation effect 2.7× the dry-adiabatic lapse rate.
-  3. The central-difference wind term produces negative Green's-function lobes, down to −81% of the peak, at short L and strong wind. A standard scheme (exponential fitting) removes them.
+  3. The central-difference wind term produces negative Green's-function lobes, down to −81% of the peak, at short L and strong wind. A standard positive scheme removes them; SPARC now uses Patankar's hybrid scheme (W1, done).
   4. Fitted parameters are never converted into physical quantities. Once converted, they can be checked against the literature. The fitted gain implies an aerodynamic resistance of about 46 s/m, inside the roughly 20–100 s/m reported for urban surfaces. That is first evidence the term behaves physically, but it was fitted to the product.
 - **Sequence:**
   1. numerical verification and the mechanism register (cheap, and they change what can be claimed today);
@@ -109,7 +109,7 @@
 |---|---|---|---|---|
 | **F1** | **The physics may be fitted to the product, not the air** | `AAT_z` is CAPA's area-wide map. Traverse readings are extended to every cell by a machine-learning model on satellite predictors averaged over buffers of 50 m and up (Shandas et al. 2019). SPARC's emulation of it, a random forest, writes two thirds of the canopy artefact in the null simulation (Appendix D). | L, the shading strength s and the shade scale κ may describe the product's buffer radii. Every physics test run on the map partly tests CAPA's model. | W7 |
 | **F2** | **The heat source stops at the labelled cells** | The grid is 331 × 285 and 58% filled. Of the empty cells, 96% lie *outside* the study outline; holes enclosed by data in all four directions are 1.7% of the grid. The Seekonk River (east) and the Providence River / upper bay (south) sit at that edge. Outside the labelled cells the centred q is 0, i.e. average heating. The campaign wind was from the south. | The bay's cooling, carried inland by a south wind, can only be absorbed by the elevation, water-distance and linear-trend terms. Indicative check: an OLS of temperature on the six predictors plus x and y gives an elevation slope of **−26 K/km**. The physical range is −6.5 (standard atmosphere) to −9.8 K/km (dry adiabatic). | W2 |
-| **F3** | **The wind term can make heating cool its neighbours** | Central differences for v·∇ give negative Green's-function lobes once the cell Péclet number \|v\|·dx/(2L²) exceeds about 1 (table below). This is the textbook failure of central differencing for convection–diffusion (Patankar 1980). Exponential fitting (Il'in 1969) removes the lobes and keeps the downwind shift. | No effect on Providence today (L = 256 m, advection dropped, Pe ≤ 0.23). But the fit box allows L down to 30 m with \|v\| up to 1 km, and the AQ plan needs sharp sources with wind. | W1 |
+| **F3** | **The wind term can make heating cool its neighbours** | Central differences for v·∇ give negative Green's-function lobes once the cell Péclet number \|v\|·dx/(2L²) exceeds about 1 (table below). This is the textbook failure of central differencing for convection–diffusion (Patankar 1980). A positive scheme (exponential fitting, Il'in 1969; or Patankar's hybrid scheme) removes the lobes and keeps the downwind shift. | No effect on Providence today (L = 256 m, advection dropped, Pe ≤ 0.23). But the fit box allows L down to 30 m with \|v\| up to 1 km, and the AQ plan needs sharp sources with wind. | W1 |
 | **F4** | **Parameters are not in physical units** | In the local limit ΔT = a·Q_H/SW↓, while bulk transfer gives ΔT = r_a·Q_H/(ρc_p). So **r_a = a·ρc_p/SW↓**. With a = 45 ± 5 °F, ρc_p ≈ 1170 J m⁻³ K⁻¹ and SW↓ = 636 W m⁻², r_a ≈ 41–51 s/m. Published values are about 20–100 s/m: Masson's (2000) canyon formula gives ≈ 100 s/m in calm air and ≈ 36 s/m at 5 m/s, and Crawford et al. (2018) measured ≈ 40 s/m in central London. Similarly L² = Kτ and r_a = τ/h. | The one number checkable today is in range. But a single afternoon map pins only two combinations (r_a and L), not τ, h and K separately; advection (v = u_c·τ) or a time lag (ωτ) would pin τ. The non-broadband albedo (F5) also biases r_a. Without units, nobody can tell whether a fit is physics or a smoother. | W3 |
 | **F5** | **The radiation term is approximate** | The albedo layer averages 0.40, against 0.155 for Sentinel-2 broadband. `albedo_map` rescales it linearly to an assumed range. There is no longwave trapping (sky view factor) and no anthropogenic heat. | Absorbed sunlight sets the scale of q, and with it a and r_a. Night and canyon effects are missing. | W8 |
 | **F6** | **Identifiability is not reported per parameter** | Uncertainty is fold spread only. The canopy shading term once followed its prior (Appendix D). | A parameter the data cannot pin down should not carry a mechanism claim. | W3 |
@@ -117,17 +117,17 @@
 | **F8** | **Advection is judged by RMSE alone** | ΔRMSE +0.003 ± 0.017 °F out of fold | An RMSE test cannot tell "no advection" from "advection the product cannot show". The product's predictors are isotropic buffers, so the map is wind-blind by construction. | W4, W7 |
 | **F9** | **Mechanism claims are not written down** | — | Nothing says what each term predicts beyond fitting the afternoon map, so nothing can contradict it. | W0 |
 
-**F3 in numbers.** Normalised minimum of the Green's function for a unit source (dx = 30 m), from `operators.solve` and a one-line exponentially fitted variant:
+**F3 in numbers.** Normalised minimum of the Green's function for a unit source (dx = 30 m), from `operators.solve` with each scheme (final W1 code; values below 10⁻¹⁶ in size are round-off):
 
-| L (m) | \|v\| (m) | Cell Péclet | min G / max G, central (today) | min G / max G, exponentially fitted |
-|---|---|---|---|---|
-| 30 | 100 | 1.7 | −0.14 | 0.00 |
-| 30 | 1000 | 16.7 | −0.81 | 0.00 |
-| 60 | 300 | 1.25 | −0.07 | 0.00 |
-| 120 | 1000 | 1.04 | −0.01 | 0.00 |
-| 256 | 1000 | 0.23 | 0.00 | 0.00 |
+| L (m) | \|v\| (m) | Cell Péclet | min G / max G, central (before W1) | hybrid (default since W1) | exponentially fitted |
+|---|---|---|---|---|---|
+| 30 | 100 | 1.7 | −0.14 | 0.00 | 0.00 |
+| 30 | 1000 | 16.7 | −0.81 | 0.00 | 0.00 |
+| 60 | 300 | 1.25 | −0.07 | 0.00 | 0.00 |
+| 120 | 1000 | 1.04 | −0.01 | 0.00 | 0.00 |
+| 256 | 1000 | 0.23 | 0.00 | 0.00 | 0.00 |
 
-In both schemes the downwind centroid of G stays at about \|v\|/dx cells.
+In every scheme the downwind centroid of G stays at \|v\|/dx cells.
 
 **What the model already does well** (keep all of it):
 - the sign constraint on a, and the honest fallback when the fit is anti-physical;
@@ -151,8 +151,16 @@ surface features X ──(local energy balance)──▶ source q(X) ──(tran
 **The rule.** Each mechanism is written as *IF the mechanism holds, THEN a signature must appear that the fit itself did not force*. The test of that signature gives a verdict:
 
 - **Supported** — the signature appears;
-- **Not testable with this data** — the signature cannot be measured from what is available;
-- **Contradicted** — the signature is absent, or reversed.
+- **Not testable with this data** — the signature cannot be measured from what is available, or the test is inconclusive;
+- **Contradicted** — the signature is absent, or reversed;
+- **Not yet tested** — the test belongs to a workstream that has not been built yet (named in the row).
+
+**Range tests** (M6a, M7a; as built in W0 after review). A parameter is compared with a published range through its fold mean ± 2 jackknife SE:
+- **Supported** needs the point estimate inside the range, the interval overlapping it, and the interval no wider than the range itself (a wider interval cannot tell inside from outside; r_a's must also stay above zero).
+- **Contradicted** needs the whole interval outside the range.
+- Anything else is **Not testable** ("inconclusive"), as is a run with fewer than K − 1 folds with the physics active or fewer than three fold values.
+- The ranges hold for the well-mixed afternoon, so they are applied only to a day window whose campaign hours fall within 12–18 h local time. That window is an operational choice, not a published threshold. r_a also needs the campaign's own SW↓ (a forcing file); a night window gets no r_a verdict.
+- A fold value stopped by a fit bound, or an L the grid cannot resolve (cell Péclet number above 1, W1), is flagged as not identified rather than reported as precise.
 
 A Contradicted mechanism is switched off, or reported as a statistical term rather than physics. This is the same logic as the effect verdicts (Robust / Direction only / Not established), applied to mechanisms. It follows the standard view that a model of an open natural system can be confirmed or refuted by tests, not verified (Oreskes, Shrader-Frechette & Belitz 1994).
 
@@ -182,16 +190,18 @@ A Contradicted mechanism is switched off, or reported as a statistical term rath
 
 Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks. Every workstream ships with tests, and keeps the golden synthetic numbers unless it is meant to change them.
 
-### W0 Mechanism register (S): do this first
-- Write §4's table into `mechanisms.py`, with every test initially "Not testable".
-- The other workstreams fill in the tests.
-- **Exit:** `mechanisms.json` is in every run, and the results page shows it.
+### W0 Mechanism register (S): **done 2026-10-15**
+- §4's table is in `sparc/core/mechanisms.py`. Rows whose workstream is not built yet read "Not yet tested", and the other workstreams fill in the tests.
+- **Exit met:** `mechanisms.json` and `manifest["mechanisms"]` are written by every run. They also appear in `methods.md`, `model_card.md` and a "Physics: what holds" card on the results page. `sparc core mechanisms -r RUN_DIR` recomputes the register for an existing run.
+- Studio lists `mechanisms.json` among a run's files, but has no dedicated view yet: that needs a `studio-web` change.
 
-### W1 Numerical verification (S)
-1. **Exponential fitting for the wind term.**
-   - In `operators.symbols`, `apply_operator` and `apply_operator_torch`, replace L² on each axis by L²·Pe·coth(Pe), with Pe = v_axis·dx/(2L²). This is the exponentially fitted scheme (Il'in 1969; Patankar 1980's exponential scheme).
-   - It stays an exact discrete inverse, so the stacker's residual identity is kept.
-   - It reduces to the current central scheme as Pe → 0, so Providence's numbers should not move.
+### W1 Numerical verification (S): **done 2026-10-15**
+1. **A positive scheme for the wind term.** `physics.advection_scheme` selects it:
+   - **`hybrid`** (default): Patankar's (1980) hybrid scheme, D_axis = max(L², \|v_axis\|·d/2). It is central differences wherever the cell Péclet number is ≤ 1, and first-order upwinding along an axis beyond that, the least diffusion a 3-point stencil can have and stay positive.
+   - **`exponential`**: exponential fitting (Il'in 1969), D_axis = L²·Pe·coth(Pe). It is positive too, but it adds diffusion at every wind speed. A fit pins D, not L, so the fitted L runs low: −19% at cell Péclet 0.88 and −4.8% at 0.56 when fitting the continuous operator's solution, where hybrid gives +1.3% and +1.1%. That bias is why the plan's first choice was replaced.
+   - **`central`**: the legacy scheme. Old checkpoints, and run configs without the key, keep it, so they reproduce exactly.
+   - Every scheme is an exact discrete inverse, so the stacker's residual identity is kept. Each is even in v, so the adjoint is still the operator with −v. Hybrid at every Pe ≤ 1 is the central operator bit for bit, so Providence's numbers do not move.
+   - **Grid-limited L.** Past cell Péclet 1 the grid, not L, sets the diffusion along that axis, and L is not identified there under hybrid. No positive 3-point stencil can do better; only finer cells (d ≤ 2L²/\|v_axis\|) can. Each fit reports `operators.grid_resolution` in its params (cell Péclet numbers, effective lengths, L elasticities, `L_resolved`, `resolution_warning`), and the run emits one `physics.grid_peclet` warning. The parameter panel flags such an L as weakly identified or not identified.
 2. **Positivity test:** G ≥ −10⁻¹² for a unit source over a grid of (L, v) covering the whole fit box.
 3. **Analytic oracle.**
    - The continuous Green's function of (1 − L²∇² + v·∇) in 2D is (1/2πL²)·exp(v·r/2L²)·K₀(r·√(1/L² + |v|²/4L⁴)). This is the steady state of the classical continuous point-source solution in uniform flow with first-order decay (Wilson & Miller 1978).
@@ -199,7 +209,7 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
    - Checked during this review: at L = 256 m and v = 300 m, the median error on the 1.5L–2L ring is 0.2% at dx = 30 m and 0.05% at dx = 15 m. That is second-order convergence.
 4. **Method of manufactured solutions** (Roache 2002): pick a smooth φ, apply the continuous operator analytically to get q, and check the solve converges at second order.
 5. **Truncation test:** responses inside the domain change by < 1% when the padding is doubled.
-- **Exit:** all tests in CI. Providence physics R² and S5 scenarios change by < 0.01 °F.
+- **Exit met:** `tests/core/test_operator_verification.py` (67 tests) covers positivity, the oracle, manufactured solutions, truncation, identities, gradients and the scheme fallbacks; all run in CI. Hybrid at every cell Péclet number ≤ 1 is the central operator bit for bit: the synthetic city's physics fit has the same parameters and prediction hash as before W1, and the golden numbers are unchanged. Even the first (exponential) implementation left the Providence 8k window's held-out RMSE and R² identical to four decimals.
 
 ### W2 Source completeness (M)
 - **Build q beyond the labelled cells.**
@@ -217,8 +227,8 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
   - the γ, trend and water-asymmetry results are written to `mechanisms.json`;
   - a lapse-rate prior on γ is added as a multiverse variant, not as the default.
 
-### W3 Physical units, identifiability and priors (S–M)
-- **Parameter panel**, in the style of `literature.py` but for physical parameters:
+### W3 Physical units, identifiability and priors (S–M): **parameter panel done 2026-10-15**; profile likelihood and prior sensitivity next
+- **Parameter panel** (done, in `mechanisms.py`), in the style of `literature.py` but for physical parameters:
   - r_a = a·ρc_p/SW↓;
   - γ in K/km;
   - L;
@@ -320,8 +330,8 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 
 | Step | Workstreams | Why this order |
 |---|---|---|
-| 1 | W0, W1 | Cheap. They fix a latent numerical defect and set up the verdicts everything else reports into. |
-| 2 | W3 | Changes what can be claimed *today* with no new data: units, identifiability, priors. |
+| 1 | W0, W1 (**done**) | Cheap. They fix a latent numerical defect and set up the verdicts everything else reports into. |
+| 2 | W3 (panel **done**; profiles and prior sensitivity next) | Changes what can be claimed *today* with no new data: units, identifiability, priors. |
 | 3 | W2, W8 (albedo part) | The two input-side corrections. Both are likely to move γ, a and r_a. |
 | 4 | W4, then W5 | The spectral tests, then the causal tests that depend on W4's bands and gains. |
 | 5 | W7, then W6, W8 (longwave) | Need the raw traverses. W6 needs W7's observation operator. |
@@ -343,7 +353,7 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 
 | ID | Decision | Recommendation |
 |---|---|---|
-| D1 | Wind-term scheme | Exponential fitting in the operator, with the analytic K₀ Green's function as a test oracle only. This keeps the residual identity and the spectral speed. |
+| D1 | Wind-term scheme | **Decided 2026-10-15:** Patankar's hybrid scheme by default; exponential fitting and central differences selectable. The analytic K₀ Green's function is a test oracle only. Exponential fitting was the first choice, but review showed it biases the fitted L low (W1). |
 | D2 | Lapse-rate prior on γ | Report γ against the lapse rate first. Add the prior only as a multiverse variant. |
 | D3 | Retire the wave-phase PRD | **Decided 2026-10-15:** retired, superseded by this plan |
 | D4 | Require W7 (raw traverses) before any physics parameter is called "physical" | Yes. Until then the panel says "fitted to the product". |
@@ -361,7 +371,7 @@ Every reference was checked against a publisher, DOI or index record for this pl
 - Il'in, A.M. (1969). Differencing scheme for a differential equation with a small parameter affecting the highest derivative. *Math. Notes* 6(2), 596–602.
 - Lindgren, F., Rue, H. & Lindström, J. (2011). An explicit link between Gaussian fields and Gaussian Markov random fields: the SPDE approach. *J. R. Stat. Soc. B* 73(4), 423–498. doi:10.1111/j.1467-9868.2011.00777.x
 - Nastrom, G.D. & Gage, K.S. (1985). A climatology of atmospheric wavenumber spectra of wind and temperature observed by commercial aircraft. *J. Atmos. Sci.* 42(9), 950–960. doi:10.1175/1520-0469(1985)042<0950:ACOAWS>2.0.CO;2
-- Patankar, S.V. (1980). *Numerical Heat Transfer and Fluid Flow*. Hemisphere. (Central differencing fails for convection–diffusion at large cell Péclet numbers; upwind, exponential and power-law schemes.)
+- Patankar, S.V. (1980). *Numerical Heat Transfer and Fluid Flow*. Hemisphere. (Central differencing fails for convection–diffusion at large cell Péclet numbers; upwind, hybrid, exponential and power-law schemes.)
 - Roache, P.J. (2002). Code verification by the method of manufactured solutions. *J. Fluids Eng.* 124(1), 4–10. doi:10.1115/1.1436090
 - Trefethen, L.N. (2000). *Spectral Methods in MATLAB*. SIAM. doi:10.1137/1.9780898719598
 - Whittle, P. (1954). On stationary processes in the plane. *Biometrika* 41(3–4), 434–449. doi:10.1093/biomet/41.3-4.434
