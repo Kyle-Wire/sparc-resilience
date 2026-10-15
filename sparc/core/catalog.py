@@ -118,6 +118,8 @@ OUTPUTS: list[OutputSpec] = [
        ("parquet", "csv", "geojson"), None, "predictions.parquet"),
     _S("physics", ("physics.json",), "Physics parameters per fold", "model", "stage:S2_S3", "accuracy",
        ("json", "csv"), "physics", "physics.json"),
+    _S("mechanisms", ("mechanisms.json",), "Physics mechanisms and parameters in physical units", "trust",
+       "stage:finish", "json", ("json",), "mechanisms", "mechanisms.json", optional=True),
     _S("baselines", ("baselines.json",), "Reference baselines", "trust", "stage:baselines", "distance",
        ("json", "csv"), "baselines", "baselines.json"),
     _S("cv_distance", ("cv_distance.json",), "Skill vs distance", "trust", "stage:cv_curve", "distance",
@@ -449,6 +451,13 @@ DATA_DICTIONARY: dict[str, dict[str, tuple[str, str, str]]] = {
         "L_m": ("m", "", "Relaxation length"),
         "a": ("{target}", "", "Physics amplitude"),
         "s": ("1", "", "Shade efficiency"),
+    },
+    "mechanisms.json": {
+        "status": ("", "", "Mechanism verdict: supported, contradicted, not_testable (this data cannot test it) or "
+                           "not_yet_tested (a later workstream)"),
+        "r_a": ("s/m", "", "Aerodynamic resistance implied by the physics gain, a·ρc_p/SW↓"),
+        "gamma": ("K/km", "", "Elevation coefficient in kelvin per kilometre"),
+        "basis": ("", "", "What the verdicts rest on (an interpolated product makes them indicative)"),
     },
     "baselines.json": {
         "delta_mse": ("{target}²", "positive = stack better", "MSE(baseline) − MSE(stack)"),

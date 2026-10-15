@@ -273,6 +273,7 @@ sparc core placebo     -p <config> --coarse 60                  # shifted / rota
 sparc core simcheck    -p <config> --design physics=20,additive=20,null=20 --out <dir>   # planted effects on the real layout
 sparc core multiverse  -p <config> --out <dir>                  # effect and priority-map stability across analysis choices
 sparc core uncertainty <run dir> --multiverse <dir> --simcheck <dirs>   # estimation / specification / attribution
+sparc core mechanisms  -r <run dir> [-p <config>]               # physics if-then verdicts + parameters in physical units
 python -m sparc.core.identify lab      -p <config>                      # which canopy designs recover a planted effect on this layout
 python -m sparc.core.identify estimate -p <config> --traverses <dir>    # canopy's causal effect from raw heat-watch traverses
 sparc core reproduce   <run dir>                                # re-run from the manifest and compare
@@ -287,7 +288,7 @@ pytest tests/core -m "not slow"
 Each run writes a directory containing:
 - `manifest.json` (with provenance: input/config/code hashes), `report.md`, `methods.md`, `model_card.md`, `environment.txt`
 - `predictions.parquet`, `baselines.json`, `cv_distance.json`
-- `influence.json`, `physics.json`
+- `influence.json`, `physics.json`, `mechanisms.json` (physics mechanism register and parameter panel)
 - `response_<var>.parquet`
 - `scenarios.json`, `scenario_deltas.parquet`, `climate.json`, `causal.json`, `optimize.json`, `allocation.parquet`
 - after the post-run commands: `planner/` (tables, hexagons, GeoTIFFs, GeoPackage), `emulator.npz/.json`, `uncertainty.json/.md`

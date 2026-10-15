@@ -91,6 +91,7 @@ WARNING_CODES: list[dict] = [
     {"code": "influence.constant_predictor", "label": "Constant predictor", "view": "influence"},
     {"code": "physics.missing_roles", "label": "Physics roles missing", "view": "accuracy"},
     {"code": "physics.antiphysical_a", "label": "Anti-physical physics coefficient", "view": "accuracy"},
+    {"code": "physics.mechanisms_failed", "label": "Physics mechanism register not computed", "view": "accuracy"},
     {"code": "causal.hole_scale", "label": "Causal hole scale", "view": "causal"},
     {"code": "causal.blp_constant", "label": "Constant best linear predictor", "view": "causal"},
     {"code": "causal.dag_unavailable", "label": "DAG audit unavailable", "view": "causal"},

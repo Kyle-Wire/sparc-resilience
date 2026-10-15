@@ -455,8 +455,13 @@ def apply_forcing_file(physics: dict, path: Path, label: str | None = None) -> d
     for k in ("window", "sw_down", "lw_net", "wind"):
         if k in blob.get("physics", {}):
             out[k] = blob["physics"][k]
+    era = blob.get("era5") or {}
+    t2m = (era.get("values") or {}).get("t2m")              # K; ρc_p of the r_a conversion (mechanisms.py)
+    if t2m is None and era.get("t2m_C") is not None:
+        t2m = float(era["t2m_C"]) + 273.15
     out["forcing_info"] = {"file": label or Path(path).name, "date": blob.get("date"), "hours_local": blob.get("hours_local"),
                            "tz": blob.get("tz"), "wind_source": blob.get("wind_source"),
                            "station": (blob.get("station") or {}).get("station"),
-                           "checks": blob.get("checks", [])}
+                           "checks": blob.get("checks", []),
+                           "t2m_K": round(float(t2m), 2) if t2m is not None else None}
     return out

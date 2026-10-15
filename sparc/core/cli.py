@@ -4,6 +4,7 @@
     sparc core forcing --project configs/core_providence.yml --date 2020-07-18 --hours 15-16 \
                        --station 72507014765 --out configs/forcing/providence_2020-07-18.json
     sparc core synth --out output/core/synthetic_city.csv [--seed 0]
+    sparc core mechanisms -r RUN_DIR [-p CONFIG]  (physics mechanism register of a finished run)
     sparc core studio [...]                         (SPARC Studio; same as `sparc studio`)
     python -m sparc.core run --project ...          (same, without the legacy CLI)
 
@@ -136,6 +137,14 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
     p_wu = subs.add_parser("writeup", help="re-render report.md, methods.md and model_card.md from a run's manifest")
     p_wu.add_argument("run_dir")
     p_wu.set_defaults(func=cmd_core_writeup)
+
+    p_me = subs.add_parser("mechanisms", help="physics mechanism register (if-then verdicts) and physical-units "
+                                              "panel of a finished run → mechanisms.json + manifest")
+    p_me.add_argument("run_dir", nargs="?", default=None, help="run directory (or --run-dir)")
+    p_me.add_argument("--run-dir", "-r", dest="run_dir_opt", default=None, metavar="RUN_DIR")
+    p_me.add_argument("--project", "-p", default=None,
+                      help="core config to use instead of the run's own (e.g. one that sets data.target_kind)")
+    p_me.set_defaults(func=cmd_core_mechanisms)
 
     p_ly = subs.add_parser("layers", help="open-data layers on the study grid (HRSL people, WorldCover) → parquet")
     p_ly.add_argument("--project", "-p", required=True)
@@ -468,6 +477,26 @@ def cmd_core_writeup(args) -> int:
     (run / "methods.md").write_text(methods_markdown(m), encoding="utf-8")
     (run / "model_card.md").write_text(model_card_markdown(m), encoding="utf-8")
     print(f"wrote {run / 'methods.md'} and {run / 'model_card.md'}")
+    return 0
+
+
+@tracked_command
+def cmd_core_mechanisms(args) -> int:
+    from sparc.core.mechanisms import mechanisms_for_run, mechanisms_markdown
+
+    run = args.run_dir_opt or args.run_dir
+    if not run or not (Path(run) / "manifest.json").is_file():
+        print(f"ERROR: {run} is not a run directory (no manifest.json)", file=sys.stderr)
+        return 2
+    raw = None
+    if args.project:
+        from sparc.core.config import load_core_config
+
+        raw = load_core_config(args.project).raw
+    reg = mechanisms_for_run(run, raw)
+    print(mechanisms_markdown(reg))
+    print(f"\nwrote {Path(run) / 'mechanisms.json'} and the manifest's mechanisms section; "
+          f"`sparc core writeup {run}` re-renders methods.md and model_card.md")
     return 0
 
 

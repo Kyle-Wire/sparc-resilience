@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import platform
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 
 def _git_commit() -> str | None:
@@ -66,6 +69,25 @@ def _causal_summary(causal: dict) -> dict:
     return out
 
 
+def _mechanisms(result, m: dict) -> dict:
+    """The physics mechanism register (:func:`sparc.core.mechanisms.evaluate`) from the fold models' physics
+    parameters.  It is reporting: a failure is a warning and an ``{"error": ...}`` section, never a failed run."""
+    from sparc.core import progress
+
+    try:
+        from sparc.core.mechanisms import evaluate
+
+        ens = result.ensemble
+        params = [st.physics.params for st in ens.stacks] if ens is not None and ens.has_physics else None
+        return evaluate(m, params, result.cfg.raw, units=result.data.target_units)
+    except Exception as exc:                         # noqa: BLE001 - the register must never fail a run
+        msg = f"{type(exc).__name__}: {exc}"
+        log.warning("mechanism register failed: %s", msg)
+        progress.warn("physics.mechanisms_failed", f"physics mechanism register not computed: {msg}",
+                      error=msg[:300])
+        return {"error": msg}
+
+
 def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
     ens = result.ensemble
     inf = result.influence
@@ -116,6 +138,7 @@ def build_manifest(result, timings: dict, fast: bool, folds=None) -> dict:
 
         roles = (result.cfg.raw.get("physics") or {}).get("roles") or {}
         m["literature"] = literature_panel(m, roles.get("canopy"), roles.get("albedo"), result.data.target_units)
+    m["mechanisms"] = _mechanisms(result, m)
     return m
 
 
@@ -216,6 +239,13 @@ def render_report(result) -> str:
         if adv:
             L += [f"**Advection:** {'kept' if adv['kept'] else 'dropped'} — held-out RMSE with − without advection "
                   f"= {_f(adv['delta_rmse_mean'], 4)} ± {_f(adv['delta_rmse_se'], 4)} {u} (kept only if lower by > 1 SE).", ""]
+    if m.get("mechanisms"):
+        from sparc.core.mechanisms import mechanisms_markdown
+
+        L += ["### Physics: what holds (mechanism register)", "",
+              "Each physics term is an if–then claim: IF the mechanism holds, THEN a signature must appear that "
+              "fitting this map did not force. A contradicted term is reported as statistical, not physics.", "",
+              mechanisms_markdown(m["mechanisms"]), ""]
     if m.get("baselines"):
         b = m["baselines"]
         L += ["### Stack vs standard baselines (same folds, paired by CV block)", "",

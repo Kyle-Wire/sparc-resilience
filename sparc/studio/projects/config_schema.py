@@ -85,6 +85,10 @@ class DataSection(_Section):
                                advanced=True, unit="m")
     join: list[DataJoin] = F(group="data", help="Extra tables merged by id", factory=list)
     zone: str | None = F(None, "data", "Neighbourhood / zone code column (reporting only)")
+    target_kind: Literal["product", "measurements", "simulated"] | None = F(
+        None, "data", "What the target is: an interpolated product, measurements or simulated data (labels the "
+                      "physics mechanism verdicts; reporting only)", advanced=True,
+        enum_labels={"product": "interpolated product", "measurements": "measurements", "simulated": "simulated"})
 
 
 class EncodingsSection(_Section):

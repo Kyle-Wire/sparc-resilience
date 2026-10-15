@@ -254,7 +254,8 @@ def synthetic_city_config(out_dir: str = "output/core/synthetic") -> dict:
     return {
         "name": "synthetic_city",
         "data": {"path": None, "target": "T", "x": "x", "y": "y", "coord_unit": "m",
-                 "target_units": "degF", "background": "median"},
+                 "target_units": "degF", "background": "median",
+                 "target_kind": "simulated"},          # planted truths: the mechanism verdicts are not "indicative"
         "predictors": ["canopy", "impervious", "albedo", "ndvi", "elevation", "water_dist"],
         "qa": {"clip": {"canopy": [0, 100], "impervious": [0, 100], "albedo": [0.02, 0.9]}},
         "actionable": {

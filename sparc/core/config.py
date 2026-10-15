@@ -45,6 +45,9 @@ DEFAULTS: dict[str, Any] = {
         "coarse_m": None,          # aggregate to this cell size over the full extent (validation studies)
         "join": [],                # extra tables merged by id: [{path: features.parquet, key: OBJECTID, right_key: id}]
         "zone": None,
+        # What the target is: "product" (an interpolated area-wide map, e.g. CAPA Heat Watch), "measurements"
+        # or "simulated".  Reporting only: physics verdicts on a product are labelled indicative (mechanisms.py).
+        "target_kind": None,
     },
     "predictors": [],
     "encodings": {"categorical": [], "circular_degrees": []},
@@ -218,6 +221,9 @@ class CoreConfig:
             raise ValueError("core config: data.target is required")
         if not self.predictors:
             raise ValueError("core config: predictors must list at least one column")
+        if d.get("target_kind") not in (None, "product", "measurements", "simulated"):
+            raise ValueError(f"core config: data.target_kind must be product, measurements or simulated "
+                             f"(got {d.get('target_kind')!r})")
         for name in self.actionable:
             if name not in self.predictors:
                 raise ValueError(f"actionable variable {name!r} is not a predictor")

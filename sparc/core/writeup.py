@@ -50,6 +50,48 @@ def _forcing(m: dict) -> tuple[str, dict]:
             {})
 
 
+def _sig_ids(rows: list[dict]) -> str:
+    """``M1(a), M4(a–c)``-style list of signature ids, grouped by mechanism."""
+    by: dict[str, list[str]] = {}
+    for r in rows:
+        by.setdefault(r["mechanism"], []).append(r["sig"])
+    out = []
+    for mid, sigs in by.items():
+        out.append(f"{mid}({sigs[0]})" if len(sigs) == 1 else f"{mid}({sigs[0]}–{sigs[-1]})"
+                   if len(sigs) > 2 else f"{mid}({', '.join(sigs)})")
+    return ", ".join(out)
+
+
+def _mechanism_facts(m: dict) -> dict | None:
+    """What holds, what is contradicted and what is untested in the run's mechanism register."""
+    reg = m.get("mechanisms")
+    if not isinstance(reg, dict) or not reg.get("rows"):
+        return None
+    rows = reg["rows"]
+
+    def claim(r):
+        st = f": {r['statistic_text']}" if r.get("statistic_text") else ""
+        rng = f" against {r['reference']['text']}" if r.get("reference") else ""
+        return f"{r['mechanism']}({r['sig']}) {r['name'].lower()}{st}{rng}"
+
+    nyt = [r for r in rows if r["status"] == "not_yet_tested"]
+    return {"basis": reg.get("basis"),
+            "supported": [claim(r) for r in rows if r["status"] == "supported"],
+            "contradicted": [claim(r) for r in rows if r["status"] == "contradicted"],
+            "gates": (reg.get("gates") or {}).get("plain") or (reg.get("gates") or {}).get("statements") or [],
+            "not_testable": _sig_ids([r for r in rows if r["status"] == "not_testable"]),
+            "not_yet_tested": _sig_ids(nyt),
+            "workstreams": sorted({w.strip() for r in nyt for w in str(r["workstream"]).split(",")}),
+            "panel": {r["key"]: r for r in ((reg.get("panel") or {}).get("rows") or [])}}
+
+
+def _panel_value(row: dict | None, nd: int = 1) -> str | None:
+    if not row or row.get("value") is None:
+        return None
+    se = f" ± {_f(row['se'], nd)}" if row.get("se") is not None else ""
+    return f"{_f(row['value'], nd)}{se} {row['unit']}"
+
+
 def methods_markdown(m: dict) -> str:
     cfg = m.get("config") or {}
     qa = m.get("qa") or {}
@@ -100,6 +142,26 @@ def methods_markdown(m: dict) -> str:
         if adv:
             L += ["", f"Advection by the campaign wind was {'kept' if adv['kept'] else 'dropped'} after an out-of-fold "
                       f"test (ΔRMSE with − without = {_f(adv['delta_rmse_mean'], 3)} ± {_f(adv['delta_rmse_se'], 3)} {u})."]
+    mf = _mechanism_facts(m)
+    if mf:
+        pn = mf["panel"]
+        units = [f"{lab} {v}" for lab, v in (("aerodynamic resistance r_a =", _panel_value(pn.get("r_a"))),
+                                             ("elevation coefficient γ =", _panel_value(pn.get("gamma"))),
+                                             ("mixing length L =", _panel_value(pn.get("L"), 0))) if v]
+        L += ["", "## Physics mechanisms", "",
+              "Each physics term is written as an if–then claim (IF the mechanism holds, THEN a signature must "
+              "appear that fitting this map did not force) and tested where this run allows (mechanism register, "
+              "`mechanisms.json`; Oreskes et al. 1994). Fitted parameters are converted to physical units, with the "
+              "delete-a-group jackknife SE over folds"
+              + (": " + "; ".join(units) if units else "") + f". Basis: {mf['basis']}."
+              + (" Supported: " + "; ".join(mf["supported"]) + "." if mf["supported"] else " No mechanism is "
+                 "supported yet.")
+              + (" Contradicted: " + "; ".join(mf["contradicted"]) + ". " + " ".join(mf["gates"])
+                 if mf["contradicted"] else " No mechanism is contradicted.")
+              + (f" Not testable with this data (one time window or a missing input): {mf['not_testable']}."
+                 if mf["not_testable"] else "")
+              + (f" Not yet tested (workstreams {', '.join(mf['workstreams'])} of the physics plan): "
+                 f"{mf['not_yet_tested']}." if mf["not_yet_tested"] else "")]
     if cv:
         L += ["", "## Validation", "",
               f"Spatial-block cross-validation (Roberts et al. 2017): {cv.get('n_blocks')} square blocks of "
@@ -237,6 +299,18 @@ def model_card_markdown(m: dict) -> str:
             f"{r['citation']} {r['quantity']} — SPARC {_f(r['sparc_C'])} °C per +0.10 vs "
             + (f"{r['low_C']:g}" if r['low_C'] == r['high_C'] else f"{r['low_C']:g}–{r['high_C']:g}") + " °C"
             for r in lit["rows"] if r.get("sparc_C") is not None) + "."]
+    mf = _mechanism_facts(m)
+    if mf:
+        L += ["", "## Physics mechanisms", "",
+              f"Each physics term is an if–then claim with a test (`mechanisms.json`). Basis: {mf['basis']}.", ""]
+        L += [f"- What holds: {'; '.join(mf['supported'])}." if mf["supported"] else
+              "- What holds: no mechanism is supported yet."]
+        L += [f"- Contradicted: {'; '.join(mf['contradicted'])}. {' '.join(mf['gates'])}".rstrip()
+              if mf["contradicted"] else "- Contradicted: none."]
+        if mf["not_testable"]:
+            L += [f"- Not testable with this data: {mf['not_testable']} (one time window or a missing input)."]
+        if mf["not_yet_tested"]:
+            L += [f"- Not yet tested: {mf['not_yet_tested']} (workstreams {', '.join(mf['workstreams'])})."]
     L += ["", "## Noise floor", "",
           f"- Target rounding noise ≈ {_f(qa.get('target_rounding_noise_sd'))} {u} "
           f"({_f(100 * (qa.get('target_fraction_integer_valued') or 0), 0)}% whole-degree values)."]
