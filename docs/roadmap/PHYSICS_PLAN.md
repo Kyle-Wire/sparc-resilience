@@ -227,7 +227,7 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
   - the γ, trend and water-asymmetry results are written to `mechanisms.json`;
   - a lapse-rate prior on γ is added as a multiverse variant, not as the default.
 
-### W3 Physical units, identifiability and priors (S–M): **parameter panel done 2026-10-15**; profile likelihood and prior sensitivity next
+### W3 Physical units, identifiability and priors (S–M): **done 2026-10-16** (panel 10-15; profiles, prior sensitivity and conflict 10-16)
 - **Parameter panel** (done, in `mechanisms.py`), in the style of `literature.py` but for physical parameters:
   - r_a = a·ρc_p/SW↓;
   - γ in K/km;
@@ -241,9 +241,15 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 
   Where two quantities are only identified as a product (τ and h, K and τ), the panel says so instead of inventing a split.
 - **Profile likelihood per parameter** (Raue et al. 2009), for L, s, κ, a1 and the EF slopes, refitting the rest each time. A flat profile means "not identified from this data". The mechanism then cannot be Supported, whatever its point estimate.
+  - **Built** as the post-run study `sparc core identifiability -r RUN_DIR` (`sparc/core/identifiability.py`), also launchable from Studio.
+  - **Spatial dependence.** The cells are spatially dependent, so the independence likelihood is corrected with Chandler & Bate's (2007) sandwich, using the run's CV blocks as clusters.
+  - **A sensitivity analysis** adds the cross-products of adjacent blocks: a block-level version of Conley's (1999) spatial HAC, a choice made by this module.
+  - **The class rests on the wider of the two intervals.**
+  - **Parameters on a bound** get a one-sided bound at Λ = 2.706 (Self & Liang 1987). When no well-conditioned adjustment exists, the class is "not assessable".
+  - **Classes:** identified, one-sided, practically or structurally non-identifiable, not assessable.
 - **Prior sensitivity:**
-  - power-scale each prior up and down and report how much each estimate moves (Kallioinen et al. 2024);
-  - add a prior–data conflict check (Evans & Moshonov 2006).
+  - power-scale each prior up and down and report how much each estimate moves (Kallioinen et al. 2024). Built: a posterior from the adjusted likelihood and the nominal priors (Ribatet, Cooley & Davison 2012), Laplace-approximated, with power-scaling ported from ArviZ 0.20 (Pareto-smoothed weights; results pinned against ArviZ's own output). Results are flagged "not reliable" when the Laplace approximation fails its adequacy check. The study also reports each estimate's prior share of the run's curvature and its pull from the data-only estimate;
+  - add a prior–data conflict check (Evans & Moshonov 2006). Built, as the Gaussian approximation of the prior-predictive tail; it is not testable for a parameter on a bound or bounded on one side only.
 
   The placebo finding in Appendix D (s held by its prior) is the case this automates.
 - **Exit:** the panel and profiles appear in the run. Canopy shading's identifiability on Providence is stated as a number, not as prose.
@@ -331,7 +337,7 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 | Step | Workstreams | Why this order |
 |---|---|---|
 | 1 | W0, W1 (**done**) | Cheap. They fix a latent numerical defect and set up the verdicts everything else reports into. |
-| 2 | W3 (panel **done**; profiles and prior sensitivity next) | Changes what can be claimed *today* with no new data: units, identifiability, priors. |
+| 2 | W3 (**done**) | Changes what can be claimed *today* with no new data: units, identifiability, priors. |
 | 3 | W2, W8 (albedo part) | The two input-side corrections. Both are likely to move γ, a and r_a. |
 | 4 | W4, then W5 | The spectral tests, then the causal tests that depend on W4's bands and gains. |
 | 5 | W7, then W6, W8 (longwave) | Need the raw traverses. W6 needs W7's observation operator. |
@@ -392,7 +398,7 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 - **Correction to this plan.** The first review used an OLS elevation slope (−26 K/km) as evidence that elevation stands in for the bay. The physics model's own γ does not show that, so F2, M7 and W2 were rewritten around the water term.
 
 **Not done in this round** (carried forward):
-- W3 profile likelihood and prior sensitivity;
+- ~~W3 profile likelihood and prior sensitivity~~ (done 2026-10-16, below);
 - a Studio view of the register (the file is listed, but there is no table yet);
 - the Studio report export does not include the register;
 - the Playwright end-to-end tests and the TypeScript side of the reducer contract were not run here.
@@ -429,6 +435,13 @@ Every reference was checked against a publisher, DOI or index record for this pl
 - Sailor, D.J. (2011). A review of methods for estimating anthropogenic heat and moisture emissions in the urban environment. *Int. J. Climatol.* 31(2), 189–199. doi:10.1002/joc.2106
 - Shandas, V., Voelkel, J., Williams, J. & Hoffman, J. (2019). Integrating satellite and ground measurements for predicting locations of extreme urban heat. *Climate* 7(1), 5. doi:10.3390/cli7010005
 - Varquez, A.C.G., Kiyomoto, S., Khanh, D.N. & Kanda, M. (2021). Global 1-km present and future hourly anthropogenic heat flux. *Sci. Data* 8, 64. doi:10.1038/s41597-021-00850-w (Typical hourly values per month, not a time series.)
+
+**Identifiability, dependence and prior checks (W3)**
+- Chandler, R.E. & Bate, S. (2007). Inference for clustered data using the independence loglikelihood. *Biometrika* 94(1), 167–183. doi:10.1093/biomet/asm015
+- Conley, T.G. (1999). GMM estimation with cross sectional dependence. *J. Econometrics* 92(1), 1–45. doi:10.1016/S0304-4076(98)00084-0
+- Ribatet, M., Cooley, D. & Davison, A.C. (2012). Bayesian inference from composite likelihoods, with an application to spatial extremes. *Statistica Sinica* 22, 813–845. doi:10.5705/ss.2009.248
+- Self, S.G. & Liang, K.-Y. (1987). Asymptotic properties of maximum likelihood estimators and likelihood ratio tests under nonstandard conditions. *J. Am. Stat. Assoc.* 82(398), 605–610.
+- ArviZ 0.20.0, `arviz.stats.psens` and its helpers: the implementation reference for Kallioinen et al.'s power-scaling diagnostic.
 
 **Causal inference and spatial confounding**
 - Aronow, P.M. & Samii, C. (2017). Estimating average causal effects under general interference. *Ann. Appl. Stat.* 11(4), 1912–1947. doi:10.1214/16-AOAS1005
