@@ -519,7 +519,7 @@ def test_advection_drift_profile_runs_on_its_own_coordinates():
     vr = _row(rep, "v")
     assert vr["estimate_data"] == pytest.approx(math.hypot(*v), rel=0.3)
     assert vr["se_robust"] > 0 and vr["profile"]["sides_explored"] == ["upper", "lower"]
-    assert _covers(vr["ci95"], math.hypot(*v)) and vr["identifiability"] in ("identified",
+    assert _covers(vr["ci95"], math.hypot(*v)) and vr["identifiability"] in ("identified", "one_sided",
                                                                              "practically_non_identifiable")
     assert {"vx", "vy"} <= set(rep["hessian"]["parameters"])
     # the drift penalty is part of the data-only objective: profile points are compared with the reference on that
@@ -677,12 +677,61 @@ def test_a_parameter_on_its_fit_bound_gets_a_one_sided_profile_and_no_conflict_t
         assert s["ci95" + sfx][1] == pytest.approx(_cross(prof, "lambda_adj" + sfx, 2.705543454095404, 0.0), rel=1e-9)
     assert s["ci95_naive"][1] == pytest.approx(_cross(prof, "lambda_naive", 2.705543454095404, 0.0), rel=1e-9)
     assert s["ci95_naive"][1] < _cross(prof, "lambda_naive", ID.CHI2_95, 0.0)   # the one-sided bound is tighter
+    # one side crosses, the other is open at the physical limit 0 the estimate sits on: one-sided, not identified
+    assert s["identifiability"] == "one_sided" and s["open_sides"] == ["lower"] and s["sides_at_limit"] == ["lower"]
+    assert s["summary"].startswith(f"s ≤ {ID._g(s['ci95_conservative'][1])}; lower side open at the physical limit 0")
+    assert "Self & Liang 1987" in s["summary"] and s["ci95_conservative"][1] >= s["ci95"][1]
     assert s["conflict"]["p"] is None and "fit bound" in s["conflict"]["reason"]
     assert s["posterior"]["method"] == "profile" and s["posterior"]["mean"] > 0.0
     assert s["psens"]["method"] == "profile" and s["psens"]["prior"] is not None
     assert s["estimate_run"] >= s["estimate_data"] - 1e-9
     md = ID.identifiability_markdown(rep)
     assert "at lower bound" in md and "Canopy shading strength" in md
+
+
+def _side(st_, x=None, why=None):
+    return (st_, x, why)
+
+
+@pytest.mark.parametrize("sides, at_bound, cls, open_, limit, text", [
+    ({"lower": ("cross", 0.2, None), "upper": ("cross", 0.5, None)}, None, "identified", [], [], "0.2 ≤ s ≤ 0.5"),
+    ({"lower": ("limit", 0.0, "at the physical limit 0"), "upper": ("cross", 0.5, None)}, None, "one_sided",
+     ["lower"], ["lower"], "s ≤ 0.5; lower side open at the physical limit 0"),
+    ({"lower": ("cross", 0.2, None), "upper": ("open", None, "at the end of the search range (1)")}, None,
+     "one_sided", ["upper"], [], "s ≥ 0.2; upper side open at the end of the search range (1)"),
+    ({"upper": ("cross", 0.49, None)}, {"side": "lower", "bound": 0.0}, "one_sided", ["lower"], ["lower"],
+     "s ≤ 0.49; lower side open at the physical limit 0 (the estimate is on it); one-sided 95% bound"),
+    ({"lower": ("limit", 0.0, "at the physical limit 0"), "upper": ("limit", 1.0, "at the physical limit 1")},
+     None, "practically_non_identifiable", ["lower", "upper"], ["lower", "upper"], "lower side open"),
+])
+def test_raue_classes_keep_the_informative_side(sides, at_bound, cls, open_, limit, text):
+    """A side that reaches a physical limit without crossing is open (practically non-identifiable on that
+    side), not identified; the class says which side crossed and the summary keeps the informative part."""
+    r = {"key": "s", "unit": "fraction", "held": "bound" if at_bound else None, "at_bound": at_bound}
+    got, open_sides, at_limit = ID._classify(r, sides, flat=False)
+    assert (got, open_sides, at_limit) == (cls, open_, limit)
+    assert ID._summary(r, got, ID._all_sides(r, sides)).startswith(text)
+    assert ID._classify(r, sides, flat=True)[0] == "structurally_non_identifiable"
+    # the conservative union of two adjusted sides: open beats a limit beats a crossing; the wider crossing
+    assert ID._union_status([("cross", 0.4, None), ("cross", 0.5, None)], "upper")[1] == 0.5
+    assert ID._union_status([("cross", 0.2, None), ("limit", 0.0, "x")], "lower")[0] == "limit"
+    assert ID._union_status([("limit", 0.0, "x"), ("open", None, "y")], "lower")[0] == "open"
+
+
+def test_one_sided_parameters_are_not_identified_in_the_register():
+    from sparc.core import mechanisms as M
+
+    row = {"key": "s", "label": "Canopy shading strength s", "unit": "fraction of absorbed sunlight",
+           "identifiability": "one_sided", "ci95": [0.0, 0.49], "open_sides": ["lower"], "sides_at_limit": ["lower"],
+           "summary": "s ≤ 0.49; lower side open at the physical limit 0 (the estimate is on it)",
+           "at_bound": {"side": "lower", "bound": 0.0}, "estimate_data": 0.0, "estimate_run": 0.3}
+    p = M._ident_param(row, True)
+    assert p["class"] == "one_sided" and p["class"] in M.NOT_IDENTIFIED and not p["identified"]
+    assert p["reaches_zero"] and "the data alone do not exclude s = 0 (s ≤ 0.49; lower side open" in p["text"]
+    p = M._ident_param({**row, "key": "L", "label": "Mixing length L", "unit": "m", "ci95": [200.0, None],
+                        "open_sides": ["upper"], "sides_at_limit": [], "at_bound": None,
+                        "summary": "L ≥ 200 m; upper side open at the end of the search range (2000)"}, True)
+    assert not p["reaches_zero"] and "bounded by the data alone on one side only (L ≥ 200 m" in p["text"]
 
 
 def test_a_bound_parameter_without_a_well_conditioned_curvature_is_not_assessable():

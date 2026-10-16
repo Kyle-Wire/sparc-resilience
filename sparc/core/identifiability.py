@@ -44,13 +44,21 @@ Method
    l_A is maximised over the other parameters too (below).  No maximisation on a profile is single-start
    (below: *Profile maximisation*).  The 95% pointwise interval is
    {ψ : Λ_A ≤ 3.841}, its ends interpolated in √Λ; the naive interval uses Λ_I.  Following Raue et al. (2009)
-   a parameter is *identified* when the profile exceeds the threshold on both sides, *practically
-   non-identifiable* when it does not on one or both sides (``open_sides``), and *structurally
-   non-identifiable* when Λ_A < 0.1 everywhere explored or the parameter does not enter the model (a missing
-   role).  A side that reaches a physical limit of the parameter (a fraction's 0 or 1, the 0 of a non-negative
-   slope or sink: :data:`PHYSICAL_LIMITS`) ends the interval there instead (``sides_at_limit``: the data do not
-   exclude the limit); one that reaches a search range (L's, κ's) stays open.  The scalar c_j = [Σ_naive]_jj / [Σ_rob]_jj (natural units, delta method) summarises how much the
-   residual dependence shrinks the information on θ_j.
+   a side of the profile that never exceeds the threshold is *open* (practically non-identifiable on that
+   side), wherever it stops: at a physical limit of the parameter (a fraction's 0 or 1, the 0 of a
+   non-negative slope or sink: :data:`PHYSICAL_LIMITS`; ``sides_at_limit``: the data do not exclude the
+   limit), at a fit bound or search range (L's, κ's; the bound an estimate sits on), or within the explored
+   range.  Classes (``identifiability``): *identified* when both sides cross; *one_sided* when one side
+   crosses and the other is open (``open_sides``, ``open_reasons``); *practically non-identifiable* when
+   neither crosses; *structurally non-identifiable* when Λ_A < 0.1 everywhere explored or the parameter does
+   not enter the model (a missing role); *not assessable* when its adjustment is not computable (a parameter on
+   its fit bound without a well-conditioned curvature, below).  The class rests on the wider of the two
+   adjusted intervals per side (``ci95_conservative``).  The interval keeps its informative part: ``ci95``
+   ends at a physical limit or the bound an estimate sits on (finite, with that side reported open), and
+   ``summary`` says it in words, e.g. "s ≤ 0.49; lower side open at the physical limit 0 (the estimate is on
+   it); one-sided 95% bound at Λ = 2.706 (Self & Liang 1987)".  The scalar
+   c_j = [Σ_naive]_jj / [Σ_rob]_jj (natural units, delta method) summarises how much the residual dependence
+   shrinks the information on θ_j.
 4. **Linear coefficients and derived quantities**: naive and sandwich SEs of a, γ, b, βx, βy at both optima,
    and r_a = a_K·ρc_p/norm and γ in K/km with the helpers of :mod:`sparc.core.mechanisms`, so the units are
    the parameter panel's.
@@ -128,8 +136,9 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   kept: for l_I, the previous point's optimum, the reference optimum with ψ substituted, and both with the
   parameters held on a bound released inside it; for l_A, the l_I-profile point, the previous point's l_A
   optimum, the quadratic adjusted path θ̂ + Δψ·Σ_rob e_ψ/[Σ_rob]_ψψ and the reference optimum with ψ
-  substituted.  Every distinct start is run for a quarter of the iterations and the best continued for the
-  full count (the physics fit's own multistart scheme), and the best value seen is kept, so Λ_A never exceeds
+  substituted.  Every distinct start is run for an eighth of the iterations (:data:`SCREEN_FRAC`) and the best
+  continued for the full count (the physics fit's own multistart scheme, with a shorter screen), and the best
+  value seen is kept, so Λ_A never exceeds
   its value at the l_I-profile point without taking a minimum over different paths.  A profile (a maximum
   over the other parameters) cannot rise inward: a point whose Λ (naive or either adjusted one) exceeds the
   next point outward's by more than :data:`MONO_TOL` is re-maximised from that point's optimum and the better
@@ -137,7 +146,7 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   about.  On the 13-parameter city world of the tests the single-start version gave L's adjusted profile 3.94
   at 92.0 m and 3.48 at 92.2 m, and an upper 95% end of 91.9 m instead of 92.8 m.
 * **Profile range.**  A side also stops at a physical limit (:data:`PHYSICAL_LIMITS`: a fraction's 0 or 1,
-  the 0 of a non-negative slope, sink or drift), where the interval ends rather than staying open, and an EF
+  the 0 of a non-negative slope, sink or drift), where that side is open but the interval ends, and an EF
   parameter stops where its own term reaches logit ±30 (:func:`_ef_walk_limit`): σ rounds to 1 in float64
   past ≈ 37, where the model's source vanishes numerically (in the albedo world e₀'s exactly flat profile
   jumped to Λ ≈ 5000 there).  A held parameter with no local curvature whose profile is not flat (a saturated
@@ -269,9 +278,10 @@ NULL_EIG = 1e-9
 #: restart of the reference from that point (operational).
 RESTART_DL = 0.05
 #: Fit bounds that are physical limits of a parameter (a fraction in [0, 1]; a non-negative slope, sink or
-#: drift): a profile that reaches one without crossing the threshold has a finite interval ending there.  The
-#: other bounds (L, κ, the shade sigmoid's c₀ and width, an EF parameter's walk limit) are search ranges:
-#: reaching one leaves that side open (practically non-identifiable, Raue et al. 2009).
+#: drift): a profile that reaches one without crossing the threshold is open there (practically
+#: non-identifiable on that side, Raue et al. 2009), its interval ending at the limit.  The other bounds (L, κ,
+#: the shade sigmoid's c₀ and width, an EF parameter's walk limit) are search ranges: reaching one leaves that
+#: side open too, with no finite end.
 PHYSICAL_LIMITS = {"s": ("lower", "upper"), "a1": ("lower", "upper"), "a1n": ("lower", "upper"),
                    "e1": ("lower",), "e2": ("lower",), "e3": ("lower",), "w": ("lower",), "v": ("lower",)}
 #: The profile of an EF parameter stops where its term alone reaches this logit (:func:`_ef_walk_limit`).
@@ -282,7 +292,7 @@ DEFAULTS = {
     "margin": 1.0,           # a side stops once Λ_A ≥ 3.841 + margin
     "target_step": 1.0,      # aimed-at increase of Λ_A per profile step
     "refine": 2,             # bisections of the crossing bracket
-    "profile_iter": 40,      # L-BFGS iterations per profile point (best start; each start gets a quarter)
+    "profile_iter": 40,      # L-BFGS iterations per profile point (best start; each start gets an eighth)
     "ref_starts": 4,         # starts per reference fit (default, the other fit's optimum, 2 perturbed)
     "polish_iter": 200,      # L-BFGS iterations polishing the best start
     "mode_iter": 100,        # L-BFGS iterations for the posterior mode
@@ -947,14 +957,14 @@ class _Study:
                 out["_alpha"] = float(alpha.detach())
             return out
 
-        # every distinct start is run for a quarter of the iterations, the best is continued for the full count
+        # every distinct start is run for a few iterations (_screen_iter), the best is continued for the full count
         # (the physics fit's own multistart scheme), and the best value seen is kept
         uniq = _distinct([st_ for st_ in starts if st_ is not None], free + (["_alpha"] if drift else []) + ["_coef"])
         iters = int(self.S["adj_iter"])
         if len(uniq) == 1:
             res = [run(uniq[0], iters)]
         else:
-            res = [run(st_, max(5, iters // 4)) for st_ in uniq]
+            res = [run(st_, _screen_iter(iters)) for st_ in uniq]
             ok = [q for q in res if q is not None]
             if ok:
                 top = max(ok, key=lambda q: q[0])
@@ -1400,7 +1410,8 @@ def _row_base(st: _Study, key: str, dat: dict, pen: dict, prior_spec: dict, fold
            "held": None, "se_naive": None, "se_robust": None, "se_robust_neighbours": None, "adjust_factor": None,
            "adjust_factor_neighbours": None, "profile": None, "ci95": None, "ci95_neighbours": None,
            "ci95_naive": None, "ci95_naive_label": None, "threshold": None, "boundary_adjustment": None,
-           "identifiability": None, "class_by_covariance": None, "open_sides": [], "sides_at_limit": [],
+           "ci95_conservative": None, "identifiability": None, "class_by_covariance": None, "summary": None,
+           "open_sides": [], "open_reasons": {}, "sides_at_limit": [],
            "pull": None,
            "prior": None, "prior_share_run": None, "posterior": None, "psens": None, "conflict": None,
            "notes": []}
@@ -1704,8 +1715,8 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
     iters = int(st.S["profile_iter"])
     if len(starts) == 1:
         cands = [fit_from(starts[0], iters)]
-    else:                                   # each start for a quarter of the iterations, the best continued
-        cands = [fit_from(x, max(5, iters // 4)) for x in starts]
+    else:                                   # each start for a few iterations, the best continued
+        cands = [fit_from(x, _screen_iter(iters)) for x in starts]
         top = min(cands, key=lambda c: c[0])
         cands.append(fit_from(as_start(top[1], top[2]), iters))
     _, P, alpha, (loss, coef, mse, T, _) = min(cands, key=lambda c: c[0])
@@ -1758,6 +1769,15 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
         out["R"][mode], out["R_ipath"][mode] = R_eff, R
         out["lam_a"][mode], out["lam_a_ipath"][mode] = lam_a, lam_ipath
     return out
+
+
+#: L-BFGS iterations each start of a profile maximisation gets before the best is continued (an eighth of the
+#: full count, at least 4: operational)
+SCREEN_FRAC = 8
+
+
+def _screen_iter(iters: int) -> int:
+    return max(4, int(iters) // SCREEN_FRAC)
 
 
 def _distinct(starts: list[dict], keys: list[str]) -> list[dict]:
@@ -1967,47 +1987,96 @@ def _crossing_mode(seq: list[dict], x0: float, mode: str, thr: float = CHI2_95):
     return _crossing([{"x": q["x"], "lam": q["lam_a"][mode]} for q in seq], x0, 0.0, "lam", thr)
 
 
-def _side_status(r: dict, name: str, res: dict, x_end) -> tuple[str, float | None]:
-    """(status, end) of one side of one profile: ("cross", end) when Λ crossed the threshold at ``x_end`` (walk
-    scale), ("limit", the limit) when it reached a physical limit (:data:`PHYSICAL_LIMITS`) without crossing,
-    ("open", None) otherwise (a search range, the walk's last point, or a side not explored)."""
+def _side_status(r: dict, name: str, res: dict, x_end) -> tuple[str, float | None, str | None]:
+    """(status, end, why open) of one explored side of one profile: ("cross", end, None) when Λ crossed the
+    threshold at ``x_end`` (walk scale); ("limit", the limit, why) when it reached a physical limit
+    (:data:`PHYSICAL_LIMITS`) without crossing; ("open", None, why) otherwise (a search range or a walk limit, or
+    the explored range).  A side that does not cross is open (Raue et al. 2009), wherever it stops."""
     seq = res["points"]
     if x_end is not None:
-        return "cross", _from_walk(r, x_end)
-    if seq and res["edge"] and not res.get("beyond_limit") and name in PHYSICAL_LIMITS.get(r["key"], ()):
-        far = max(seq, key=lambda q: abs(q["x"] - r["_x_hat"]))
-        return "limit", _from_walk(r, far["x"])
-    return "open", None
+        return "cross", _from_walk(r, x_end), None
+    far = _from_walk(r, max(seq, key=lambda q: abs(q["x"] - r["_x_hat"]))["x"]) if seq else None
+    if res.get("beyond_limit"):
+        return "open", None, "the estimate lies beyond the walk limit (a numerically saturated model)"
+    if seq and res["edge"] and name in PHYSICAL_LIMITS.get(r["key"], ()):
+        return "limit", far, f"at the physical limit {_g(far)}"
+    if seq and res["edge"]:
+        return "open", None, f"at the end of the search range ({_g(far)})"
+    return "open", None, ("not crossed within the explored range" + (f" (to {_g(far)})" if far is not None else ""))
 
 
-def _union_status(statuses: list[tuple[str, float | None]], name: str) -> tuple[str, float | None]:
-    """The wider of several sides' (status, end): open beats a limit, a limit beats a crossing, and of two
+def _union_status(statuses: list[tuple], name: str) -> tuple[str, float | None, str | None]:
+    """The wider of several sides' (status, end, why): open beats a limit, a limit beats a crossing, and of two
     crossings the one further out (the conservative interval)."""
-    if any(st_ == "open" for st_, _ in statuses):
-        return "open", None
-    lim = [x for st_, x in statuses if st_ == "limit"]
+    for st_ in statuses:
+        if st_[0] == "open":
+            return st_
+    lim = [st_ for st_ in statuses if st_[0] == "limit"]
     if lim:
-        return "limit", (min(lim) if name == "lower" else max(lim))
-    xs = [x for _, x in statuses]
-    return "cross", (min(xs) if name == "lower" else max(xs))
+        return (min if name == "lower" else max)(lim, key=lambda t: t[1])
+    xs = [x for _, x, _ in statuses]
+    return "cross", (min(xs) if name == "lower" else max(xs)), None
+
+
+def _all_sides(r: dict, status: dict) -> dict:
+    """The explored sides' statuses plus, for an estimate on its fit bound, the side the profile cannot walk: open
+    at that bound (``bound``)."""
+    sides = dict(status)
+    if r["at_bound"]:
+        n, b = r["at_bound"]["side"], r["at_bound"]["bound"]
+        kind = "the physical limit" if n in PHYSICAL_LIMITS.get(r["key"], ()) else "the fit bound"
+        sides[n] = ("bound", b, f"at {kind} {_g(b)} (the estimate is on it)")
+    return sides
 
 
 def _classify(r: dict, status: dict, flat: bool) -> tuple[str, list[str], list[str]]:
-    """(class, open sides, sides at a limit) from the explored sides' (status, end) (Raue et al. 2009)."""
-    open_sides = [n for n, (st_, _) in status.items() if st_ == "open"]
-    at_limit = [n for n, (st_, _) in status.items() if st_ == "limit"]
+    """(class, open sides, sides open at a physical limit) from the sides' statuses (Raue et al. 2009): identified
+    when both sides cross the threshold; ``one_sided`` when one does and the other stays open (at a physical
+    limit, a fit bound or the explored range: practically non-identifiable on that side); practically
+    non-identifiable when neither does; structurally non-identifiable when the profile is flat."""
+    sides = _all_sides(r, status)
+    crossed = [n for n in ("lower", "upper") if n in sides and sides[n][0] == "cross"]
+    open_sides = [n for n in ("lower", "upper") if n in sides and sides[n][0] != "cross"]
+    at_limit = [n for n in open_sides if sides[n][0] == "limit"
+                or (sides[n][0] == "bound" and n in PHYSICAL_LIMITS.get(r["key"], ()))]
     if flat:
         return "structurally_non_identifiable", open_sides, at_limit
     if r["held"] == "flat":
         return "practically_non_identifiable", open_sides, at_limit
-    if open_sides:
-        return "practically_non_identifiable", open_sides, at_limit
-    if at_limit and len(at_limit) == len(status) and (r["at_bound"] or len(status) == 2):
-        return "practically_non_identifiable", open_sides, at_limit
-    return "identified", open_sides, at_limit
+    if len(crossed) == 2:
+        return "identified", open_sides, at_limit
+    if len(crossed) == 1:
+        return "one_sided", open_sides, at_limit
+    return "practically_non_identifiable", open_sides, at_limit
 
 
-_CLASS_ORDER = ("identified", "practically_non_identifiable", "structurally_non_identifiable")
+#: short symbols of the profiled parameters (for the interval summaries)
+_SYMBOL = {"L": "L", "v": "|v|", "s": "s", "kappa_canopy": "κ", "shade_c0": "c₀", "shade_width": "width",
+           "a1": "a₁", "a1n": "a₁ₙ", "e0": "e₀", "e1": "e₁", "e2": "e₂", "e3": "e₃", "w": "w"}
+
+
+def _summary(r: dict, cls: str, sides: dict) -> str:
+    """The interval in words, keeping its informative part (e.g. "s ≤ 0.49; lower side open at the physical limit
+    0 (the estimate is on it); one-sided 95% bound (Self & Liang 1987)")."""
+    sym = _SYMBOL.get(r["key"], r["key"])
+    u = f" {r['unit']}" if r.get("unit") in ("m", "W/m²") else ""
+    lo, hi = sides.get("lower"), sides.get("upper")
+    tail = "; one-sided 95% bound at Λ = 2.706 (Self & Liang 1987)" if r["at_bound"] else ""
+    if cls == "structurally_non_identifiable":
+        return f"{sym}: flat profile (no information)"
+    if cls == "not_assessable":
+        nv = r.get("ci95_naive") or [None, None]
+        b = (f"{sym} ≤ {_g(nv[1])}{u}" if r["at_bound"]["side"] == "lower" else f"{sym} ≥ {_g(nv[0])}{u}")
+        return f"not assessable: unadjusted {b} (too narrow under spatial dependence){tail}"
+    if cls == "identified":
+        return f"{_g(lo[1])} ≤ {sym} ≤ {_g(hi[1])}{u}"
+    parts = []
+    if cls == "one_sided":
+        parts.append(f"{sym} ≤ {_g(hi[1])}{u}" if hi[0] == "cross" else f"{sym} ≥ {_g(lo[1])}{u}")
+    for n, sd in (("lower", lo), ("upper", hi)):
+        if sd is not None and sd[0] != "cross":
+            parts.append(f"{n} side open {sd[2]}")
+    return "; ".join(parts) + tail
 
 
 def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
@@ -2054,6 +2123,7 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
     flat = max_lam < FLAT_LAMBDA
     by_mode = {mode: _classify(r, status[mode], flat)[0] for mode in st.modes}
     cls, open_sides, at_limit = _classify(r, union, flat)
+    r["ci95_conservative"] = ci(union)                  # per side the wider of the adjusted intervals
     if not_assessable and not flat:
         # no adjustment from a well-conditioned curvature: no adjusted interval; the naive one-sided bound is
         # reported, labelled, and the parameter is not assessable (rather than identified)
@@ -2061,18 +2131,22 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
         by_mode = {mode: "not_assessable" for mode in st.modes}
         for mode in st.modes:
             r["ci95" + _SUFFIX[mode]] = None
+        r["ci95_conservative"] = None
         r["ci95_naive_label"] = "unadjusted (too narrow under spatial dependence)"
         r["notes"].append(f"not assessable: its block adjustment is not computable ({ba.get('reason')}); the naive "
                           "one-sided bound is unadjusted (too narrow under spatial dependence)")
     r["identifiability"] = cls
     r["class_by_covariance"] = by_mode
     r["open_sides"], r["sides_at_limit"] = open_sides, at_limit
+    sides = _all_sides(r, union)
+    r["open_reasons"] = {n: sides[n][2] for n in open_sides}
+    r["summary"] = _summary(r, cls, sides)
     if len(st.modes) > 1 and len(set(by_mode.values())) > 1:
         r["notes"].append("the class rests on the wider of the two adjusted intervals ("
                           + ", ".join(f"{m}: {c}" for m, c in by_mode.items()) + ")")
     if at_limit:
-        r["notes"].append(f"the 95% interval reaches the physical limit on the {' and '.join(at_limit)} side: the "
-                          "data do not exclude it")
+        r["notes"].append(f"open on the {' and '.join(at_limit)} side at its physical limit: the data do not "
+                          "exclude it")
     unadj = [p for p in pts if any(R is None for R in p["R"].values()) and p["lam_i"] > 0]
     if unadj:
         r["notes"].append(f"{len(unadj)} profile point(s) without curvature in the adjustment coordinates: Λ_A = Λ_I "
@@ -2084,8 +2158,6 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
         # (e.g. a saturated evaporative fraction, a step function of the covariates), so no interval is trusted
         r["notes"].append("no local curvature at the optimum but a profile that is not flat: the likelihood is not "
                           "smooth there (e.g. a saturated evaporative fraction), so its interval is not reliable")
-    elif cls == "practically_non_identifiable" and not open_sides:
-        r["notes"].append("the 95% interval spans the whole physical range")
     x0 = r["estimate_data"] if not r["at_bound"] else float(bound)
     grid = sorted([(x0, {m: 0.0 for m in st.modes}, lam0, {m: None for m in st.modes}, {m: 0.0 for m in st.modes})]
                   + [(p["value"], p["lam_a"], p["lam_i"], p["R"], p.get("lam_a_ipath") or {}) for p in pts],
@@ -2601,9 +2673,9 @@ def _register_with(run_dir: Path, config_raw: dict | None, rep: dict) -> dict | 
 
 
 # --------------------------------------------------------------------------- markdown
-_CLASS = {"identified": "identified", "practically_non_identifiable": "practically non-identifiable",
-          "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted",
-          "not_assessable": "not assessable", None: "—"}
+_CLASS = {"identified": "identified", "one_sided": "one-sided", "practically_non_identifiable":
+          "practically non-identifiable", "structurally_non_identifiable": "structurally non-identifiable",
+          "not_fitted": "not fitted", "not_assessable": "not assessable", None: "—"}
 
 
 def _g(v, nd=3) -> str:
@@ -2646,10 +2718,8 @@ def identifiability_markdown(rep: dict | None) -> str:
          "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rep.get("parameters") or []:
         cls = _CLASS.get(r.get("identifiability"), r.get("identifiability"))
-        if r.get("open_sides") and r.get("identifiability") != "structurally_non_identifiable":
-            cls += f" (open: {', '.join(r['open_sides'])})"
-        if r.get("sides_at_limit"):
-            cls += f" (reaches its limit: {', '.join(r['sides_at_limit'])})"
+        if r.get("summary") and r.get("identifiability") not in ("identified", "structurally_non_identifiable"):
+            cls += f": {r['summary']}"
         if r.get("at_bound"):
             cls += f"; at {r['at_bound']['side']} bound"
         post = r.get("posterior") or {}
@@ -2673,8 +2743,6 @@ def identifiability_markdown(rep: dict | None) -> str:
         cfs = ("—" if not cf else f"{_g(cf['p'], 2)}" + (" **conflict**" if cf.get("flag") else "")
                if cf.get("p") is not None else "not testable")
         naive = _ci(r.get("ci95_naive")) + (f" {r['ci95_naive_label']}" if r.get("ci95_naive_label") else "")
-        if r.get("threshold") == CHI2_90:
-            cls += "; one-sided bound at Λ = 2.706 (Self & Liang 1987)"
         L.append(f"| {r['label']} ({r['unit']}) | {_g(r.get('estimate_run'))} | {_g(r.get('estimate_data'))} | "
                  f"{_ci(r.get('ci95'))} | {_ci(r.get('ci95_neighbours'))} | {naive} | "
                  f"{_g(r.get('adjust_factor'), 2)} | {cls} | "

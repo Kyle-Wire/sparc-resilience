@@ -232,9 +232,11 @@ KEY_PARAMS = {"M1": ("s", "kappa_canopy", "shade_c0", "shade_width"), "M2": ("e0
 #: Albedo has none of its own: it enters through absorbed sunlight, scaled by the gain a and spread by L.
 ROLE_PARAMS = {"canopy": ("s", "kappa_canopy", "shade_c0", "shade_width", "e2"), "impervious": ("a1", "a1n", "e3"),
                "ndvi": ("e1",), "water_distance": ("w",)}
-#: Raue et al. (2009)'s classes that block Supported
-NOT_IDENTIFIED = ("practically_non_identifiable", "structurally_non_identifiable", "not_assessable")
+#: Raue et al. (2009)'s classes that block Supported: a parameter bounded on one side only is practically
+#: non-identifiable on the other (``one_sided``), and one whose adjustment is not computable is not assessable
+NOT_IDENTIFIED = ("practically_non_identifiable", "structurally_non_identifiable", "not_assessable", "one_sided")
 IDENT_LABELS = {"identified": "identified", "practically_non_identifiable": "practically non-identifiable",
+                "one_sided": "one-sided (bounded on one side only)",
                 "not_assessable": "not assessable (no adjustment for spatial dependence computable at its bound)",
                 "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted"}
 #: Parameters whose physical lower limit is 0 (a fraction, a non-negative slope, sink or drift;
@@ -1073,8 +1075,8 @@ def _ident_param(p: dict, laplace_ok) -> dict:
     cls = p.get("identifiability")
     ci = p.get("ci95") if isinstance(p.get("ci95"), (list, tuple)) and len(p["ci95"]) == 2 else None
     ab = p.get("at_bound") if isinstance(p.get("at_bound"), dict) else None
-    zero = p.get("key") in _ZERO_LIMIT and cls == "identified" and (
-        (ci is not None and _num(ci[0]) and float(ci[0]) <= 0.0)
+    zero = p.get("key") in _ZERO_LIMIT and cls in ("identified", "one_sided") and (
+        (ci is not None and _num(ci[0]) and float(ci[0]) <= 0.0) or "lower" in (p.get("sides_at_limit") or [])
         or (ab is not None and ab.get("side") == "lower" and _num(ab.get("bound")) and float(ab["bound"]) <= 0.0))
     post, ps, cf = p.get("posterior") or {}, p.get("psens") or {}, p.get("conflict") or {}
 
@@ -1095,6 +1097,7 @@ def _ident_param(p: dict, laplace_ok) -> dict:
            "ci95": list(ci) if ci else None, "ci95_neighbours": p.get("ci95_neighbours"),
            "ci95_naive": p.get("ci95_naive"),
            "open_sides": list(p.get("open_sides") or []), "sides_at_limit": list(p.get("sides_at_limit") or []),
+           "summary": p.get("summary"),
            "at_bound": ab, "held": p.get("held"), "reaches_zero": bool(zero),
            "se_robust": p.get("se_robust"), "adjust_factor": p.get("adjust_factor"), "prior": p.get("prior"),
            "prior_share_run": p.get("prior_share_run"), "pull": p.get("pull"),
@@ -1123,6 +1126,10 @@ def _ident_sentence(p: dict) -> str:
         return f"{p['label']}: not fitted in this run."
     if cls == "structurally_non_identifiable":
         core = "not identified by the data alone (flat profile likelihood)"
+    elif cls == "one_sided":
+        what = p.get("summary") or f"95% profile interval {span}"
+        core = (f"the data alone do not exclude {sym} = 0 ({what})" if p["reaches_zero"] else
+                f"bounded by the data alone on one side only ({what})")
     elif cls == "not_assessable":
         nv = p.get("ci95_naive") or [None, None]
         core = ("not assessable from the data alone (its data-only estimate sits on a fit bound, where no adjustment "
