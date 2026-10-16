@@ -120,7 +120,8 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   past ≈ 37, where the model's source vanishes numerically (in the albedo world e₀'s exactly flat profile
   jumped to Λ ≈ 5000 there).  A held parameter with no local curvature whose profile is not flat (a saturated
   EF) is never called identified.
-* **Restarts.**  When a profile point beats the data-only optimum by more than Δl_I = 0.05 (0.1 in naive Λ),
+* **Restarts.**  When a profile point beats the data-only optimum by more than Δl = 0.05 (0.1 in naive Λ; l_D,
+  below, with advection fitted),
   the reference is refitted from that point and the curvature and profiles are recomputed (at most twice,
   then a warning): a profile is only meaningful relative to the maximum.
 * **Held parameters.**  A parameter on a fit bound at the data-only optimum (a softplus floor or a sigmoid
@@ -156,8 +157,14 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   held on its fit bound is not in the Laplace step; when it has a nominal prior its posterior is exp(−Λ_A/2)·prior along its adjusted profile
   (1-D, sampled by inverse CDF), with power-scaling on those draws (``method: profile``).
 * With advection fitted, the drift penalty v_penalty·|u|² stays in the data-only objective, as the design
-  asks: it keeps |v| off its bound when the wind is weakly identified; l_I's gradient in the drift leaves is
-  then not exactly zero at θ̂, a small approximation.
+  asks: it keeps |v| off its bound when the wind is weakly identified.  The study then works with the objective
+  the data-only fits maximise, in log-likelihood units: l_D = l_I − k̂·v_penalty·|u|², k̂ = n·var(y)/(2·MSE(θ̂))
+  (−k̂·ΔJ = Δl_I to first order, J the fitted objective MSE/var(y) + penalty), in place of l_I everywhere:
+  profiles, the restart test, H (its drift block gains the penalty's curvature) and the posterior; the cluster
+  scores stay those of l_I (the penalty is not data), and V is centred.  Comparing l_I alone made a profile
+  point "beat" the reference only by trading penalty (on a 48 × 48 drift world |v| = 122 m beat 119 m by
+  Δl_I = 0.2 while losing 0.7 in penalty), which triggered two futile reference refits (twice the runtime) and
+  a "not a maximum" warning.  Without advection l_D = l_I.
 
 References (verified list of PHYSICS_PLAN.md and the W3 task)
 ------------------------------------------------------------
@@ -623,6 +630,7 @@ class _Study:
         self.timings: dict[str, float] = {}
         self.warnings: list[str] = []
         self.at_bound_frac, self.floor_tol = AT_BOUND_FRAC, FLOOR_TOL
+        self.k_pen, self.v_pen = 0.0, 0.0
 
     def warn(self, msg: str) -> None:
         if msg in self.warnings:
@@ -686,12 +694,20 @@ class _Study:
         return best, losses + [float(pol.fit_info["loss"])]
 
     # ------------------------------------------------------------ likelihood pieces
+    def drift_l(self, P: dict):
+        """The drift penalty v_penalty·|u|² of the data-only objective in log-likelihood units, k̂·v_penalty·|u|²
+        with k̂ = n·var(y)/(2·MSE(θ̂)) (so that −k̂·ΔJ ≈ Δl_I to first order); 0 without advection.  The study's
+        log-likelihood l_D = l_I − this is the objective the data-only fits maximise (module docstring)."""
+        if not self.k_pen:
+            return 0.0
+        return self.k_pen * self.v_pen * (P["ux"] ** 2 + P["uy"] ** 2)
+
     def loglik(self, space: _Space, theta):
         import torch
 
         P, nat, coef = space.unpack(theta)
         r = self.terms.residuals(P, coef, nat or None)
-        return -0.5 * self.n * torch.log((r * r).sum() / self.n)
+        return -0.5 * self.n * torch.log((r * r).sum() / self.n) - self.drift_l(P)
 
     def hessian(self, space: _Space, theta0: np.ndarray) -> np.ndarray:
         import torch
@@ -792,7 +808,7 @@ class _Study:
             T = self.terms.transform(P, natural)
             th = space.theta_t(T, coef_s)
             r = self.terms.residuals(P, coef_s / self.col_t, natural)
-            lI = -0.5 * self.n * torch.log((r * r).sum() / self.n)
+            lI = -0.5 * self.n * torch.log((r * r).sum() / self.n) - self.drift_l(P)
             return self.l_adj_t(lI, th, HA, HI, thh), th
 
         best = None
@@ -842,6 +858,15 @@ class _Study:
         self.col[self.col <= 0] = 1.0
         self.col_t = _t(self.col)
         self.active = list(self.terms.leaf_names)
+        # with advection fitted the data-only objective keeps the drift penalty: the study compares and profiles
+        # that objective, in log-likelihood units (drift_l), so a point is never "better" only by trading penalty
+        self.v_pen = float(model.cfg.get("v_penalty", 0.0)) if model.fit_advection else 0.0
+        if self.v_pen > 0:
+            with torch.no_grad():
+                mse0 = float(self.terms.evaluate(P, prior_scale=0.0)[2])
+            self.k_pen = self.n * self.terms.var_y / (2.0 * max(mse0, 1e-300))
+        else:
+            self.k_pen = 0.0
 
     def _adjacency(self, inv: np.ndarray, G: int) -> np.ndarray | None:
         """Off-diagonal adjacency (0/1) of the clusters as square blocks of side ``block_m`` (edge or corner
@@ -892,8 +917,9 @@ class _Study:
             if side:
                 at[k] = side
         mse = float(mse)
+        l_i = -0.5 * self.n * math.log(mse)
         return {"leaves": dict(model.leaves), "natural": nat, "coef": coef.numpy().astype(float), "mse": mse,
-                "loss": float(loss), "l": -0.5 * self.n * math.log(mse), "at_bound": at,
+                "loss": float(loss), "l": l_i - float(self.drift_l(P)), "l_I": l_i, "at_bound": at,
                 "ef_saturated_frac": self.ef_saturation(T)}
 
     def ef_saturation(self, T: dict) -> float:
@@ -1048,7 +1074,7 @@ def _analyse(st: _Study, params, units, posterior: bool, fold_params, context: d
         if improve <= RESTART_DL or restarts >= int(st.S["max_restarts"]):
             break
         restarts += 1
-        st.warn(f"a profile point of {best['key']} improved on the data-only optimum by Δl_I = {improve:.3g}: "
+        st.warn(f"a profile point of {best['key']} improved on the data-only optimum by Δl = {improve:.3g}: "
                 f"refitting the data-only reference from it (restart {restarts})")
         with progress.task("reference_fit", key=f"data_only_restart{restarts}"):
             cand = st._fit(0.0, init=best["leaves"], max_iter=int(st.S["polish_iter"]))
@@ -1060,7 +1086,7 @@ def _analyse(st: _Study, params, units, posterior: bool, fold_params, context: d
         st.l_hat = dat["l"]
     if improve > RESTART_DL:
         st.warn(f"after {restarts} restart(s) a profile point still improves on the data-only optimum by "
-                f"Δl_I = {improve:.3g} ({best['key']} = {best['value']:.4g}): the data-only likelihood keeps "
+                f"Δl = {improve:.3g} ({best['key']} = {best['value']:.4g}): the data-only likelihood keeps "
                 "increasing along that direction, so the reference is not a maximum and the profiles are "
                 "approximate; the parameters it moves are not identified by the data")
     out["reference"]["data_only"] = _ref_summary(dat, dat_losses, dat_model, active_keys, lin_names)
@@ -1172,7 +1198,8 @@ def _ref_summary(opt: dict, losses, model, active_keys: list[str], linear_names:
             nat["v"] = float(math.hypot(opt["natural"]["vx"], opt["natural"]["vy"]))
         else:
             nat[k] = float(opt["natural"][PARAMS[k][0]])
-    return {"loss": opt["loss"], "mse": opt["mse"], "loglik_independence": opt["l"],
+    return {"loss": opt["loss"], "mse": opt["mse"], "loglik_independence": opt.get("l_I", opt["l"]),
+            "loglik_study": opt["l"],
             "start_losses": [float(x) for x in losses], "natural": nat,
             "linear": {n: float(c) for n, c in zip(linear_names, opt["coef"])},
             "at_bound": sorted(_NAT_KEY.get(k, k) for k in opt["at_bound"]), "a_model": float(model.a),
@@ -1484,7 +1511,8 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
     else:
         leaves[NATURAL_LEAF[nat]] = m.to_leaf(nat, float(value))     # ψ itself (a restart starts here)
     leaves["_coef"] = coef.numpy().tolist()
-    lval = -0.5 * st.n * math.log(float(mse))
+    with torch.no_grad():
+        lval = -0.5 * st.n * math.log(float(mse)) - float(st.drift_l(P))
     lam_i = max(2.0 * (st.l_hat - lval), 0.0)
     if r["held"]:
         e = _ext(st, nat, dat, cache)

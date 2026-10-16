@@ -436,6 +436,15 @@ def test_advection_drift_profile_runs_on_its_own_coordinates():
     assert _covers(vr["ci95"], math.hypot(*v)) and vr["identifiability"] in ("identified",
                                                                              "practically_non_identifiable")
     assert {"vx", "vy"} <= set(rep["hessian"]["parameters"])
+    # the drift penalty is part of the data-only objective: profile points are compared with the reference on that
+    # objective, so none "beats" it by trading penalty (this used to trigger two futile reference refits and a
+    # "not a maximum" warning), and Λ is 0 at the estimate (no rebasing)
+    assert rep["reference"]["data_only"]["restarts"] == 0
+    assert not any("improve" in w for w in rep["warnings"]), rep["warnings"]
+    for r in (vr, _row(rep, "L")):
+        prof = r["profile"]
+        i0 = prof["grid"].index(r["estimate_data"])
+        assert prof["lambda_naive"][i0] == 0.0 and min(prof["lambda_naive"]) == 0.0
 
 
 # ---------------------------------------------------------------------------
