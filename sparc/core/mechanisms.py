@@ -212,8 +212,10 @@ REFERENCES = {
                       "doi:10.1007/s11222-023-10366-5",
     "evans2006": "Evans, M. & Moshonov, H. (2006). Checking for prior-data conflict. Bayesian Analysis 1(4), "
                  "893–914. doi:10.1214/06-BA129",
+    "conley1999": "Conley, T.G. (1999). GMM estimation with cross sectional dependence. Journal of Econometrics "
+                  "92(1), 1–45. doi:10.1016/S0304-4076(98)00084-0",
 }
-_IDENT_REFS = ("raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006")
+_IDENT_REFS = ("raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006", "conley1999")
 
 # --------------------------------------------------------------------------- W3 identifiability (constants)
 #: The key parameters of each mechanism, as keys of the identifiability report.  A signature cannot be Supported
@@ -1085,7 +1087,8 @@ def _ident_param(p: dict, laplace_ok) -> dict:
            "class": cls, "class_label": IDENT_LABELS.get(cls, cls), "identified": cls == "identified",
            "in_model": p.get("estimate_data") is not None,
            "estimate_run": p.get("estimate_run"), "estimate_data": p.get("estimate_data"),
-           "ci95": list(ci) if ci else None, "ci95_naive": p.get("ci95_naive"),
+           "ci95": list(ci) if ci else None, "ci95_neighbours": p.get("ci95_neighbours"),
+           "ci95_naive": p.get("ci95_naive"),
            "open_sides": list(p.get("open_sides") or []), "sides_at_limit": list(p.get("sides_at_limit") or []),
            "at_bound": ab, "held": p.get("held"), "reaches_zero": bool(zero),
            "se_robust": p.get("se_robust"), "adjust_factor": p.get("adjust_factor"), "prior": p.get("prior"),

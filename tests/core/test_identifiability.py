@@ -291,25 +291,88 @@ def test_prior_data_conflict_formula_and_not_testable_cases():
 def test_iid_noise_adjust_factor_near_one_and_profile_covers_L():
     grid, frame, y, coords, _, cfg = albedo_world(noise=0.5, seed=3, block_m=150.0)
     cl = block_ids(coords, 150.0)
-    out = {}
-    for mode in ("blocks", "neighbours"):
-        rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "e0"], posterior=False,
-                         settings={**FAST, "score_covariance": mode, "block_m": 150.0})
-        out[mode] = rep
-        L = _row(rep, "L")
-        assert rep["n_clusters"] == 144 and L["identifiability"] == "identified"
-        assert _covers(L["ci95"], L_TRUE) and _covers(L["ci95_naive"], L_TRUE)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "e0"], posterior=False,
+                     settings={**FAST, "block_m": 150.0})
+    assert rep["settings"]["score_covariance"] == "blocks"                     # Chandler & Bate's V by default
+    L = _row(rep, "L")
+    assert rep["n_clusters"] == 144 and L["identifiability"] == "identified"
+    assert L["class_by_covariance"] == {"blocks": "identified", "neighbours": "identified"}
+    # one profile of l_I, both adjustments: each interval covers L
+    for key in ("ci95", "ci95_neighbours", "ci95_naive"):
+        assert _covers(L[key], L_TRUE), key
     # independent noise: the block sandwich agrees with the naive information (c ≈ 1) …
-    assert 0.6 < _row(out["blocks"], "L")["adjust_factor"] < 1.6
-    for r in out["blocks"]["linear"]:
+    assert 0.6 < L["adjust_factor"] < 1.6
+    for r in rep["linear"]:
         assert 0.5 < r["adjust_factor"] < 2.0, r["key"]
-    # … and adding the adjacent blocks' cross terms can only make it more conservative
-    assert _row(out["neighbours"], "L")["adjust_factor"] <= _row(out["blocks"], "L")["adjust_factor"] + 1e-12
+        assert r["se_robust_data_neighbours"] >= r["se_robust_data"] - 1e-12, r["key"]
+    # … and adding the adjacent blocks' cross terms can only make it more conservative (V_nb ≥ V_blocks)
+    assert L["adjust_factor_neighbours"] <= L["adjust_factor"] + 1e-12
+    assert L["se_robust_neighbours"] >= L["se_robust"] - 1e-12
+    assert L["ci95_neighbours"][0] <= L["ci95"][0] + 1e-9 and L["ci95_neighbours"][1] >= L["ci95"][1] - 1e-9
+    assert len(L["profile"]["lambda_adj_neighbours"]) == len(L["profile"]["grid"])
     # e₀ is absorbed exactly by the gain a: held as flat and structurally non-identifiable
-    e0 = _row(out["blocks"], "e0")
+    e0 = _row(rep, "e0")
     assert e0["held"] == "flat" and e0["identifiability"] == "structurally_non_identifiable"
-    assert "e0" in out["blocks"]["hessian"]["held_flat"]
+    assert "e0" in rep["hessian"]["held_flat"]
     assert max(e0["profile"]["lambda_adj"]) < ID.FLAT_LAMBDA
+
+
+def _adjacent(G, ncol):
+    cen = np.array([[i % ncol, i // ncol] for i in range(G)])
+    A = ((np.abs(cen[:, None, 0] - cen[None, :, 0]) <= 1) & (np.abs(cen[:, None, 1] - cen[None, :, 1]) <= 1))
+    np.fill_diagonal(A, False)
+    return A.astype(float)
+
+
+@pytest.mark.parametrize("G, p", [(23, 6), (5, 9)])           # V of full rank, and of rank G − 1 < p
+def test_neighbours_score_covariance_is_invariant_to_the_parameter_coordinates(G, p):
+    """θ → Aθ maps the scores U → UA⁻¹; Chandler & Bate's V and the neighbours V must map to A⁻ᵀVA⁻¹ (so SEs in
+    natural units do not depend on the coordinates the study happens to use).  The positive part of the
+    adjacent-block cross-products is taken relative to the block V (``_pos_part_rel``); the plain eigenvalue clip
+    of the cross-products that it replaces is shown not to be invariant."""
+    rng = np.random.default_rng(G)
+    U = rng.standard_normal((G, p)) @ rng.standard_normal((p, p))
+    st = ID._Study.__new__(ID._Study)
+    st.adj = _adjacent(G, 5)
+    for A in (np.diag(10.0 ** rng.uniform(-3, 3, p)), rng.standard_normal((p, p)) + 3 * np.eye(p)):
+        Ai = np.linalg.inv(A)
+        for mode in ("blocks", "neighbours"):
+            V, V2 = st.score_cov(U, mode), st.score_cov(U @ Ai, mode)
+            assert np.allclose(A.T @ V2 @ A, V, rtol=1e-7, atol=1e-9 * np.abs(V).max()), mode
+        Vb, Vn = st.score_cov(U, "blocks"), st.score_cov(U, "neighbours")
+        assert np.linalg.eigvalsh(Vn - Vb).min() >= -1e-9 * np.abs(Vb).max()       # never below Chandler & Bate
+    # the plain clip (eigenvalues of the cross-products in the given coordinates) is not invariant
+    Ub = U - U.mean(axis=0)
+    A = np.diag(10.0 ** rng.uniform(-3, 3, p))
+
+    def clip(Ux):
+        w, Q = np.linalg.eigh(Ux.T @ st.adj @ Ux)
+        return (Q * np.maximum(w, 0)) @ Q.T
+
+    assert not np.allclose(A.T @ clip(Ub @ np.linalg.inv(A)) @ A, clip(Ub), rtol=1e-3)
+
+
+def test_study_ses_do_not_depend_on_the_scaling_of_its_coordinates(monkeypatch):
+    """End to end: rescaling the study's linear-coefficient coordinates (θ_lin × column RMS by default) leaves
+    every SE and c in natural units unchanged, with either score covariance."""
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.5, noise_range=5.8, seed=1)
+    kw = dict(L_init=L_TRUE, params=["L"], posterior=False, settings={**QUICK, "max_points": 2, "block_m": BLOCK_M})
+    ref = ID.analyse(grid, frame, y, coords, cl, cfg, **kw)
+    real_setup = ID._Study.setup
+
+    def setup(self, model):
+        real_setup(self, model)
+        self.col = self.col * np.array([3.0, 0.01, 40.0, 0.2, 7.0])[: self.col.size]
+        self.col_t = ID._t(self.col)
+
+    monkeypatch.setattr(ID._Study, "setup", setup)
+    alt = ID.analyse(grid, frame, y, coords, cl, cfg, **kw)
+    a, b = _row(ref, "L"), _row(alt, "L")
+    for k in ("se_naive", "se_robust", "se_robust_neighbours", "adjust_factor", "adjust_factor_neighbours"):
+        assert b[k] == pytest.approx(a[k], rel=1e-6), k
+    for ra, rb in zip(ref["linear"], alt["linear"]):
+        for k in ("se_naive_data", "se_robust_data", "se_robust_data_neighbours"):
+            assert rb[k] == pytest.approx(ra[k], rel=1e-6), (ra["key"], k)
 
 
 # ---------------------------------------------------------------------------
@@ -334,39 +397,38 @@ def test_correlated_noise_shrinks_the_information_and_widens_the_interval():
     assert all(r["adjust_factor"] < 0.5 for r in rep["linear"] if r["key"] != "b")
 
 
-def _coverage(R, noise_range, mode):
-    hits_a = hits_n = 0
-    cs = []
+def _coverage(R, noise_range):
+    """Coverage of the planted L by the blocks, neighbours and naive 95% intervals of one study per replicate,
+    and the median c of each adjustment."""
+    hits = {"ci95": 0, "ci95_neighbours": 0, "ci95_naive": 0}
+    cs = {"blocks": [], "neighbours": []}
     for s in range(R):
         grid, frame, y, coords, cl, cfg = albedo_world(noise=0.5, noise_range=noise_range, seed=s)
         rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L"], posterior=False,
-                         settings={**FAST, "score_covariance": mode, "block_m": BLOCK_M})
+                         settings={**FAST, "block_m": BLOCK_M})
         L = _row(rep, "L")
-        hits_a += _covers(L["ci95"], L_TRUE)
-        hits_n += _covers(L["ci95_naive"], L_TRUE)
-        cs.append(L["adjust_factor"])
-    return hits_a / R, hits_n / R, float(np.median(cs))
+        for k in hits:
+            hits[k] += _covers(L[k], L_TRUE)
+        cs["blocks"].append(L["adjust_factor"])
+        cs["neighbours"].append(L["adjust_factor_neighbours"])
+    return {k: v / R for k, v in hits.items()}, {k: float(np.median(v)) for k, v in cs.items()}
 
 
 @pytest.mark.slow
 def test_coverage_of_the_adjusted_profile_interval_for_L():
     """60 replicates per setting, 36 blocks of 300 m.  Correlated noise with practical range = the block size
-    (Providence's regime): the adjusted interval must cover the planted L in 85–99% of replicates and the naive
-    one clearly less; independent noise: the adjusted interval stays ≥ 85%.  The numbers are printed (run with
-    -s) and quoted in the module docstring."""
+    (Providence's regime) and independent noise: coverage of the planted L by the blocks, neighbours and naive 95%
+    intervals.  The numbers are printed (run with -s) and quoted in the module docstring."""
     R = 60
-    cov_a, cov_n, c_med = _coverage(R, 5.8, "neighbours")
-    print(f"\ncorrelated (practical range = block), neighbours V: adjusted {cov_a:.3f}, naive {cov_n:.3f}, "
-          f"median c {c_med:.3f}")
-    assert 0.85 <= cov_a <= 0.99
-    assert cov_n <= cov_a - 0.4
-    blk_a, _, blk_c = _coverage(R, 5.8, "blocks")
-    print(f"correlated (practical range = block), blocks V (Chandler & Bate): adjusted {blk_a:.3f}, "
-          f"median c {blk_c:.3f}")
-    assert blk_a <= cov_a                                          # the block-only V under-covers here
-    iid_a, iid_n, iid_c = _coverage(R, None, "neighbours")
-    print(f"independent noise, neighbours V: adjusted {iid_a:.3f}, naive {iid_n:.3f}, median c {iid_c:.3f}")
-    assert iid_a >= 0.85 and iid_n >= 0.85
+    cov, c = _coverage(R, 5.8)
+    print(f"\ncorrelated (practical range = block): blocks {cov['ci95']:.3f}, neighbours {cov['ci95_neighbours']:.3f}, "
+          f"naive {cov['ci95_naive']:.3f}; median c blocks {c['blocks']:.3f}, neighbours {c['neighbours']:.3f}")
+    assert 0.85 <= cov["ci95_neighbours"] <= 0.99
+    assert cov["ci95_naive"] <= cov["ci95"] - 0.4
+    iid, ci = _coverage(R, None)
+    print(f"independent noise: blocks {iid['ci95']:.3f}, neighbours {iid['ci95_neighbours']:.3f}, naive "
+          f"{iid['ci95_naive']:.3f}; median c blocks {ci['blocks']:.3f}, neighbours {ci['neighbours']:.3f}")
+    assert iid["ci95"] >= 0.85 and iid["ci95_neighbours"] >= 0.85 and iid["ci95_naive"] >= 0.85
 
 
 QUICK = {"max_points": 3, "ref_starts": 1, "polish_iter": 30}
@@ -605,7 +667,8 @@ def test_cli_writes_identifiability_json_and_the_manifest_section(small_run, cap
     assert rep["n_clusters"] == man["cv"]["n_blocks"] and rep["cluster"]["block_m"] == man["cv"]["block_m"]
     assert rep["advection"]["fit"] is (man["physics_advection"]["kept"] if man.get("physics_advection") else
                                        rep["advection"]["fit"])
-    assert set(rep["references"]) == {"raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006"}
+    assert set(rep["references"]) == {"raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006",
+                                      "conley1999"}
     for key in ("schema", "n", "n_clusters", "cluster", "coarse_m", "advection", "reference", "parameters",
                 "linear", "derived", "settings", "timings", "references"):
         assert key in rep, key

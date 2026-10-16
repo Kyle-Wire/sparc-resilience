@@ -28,8 +28,11 @@ Method
    conditioning), not profiled by variable projection, so the derivatives are exact
    (:class:`sparc.core.physics.FitTerms`, torch autograd, float64).  H_I is the Hessian
    of l_I at the data-only maximiser θ̂.  Cluster scores U_b are the gradients of block b's part of l_I with
-   σ² held at its MLE; V is their covariance (below), Σ_rob = H_I⁻¹VH_I⁻¹, Σ_naive = −H_I⁻¹ (Chandler & Bate
-   2007).  A warning is raised when there are fewer than two clusters per parameter.
+   σ² held at its MLE; V is their covariance, Σ_rob = H_I⁻¹VH_I⁻¹, Σ_naive = −H_I⁻¹ (Chandler & Bate 2007).
+   Two score covariances are computed, and every interval is reported with both (below): ``blocks``,
+   Chandler & Bate's V = Σ_b (U_b − Ū)(U_b − Ū)ᵀ (``ci95``, ``se_robust``, ``adjust_factor``), and
+   ``neighbours``, a sensitivity that adds adjacent blocks' cross-products (``ci95_neighbours``, …).  A
+   warning is raised when there are fewer than two clusters per parameter.
 3. **Adjusted profile** per parameter ψ in natural units (L in m, s, κ or c₀ and width, a₁/a₁ₙ, e₀–e₃, w, |v|).
    The vertical adjustment (Chandler & Bate 2007, as documented for the chandwich package)
 
@@ -85,20 +88,27 @@ Method
 Choices beyond the plan (each argued; the simulation numbers are from the albedo world of
 ``tests/core/test_identifiability.py``: planted L = 90 m, 36 blocks of 300 m, 60 replicates per setting)
 -----------------------------------------------------------------------------------------------------------
-* **Score covariance: adjacent blocks included (default ``score_covariance: neighbours``).**  Chandler &
-  Bate's V = Σ_b (U_b − Ū)(U_b − Ū)ᵀ assumes independent clusters.  Spatial blocks that touch are not when
-  the residual range is comparable to the block size, which is Providence's case (practical range ≥ 2 km,
-  blocks of 2 km): the scores of smooth directions (the gain a, the trends) covary across block edges, and L̂
-  inherits it through its coupling to a.  With noise of practical range = block size, the ideal sandwich (V
-  from 300 noise draws) gives sd(L̂) = 11.4 m, matching the 12.8 m spread of the estimates over 40 replicates
-  (the linearisation holds), while the block V gives 8.8 m in expectation, and the adjusted intervals covered
-  the planted L in 80% of replicates.  Var(Σ_b U_b) = Σ_b Σ_b′ Cov(U_b, U_b′), so V adds the cross-products of
-  edge- and corner-adjacent blocks (expected sd 11.1 m); only their positive part is added (the sum of
-  cross-products is not positive semi-definite in a sample), so V is never below Chandler & Bate's and
-  reduces to it when adjacent blocks do not covary.  Coverage of the adjusted 95% interval for L: 92% (naive
-  20%, median c = 0.025) with that noise; 95% (naive 93%) with independent noise, where the extra terms make
-  it conservative (median c = 0.76 instead of 1).  ``score_covariance: blocks`` gives Chandler & Bate's V
-  unchanged.  V is centred (U_b − Ū): identical at an interior maximum (Ū = ∇l_I/G = 0), and the score
+* **Score covariance: Chandler & Bate's blocks, and adjacent blocks as a sensitivity.**  Chandler & Bate's
+  V = Σ_b (U_b − Ū)(U_b − Ū)ᵀ (``blocks``, the default and the verified method; invariant to the parameter
+  coordinates) assumes independent clusters.  Spatial blocks that touch are not when the residual range is
+  comparable to the block size, which is Providence's case (practical range ≥ 2 km, blocks of 2 km): the scores
+  of smooth directions (the gain a, the trends) covary across block edges, and L̂ inherits it through its
+  coupling to a.  So every interval is also reported with ``neighbours``: Var(Σ_b U_b) = Σ_b Σ_b′ Cov(U_b,
+  U_b′), and V adds the cross-products Σ_{b~b′} (U_b − Ū)(U_b′ − Ū)ᵀ of edge- and corner-adjacent blocks, a
+  block-level spatial HAC in the manner of Conley (1999) (a uniform kernel over adjacent blocks).  As Conley
+  notes, such a sum need not be positive semi-definite; this module's own choice is to add only its positive
+  part *relative to the block V* (the generalized eigenvalues of the cross-product matrix with respect to V,
+  clipped at 0: :func:`_pos_part_rel`), which is invariant to the parameter coordinates (a test rescales them)
+  and never puts V below Chandler & Bate's.  It is *not* Chandler & Bate's V under independence: the sampled
+  cross-products are noise there and their positive part is upward-biased, so it is conservative.  The
+  identifiability class rests on the wider of the two intervals (per side), so it is conservative too.  On the
+  albedo world (60 replicates; coverage of the planted L by the 95% interval), with noise of practical range
+  = the block size, the ideal sandwich (V from 300 noise draws) gives sd(L̂) = 11.4 m, matching the 12.8 m
+  spread of the estimates (the linearisation holds), while the block V gives 8.8 m in expectation: coverage
+  blocks 80%, neighbours 92%, naive 20% (median c 0.048 / 0.025); with independent noise, blocks 92%
+  (median c 1.15), neighbours 95% (median c 0.76: upward-biased by the clipped noise), naive 93%.  These
+  numbers are from the validation before this release's profile changes; see X11 in the tests for the
+  current ones.  V is centred (U_b − Ū): identical at an interior maximum (Ū = ∇l_I/G = 0), and the score
   variance where the mean score is not zero (the penalized optimum, a bound).
 * **Coordinates of H_I, V and δ: walk coordinates, not the fit's unconstrained leaves.**  The vertical
   adjustment's ratio δᵀH_Aδ/δᵀH_Iδ depends on the coordinates away from θ̂.  In the leaves, a parameter (or a
@@ -233,10 +243,15 @@ DEFAULTS = {
     "draws": 2000,
     "seed": 0,
     "delta": PSENS_DELTA,
-    "score_covariance": "neighbours",
+    "score_covariance": "blocks",   # the V of the posterior and the run's SEs: "blocks" (Chandler & Bate) or
+                                    # "neighbours" (+ adjacent blocks); both intervals are always reported
     "max_restarts": 2,       # data-only reference refits from a better profile point
-    "adj_iter": 60,          # L-BFGS iterations maximising l_A per profile point   # "blocks": Chandler & Bate's V; "neighbours": + adjacent blocks (docstring)
+    "adj_iter": 60,          # L-BFGS iterations maximising l_A per profile point
 }
+#: The score covariances (module docstring): Chandler & Bate's block V, and this module's adjacent-block variant
+SCORE_COVARIANCES = ("blocks", "neighbours")
+#: report-key suffix of each score covariance's interval, SE, c and profile
+_SUFFIX = {"blocks": "", "neighbours": "_neighbours"}
 
 REFERENCES = {
     "raue2009": "Raue, A., Kreutz, C., Maiwald, T., Bachmann, J., Schilling, M., Klingmüller, U. & Timmer, J. "
@@ -253,6 +268,8 @@ REFERENCES = {
                       "doi:10.1007/s11222-023-10366-5",
     "evans2006": "Evans, M. & Moshonov, H. (2006). Checking for prior-data conflict. Bayesian Analysis 1(4), "
                  "893–914. doi:10.1214/06-BA129",
+    "conley1999": "Conley, T.G. (1999). GMM estimation with cross sectional dependence. Journal of Econometrics "
+                  "92(1), 1–45. doi:10.1016/S0304-4076(98)00084-0",
 }
 
 #: Profiled parameters: report key → (natural key of :data:`physics.NATURAL_LEAF`, label, unit, walk scale).
@@ -328,6 +345,26 @@ def _pos_inverse(V: np.ndarray, floor: float = 1e-12) -> np.ndarray:
     w, Q = np.linalg.eigh(C)
     w = np.maximum(w, floor * max(float(w.max()), 1e-300))
     return ((Q / w) @ Q.T) / np.outer(d, d)
+
+
+def _pos_part_rel(C: np.ndarray, M: np.ndarray, rtol: float = 1e-10) -> np.ndarray:
+    """Positive part of the symmetric C relative to the positive semi-definite metric M: B·max(K, 0)·Bᵀ with
+    M = BBᵀ (B spans M's range) and C = BKBᵀ, i.e. C's eigenvalues relative to M (the generalized eigenproblem
+    Cv = λMv) clipped at 0.  For C whose range lies in M's (cross-products of the same centred cluster scores),
+    this is equivariant under any invertible reparametrisation θ → Aθ: scores U → UA⁻¹, C → A⁻ᵀCA⁻¹,
+    M → A⁻ᵀMA⁻¹, and the result → A⁻ᵀ·result·A⁻¹.  The plain eigenvalue clip of C is not (it depends on the
+    parameter coordinates).  Computed in M's unit-diagonal scaling (so the rank cut ``rtol`` is scale-free)."""
+    M, C = _sym(np.asarray(M, float)), _sym(np.asarray(C, float))
+    d = np.sqrt(np.maximum(np.diag(M), 1e-300))
+    Ms, Cs = M / np.outer(d, d), C / np.outer(d, d)
+    w, Q = np.linalg.eigh(Ms)
+    keep = w > rtol * max(float(w.max()), 1e-300)
+    if not keep.any():
+        return np.zeros_like(C)
+    B = Q[:, keep] * np.sqrt(w[keep])
+    Bp = (Q[:, keep] / np.sqrt(w[keep])).T
+    k, R = np.linalg.eigh(_sym(Bp @ Cs @ Bp.T))
+    return _sym(B @ ((R * np.maximum(k, 0.0)) @ R.T) @ B.T) * np.outer(d, d)
 
 
 def _schur(H: np.ndarray, j: int) -> float:
@@ -746,26 +783,31 @@ class _Study:
             U[g] = -gb.detach().numpy() / (2.0 * s2)
         return U
 
-    def score_cov(self, U: np.ndarray) -> np.ndarray:
-        """V from the cluster scores: Σ_b (U_b − Ū)(U_b − Ū)ᵀ (Chandler & Bate 2007), plus, with
-        ``score_covariance`` = "neighbours", the positive part of the cross-products of adjacent blocks
-        (:meth:`_adjacency`), so V is never below the independent-blocks value."""
+    def score_cov(self, U: np.ndarray, mode: str = "blocks") -> np.ndarray:
+        """V from the cluster scores.  "blocks": Σ_b (U_b − Ū)(U_b − Ū)ᵀ (Chandler & Bate 2007).  "neighbours":
+        that plus the positive part, relative to it (:func:`_pos_part_rel`, so invariant to the parameter
+        coordinates), of the cross-products of adjacent blocks Σ_{b~b′} (U_b − Ū)(U_b′ − Ū)ᵀ
+        (:meth:`_adjacency`): a block-level spatial HAC in the manner of Conley (1999) (module docstring)."""
         Ub = U - U.mean(axis=0)
         V = Ub.T @ Ub
-        if self.S.get("score_covariance") == "neighbours" and getattr(self, "adj", None) is not None:
-            Cx = Ub.T @ self.adj @ Ub
-            w, Q = np.linalg.eigh(_sym(Cx))
-            V = V + (Q * np.maximum(w, 0.0)) @ Q.T
+        if mode == "neighbours":
+            if getattr(self, "adj", None) is None:
+                raise ValueError("score_covariance 'neighbours' needs the block size (block_m)")
+            V = V + _pos_part_rel(Ub.T @ self.adj @ Ub, V)
+        elif mode != "blocks":
+            raise ValueError(f"unknown score_covariance {mode!r}; use one of {SCORE_COVARIANCES}")
         return _sym(V)
 
-    def curvature(self, H: np.ndarray, U: np.ndarray) -> dict:
-        """Σ_naive, Σ_rob, H_A (and the clipped H_I) from H_I and the cluster scores."""
+    def curvatures(self, H: np.ndarray, U: np.ndarray) -> dict:
+        """{mode: Σ_naive, Σ_rob, H_A (and the clipped H_I)} from H_I and the cluster scores, for every score
+        covariance this study computes (:attr:`modes`)."""
         Sn, Hc, wmin = _neg_def_inverse(H)
-        V = self.score_cov(U)
-        Sr = Sn @ V @ Sn
-        HA = -Hc @ _pos_inverse(V) @ Hc
-        return {"H": Hc, "Sn": _sym(Sn), "Sr": _sym(Sr), "HA": _sym(HA), "V": V, "min_eig": wmin,
-                "neg_def": bool(wmin > 1e-10)}
+        out = {}
+        for mode in self.modes:
+            V = self.score_cov(U, mode)
+            out[mode] = {"H": Hc, "Sn": _sym(Sn), "Sr": _sym(Sn @ V @ Sn), "HA": _sym(-Hc @ _pos_inverse(V) @ Hc),
+                         "V": V, "min_eig": wmin, "neg_def": bool(wmin > 1e-10)}
+        return out
 
     def ratio(self, C: dict, delta: np.ndarray) -> float | None:
         """δᵀH_Aδ / δᵀH_Iδ (None when δ carries no curvature)."""
@@ -850,6 +892,13 @@ class _Study:
         self.cl_idx = [torch.as_tensor(np.flatnonzero(inv == g)) for g in range(labels.size)]
         self.cl_sizes = [int(len(ix)) for ix in self.cl_idx]
         self.adj = self._adjacency(inv, labels.size)
+        self.modes = ["blocks"] + (["neighbours"] if self.adj is not None else [])
+        want = self.S.get("score_covariance") or "blocks"
+        if want not in SCORE_COVARIANCES:
+            raise ValueError(f"unknown score_covariance {want!r}; use one of {SCORE_COVARIANCES}")
+        if want not in self.modes:
+            self.warn("score_covariance 'neighbours' needs the block size: the block covariance is used")
+        self.primary = want if want in self.modes else "blocks"
         P = {k: _t(v) for k, v in model.leaves.items()}
         with torch.no_grad():
             phi, _ = self.terms.phi(self.terms.transform(P))
@@ -1154,7 +1203,8 @@ def _at_optimum(st: _Study, dat_model, pen: dict, keys: list[str], fold_params):
         keep = [i for i, nm in enumerate(sp0.names) if nm not in flat]
         st.main = _Space(st, dat["leaves"], [k for k in keys0 if k not in flat])
         st.th_main = st.main.pack(dat["natural"], dat["coef"])
-        st.C = st.curvature(H0[np.ix_(keep, keep)], U0[:, keep])
+        st.Cs = st.curvatures(H0[np.ix_(keep, keep)], U0[:, keep])
+        st.C = st.Cs[st.primary]
     st.timings["curvature_s"] = round(st.timings.get("curvature_s", 0.0) + time.perf_counter() - t0, 2)
     p_main = st.main.p
     if G < 2 * p_main:
@@ -1261,8 +1311,10 @@ def _row_base(st: _Study, key: str, dat: dict, pen: dict, prior_spec: dict, fold
     nat, label, unit, _ = PARAMS[key]
     row = {"key": key, "label": label, "unit": unit, "_nat": nat, "_in_model": True, "estimate_run": None,
            "estimate_data": None, "estimate_run_folds": _folds_mean(fold_params, key), "at_bound": None,
-           "held": None, "se_naive": None, "se_robust": None, "adjust_factor": None, "profile": None,
-           "ci95": None, "ci95_naive": None, "identifiability": None, "open_sides": [], "sides_at_limit": [],
+           "held": None, "se_naive": None, "se_robust": None, "se_robust_neighbours": None, "adjust_factor": None,
+           "adjust_factor_neighbours": None, "profile": None, "ci95": None, "ci95_neighbours": None,
+           "ci95_naive": None, "identifiability": None, "class_by_covariance": None, "open_sides": [],
+           "sides_at_limit": [],
            "pull": None,
            "prior": None, "prior_share_run": None, "posterior": None, "psens": None, "conflict": None,
            "notes": []}
@@ -1318,8 +1370,8 @@ def _ext(st: _Study, nat: str, dat: dict, cache: dict) -> dict:
     H = st.hessian(sp, th)
     j = sp.index(nat)
     flat = -H[j, j] <= FLAT_INFO * st.n / max(dat["mse"], 1e-300)
-    C = None if flat else st.curvature(H, st.scores(sp, th))     # no curvature to adjust with when flat
-    out = {"space": sp, "theta": th, "C": C, "j": j, "flat": bool(flat)}
+    Cs = None if flat else st.curvatures(H, st.scores(sp, th))   # no curvature to adjust with when flat
+    out = {"space": sp, "theta": th, "Cs": Cs, "j": j, "flat": bool(flat)}
     cache[nat] = out
     return out
 
@@ -1330,8 +1382,9 @@ def _dnat(space: _Space, k: str, nat_value: float) -> float:
 
 
 def _row_se(st: _Study, r: dict, dat: dict, cache: dict) -> None:
-    """Naive and sandwich SEs in natural units (delta method) and c_j = Σ_naive,jj / Σ_rob,jj."""
-    m, main, C = st.model, st.main, st.C
+    """Naive and sandwich SEs in natural units (delta method) and c_j = Σ_naive,jj / Σ_rob,jj, for each score
+    covariance (``se_robust``/``adjust_factor``: blocks; ``…_neighbours``: adjacent blocks included)."""
+    m, main, Cs = st.model, st.main, st.Cs
     if r["key"] == "v":
         iu, iv = main.index("vx"), main.index("vy")
         vx, vy = dat["natural"]["vx"], dat["natural"]["vy"]
@@ -1341,24 +1394,26 @@ def _row_se(st: _Study, r: dict, dat: dict, cache: dict) -> None:
             return
         g = np.zeros(main.p)
         g[iu], g[iv] = m.v_max * vx / nv, m.v_max * vy / nv
-        vn, vr = float(g @ C["Sn"] @ g), float(g @ C["Sr"] @ g)
+        var = {mode: (float(g @ C["Sn"] @ g), float(g @ C["Sr"] @ g)) for mode, C in Cs.items()}
     elif r["held"]:
         e = _ext(st, r["_nat"], dat, cache)
         if e["flat"]:
             r["notes"].append("no SE: the data carry no information on it")
             return
-        if e["C"]["min_eig"] < NULL_EIG:
+        if e["Cs"]["blocks"]["min_eig"] < NULL_EIG:
             r["notes"].append("no SE: at its bound it is confounded with other parameters (a direction of H_I "
                               "without curvature); its one-sided profile still applies")
             return
         j, d = e["j"], _dnat(e["space"], r["_nat"], dat["natural"][r["_nat"]])
-        vn, vr = float(e["C"]["Sn"][j, j]) * d ** 2, float(e["C"]["Sr"][j, j]) * d ** 2
+        var = {mode: (float(C["Sn"][j, j]) * d ** 2, float(C["Sr"][j, j]) * d ** 2) for mode, C in e["Cs"].items()}
     else:
         j, d = main.index(r["_nat"]), _dnat(main, r["_nat"], dat["natural"][r["_nat"]])
-        vn, vr = float(C["Sn"][j, j]) * d ** 2, float(C["Sr"][j, j]) * d ** 2
+        var = {mode: (float(C["Sn"][j, j]) * d ** 2, float(C["Sr"][j, j]) * d ** 2) for mode, C in Cs.items()}
+    vn = var["blocks"][0]
     r["se_naive"] = math.sqrt(max(vn, 0.0))
-    r["se_robust"] = math.sqrt(max(vr, 0.0))
-    r["adjust_factor"] = vn / vr if vr > 0 else None
+    for mode, (_, vr) in var.items():
+        r["se_robust" + _SUFFIX[mode]] = math.sqrt(max(vr, 0.0))
+        r["adjust_factor" + _SUFFIX[mode]] = vn / vr if vr > 0 else None
 
 
 # --------------------------------------------------------------------------- profiles
@@ -1516,25 +1571,32 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
     lam_i = max(2.0 * (st.l_hat - lval), 0.0)
     if r["held"]:
         e = _ext(st, nat, dat, cache)
-        sp, th_hat, C, flat = e["space"], e["theta"], e["C"], e["flat"]
+        sp, th_hat, Cs, flat = e["space"], e["theta"], e["Cs"], e["flat"]
     else:
-        sp, th_hat, C, flat = main, st.th_main, st.C, False
+        sp, th_hat, Cs, flat = main, st.th_main, st.Cs, False
     th = sp.pack({k: float(T[k].detach()) for k in sp.keys}, coef.numpy())
-    R = None if flat else st.ratio(C, th - th_hat)
-    lam_ipath = lam_i * R if R is not None else None
-    if R is None or flat:
-        lam_a, R_eff = lam_i, None                     # no curvature to adjust with: Λ_A = Λ_I (noted)
-    else:
-        starts = [leaves, warm.get("_adj")]
-        if not drift:
-            starts.append(_quadratic_start(st, sp, C, th_hat, nat, value, dat["leaves"]))
-        lA, adj, _ = st.max_adj(sp, C, th_hat, "v" if drift else nat, value, starts,
-                                vspec=(float(value), float(alpha.detach())) if drift else None)
-        lam_a = min(max(2.0 * (st.l_hat - lA), 0.0), lam_ipath)
-        R_eff = lam_a / lam_i if lam_i > 0 else R
-        leaves["_adj"] = adj
-    return {"value": float(value), "l": lval, "R": R_eff, "R_ipath": R, "loss": float(loss), "leaves": leaves,
-            "lam_i": lam_i, "lam_a": lam_a, "lam_a_ipath": lam_ipath}
+    out = {"value": float(value), "l": lval, "loss": float(loss), "leaves": leaves, "lam_i": lam_i,
+           "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
+    leaves["_adj"] = {}
+    warm_adj = warm.get("_adj") or {}
+    for mode in st.modes:                              # one profile of l_I, one adjustment per score covariance
+        C = None if flat else Cs[mode]
+        R = None if flat else st.ratio(C, th - th_hat)
+        lam_ipath = lam_i * R if R is not None else None
+        if R is None:
+            lam_a, R_eff = lam_i, None                 # no curvature to adjust with: Λ_A = Λ_I (noted)
+        else:
+            starts = [leaves, warm_adj.get(mode)]
+            if not drift:
+                starts.append(_quadratic_start(st, sp, C, th_hat, nat, value, dat["leaves"]))
+            lA, adj, _ = st.max_adj(sp, C, th_hat, "v" if drift else nat, value, starts,
+                                    vspec=(float(value), float(alpha.detach())) if drift else None)
+            lam_a = min(max(2.0 * (st.l_hat - lA), 0.0), lam_ipath)
+            R_eff = lam_a / lam_i if lam_i > 0 else R
+            leaves["_adj"][mode] = adj
+        out["R"][mode], out["R_ipath"][mode] = R_eff, R
+        out["lam_a"][mode], out["lam_a_ipath"][mode] = lam_a, lam_ipath
+    return out
 
 
 def _crossing(seq: list[dict], x0: float, lam0: float, key: str, thr: float = CHI2_95):
@@ -1576,32 +1638,34 @@ def _walk(st: _Study, r: dict, side: int, x_hat: float, h0: float, lo_w, hi_w, d
         p = _point(st, r, _from_walk(r, x), warm, dat, cache)
         p["x"], p["side"] = x, side
         pts.append(p)
-        progress.tick(len(pts), int(S["max_points"]), unit="profile_point", lam_adj=p["lam_a"], side=side)
-        if min(p["lam_a"], p["lam_i"]) >= stop or edge:      # both the adjusted and the naive profile crossed
+        lam_min = min(p["lam_a"].values())                  # the smallest adjusted Λ (the widest interval)
+        progress.tick(len(pts), int(S["max_points"]), unit="profile_point", lam_adj=lam_min, side=side)
+        if min(lam_min, p["lam_i"]) >= stop or edge:          # every adjusted and the naive profile crossed
             break
-        dl = p["lam_a"] - lam_prev
+        dl = lam_min - lam_prev
         f = math.sqrt(float(S["target_step"]) / dl) if dl > 1e-9 else 3.0
         h *= min(max(f, 0.5), 3.0)
-        x_prev, lam_prev, warm = x, p["lam_a"], p["leaves"]
-    # bisect a wide crossing bracket so the interval end is interpolated over a short step
-    for _ in range(int(S["refine"])):
-        seq = sorted(pts, key=lambda q: abs(q["x"] - x_hat))
-        prev = {"x": x_hat, "lam_a": 0.0, "leaves": warm0}
-        br = None
-        for q in seq:
-            if q["lam_a"] >= thr:
-                br = (prev, q)
+        x_prev, lam_prev, warm = x, lam_min, p["leaves"]
+    # bisect a wide crossing bracket (of each adjusted profile) so the interval end is interpolated over a short step
+    for mode in st.modes:
+        for _ in range(int(S["refine"])):
+            seq = sorted(pts, key=lambda q: abs(q["x"] - x_hat))
+            prev = {"x": x_hat, "lam_a": {mode: 0.0}, "leaves": warm0}
+            br = None
+            for q in seq:
+                if q["lam_a"][mode] >= thr:
+                    br = (prev, q)
+                    break
+                prev = q
+            if br is None:
                 break
-            prev = q
-        if br is None:
-            break
-        a, b = br
-        if b["lam_a"] - thr <= float(S["margin"]) and thr - a["lam_a"] <= float(S["margin"]):
-            break
-        xm = 0.5 * (a["x"] + b["x"])
-        p = _point(st, r, _from_walk(r, xm), a["leaves"], dat, cache)
-        p["x"], p["side"] = xm, side
-        pts.append(p)
+            a, b = br
+            if b["lam_a"][mode] - thr <= float(S["margin"]) and thr - a["lam_a"][mode] <= float(S["margin"]):
+                break
+            xm = 0.5 * (a["x"] + b["x"])
+            p = _point(st, r, _from_walk(r, xm), a["leaves"], dat, cache)
+            p["x"], p["side"] = xm, side
+            pts.append(p)
     pts.sort(key=lambda q: abs(q["x"] - x_hat))
     at_edge = bool(pts) and ((lo_w is not None and side < 0 and pts[-1]["x"] <= lo_w)
                              or (hi_w is not None and side > 0 and pts[-1]["x"] >= hi_w))
@@ -1639,72 +1703,123 @@ def _profile(st: _Study, r: dict, dat: dict, cache: dict) -> None:
     r["_points"] = pts
 
 
+def _crossing_mode(seq: list[dict], x0: float, mode: str, thr: float = CHI2_95):
+    """:func:`_crossing` of one adjusted profile (``lam_a[mode]``)."""
+    return _crossing([{"x": q["x"], "lam": q["lam_a"][mode]} for q in seq], x0, 0.0, "lam", thr)
+
+
+def _side_status(r: dict, name: str, res: dict, x_end) -> tuple[str, float | None]:
+    """(status, end) of one side of one profile: ("cross", end) when Λ crossed the threshold at ``x_end`` (walk
+    scale), ("limit", the limit) when it reached a physical limit (:data:`PHYSICAL_LIMITS`) without crossing,
+    ("open", None) otherwise (a search range, the walk's last point, or a side not explored)."""
+    seq = res["points"]
+    if x_end is not None:
+        return "cross", _from_walk(r, x_end)
+    if seq and res["edge"] and not res.get("beyond_limit") and name in PHYSICAL_LIMITS.get(r["key"], ()):
+        far = max(seq, key=lambda q: abs(q["x"] - r["_x_hat"]))
+        return "limit", _from_walk(r, far["x"])
+    return "open", None
+
+
+def _union_status(statuses: list[tuple[str, float | None]], name: str) -> tuple[str, float | None]:
+    """The wider of several sides' (status, end): open beats a limit, a limit beats a crossing, and of two
+    crossings the one further out (the conservative interval)."""
+    if any(st_ == "open" for st_, _ in statuses):
+        return "open", None
+    lim = [x for st_, x in statuses if st_ == "limit"]
+    if lim:
+        return "limit", (min(lim) if name == "lower" else max(lim))
+    xs = [x for _, x in statuses]
+    return "cross", (min(xs) if name == "lower" else max(xs))
+
+
+def _classify(r: dict, status: dict, flat: bool) -> tuple[str, list[str], list[str]]:
+    """(class, open sides, sides at a limit) from the explored sides' (status, end) (Raue et al. 2009)."""
+    open_sides = [n for n, (st_, _) in status.items() if st_ == "open"]
+    at_limit = [n for n, (st_, _) in status.items() if st_ == "limit"]
+    if flat:
+        return "structurally_non_identifiable", open_sides, at_limit
+    if r["held"] == "flat":
+        return "practically_non_identifiable", open_sides, at_limit
+    if open_sides:
+        return "practically_non_identifiable", open_sides, at_limit
+    if at_limit and len(at_limit) == len(status) and (r["at_bound"] or len(status) == 2):
+        return "practically_non_identifiable", open_sides, at_limit
+    return "identified", open_sides, at_limit
+
+
+_CLASS_ORDER = ("identified", "practically_non_identifiable", "structurally_non_identifiable")
+
+
 def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
     pts = r.get("_points") or []
     for p in pts:
         p["lam_i"] = max(2.0 * (best_l - p["l"]), 0.0)
-        p["lam_a"] = p["lam_i"] * (p["R"] if p["R"] is not None else 1.0)
+        p["lam_a"] = {mode: p["lam_i"] * (R if R is not None else 1.0) for mode, R in p["R"].items()}
     lam0 = max(2.0 * (best_l - st.l_hat), 0.0)          # Λ_I at θ̂ (0 unless a profile point did better)
     x_hat = r["_x_hat"]
-    ends_a, ends_i, open_sides, explored, at_limit = {}, {}, [], [], []
+    explored = list(r["_sides"])
+    status = {mode: {} for mode in st.modes}
+    status_naive = {}
     for name, res in r["_sides"].items():
         seq = sorted(res["points"], key=lambda q: abs(q["x"] - x_hat))
-        explored.append(name)
+        res["points"] = seq
         if res.get("beyond_limit"):
             r["notes"].append(f"the data-only estimate lies beyond the profile's walk limit on the {name} side (the "
                               "model is numerically saturated there): that side is not explored and stays open")
-        xa = _crossing(seq, x_hat, 0.0, "lam_a")
-        xi = _crossing(seq, x_hat, lam0, "lam_i")
-        # a side that reaches a physical limit without crossing ends the interval there (finite, not open)
-        limit = (_from_walk(r, seq[-1]["x"]) if seq and res["edge"] and name in PHYSICAL_LIMITS.get(r["key"], ())
-                 else None)
-        ends_a[name] = _from_walk(r, xa) if xa is not None else limit
-        ends_i[name] = _from_walk(r, xi) if xi is not None else limit
-        if xa is None:
-            (at_limit if limit is not None else open_sides).append(name)
+        for mode in st.modes:
+            status[mode][name] = _side_status(r, name, res, _crossing_mode(seq, x_hat, mode))
+        status_naive[name] = _side_status(r, name, res, _crossing(seq, x_hat, lam0, "lam_i"))
     bound = r["at_bound"]["bound"] if r["at_bound"] else None
 
-    def ci(ends):
-        lo = ends.get("lower") if "lower" in r["_sides"] else bound
-        hi = ends.get("upper") if "upper" in r["_sides"] else bound
+    def ci(stat):
+        lo = stat["lower"][1] if "lower" in stat else bound
+        hi = stat["upper"][1] if "upper" in stat else bound
         return [lo, hi]
 
-    r["ci95"], r["ci95_naive"] = ci(ends_a), ci(ends_i)
-    r["open_sides"] = open_sides
-    r["sides_at_limit"] = at_limit
+    for mode in st.modes:
+        r["ci95" + _SUFFIX[mode]] = ci(status[mode])
+    r["ci95_naive"] = ci(status_naive)
+    # the class rests on the wider of the adjusted intervals (conservative): per side, the union of the sides
+    union = {name: _union_status([status[mode][name] for mode in st.modes], name) for name in explored}
+    max_lam = max([min(p["lam_a"].values()) for p in pts], default=0.0)
+    flat = max_lam < FLAT_LAMBDA
+    by_mode = {mode: _classify(r, status[mode], flat)[0] for mode in st.modes}
+    cls, open_sides, at_limit = _classify(r, union, flat)
+    r["identifiability"] = cls
+    r["class_by_covariance"] = by_mode
+    r["open_sides"], r["sides_at_limit"] = open_sides, at_limit
+    if len(st.modes) > 1 and len(set(by_mode.values())) > 1:
+        r["notes"].append("the class rests on the wider of the two adjusted intervals ("
+                          + ", ".join(f"{m}: {c}" for m, c in by_mode.items()) + ")")
     if at_limit:
         r["notes"].append(f"the 95% interval reaches the physical limit on the {' and '.join(at_limit)} side: the "
                           "data do not exclude it")
-    unadj = [p for p in pts if p["R"] is None and p["lam_i"] > 0]
+    unadj = [p for p in pts if any(R is None for R in p["R"].values()) and p["lam_i"] > 0]
     if unadj:
         r["notes"].append(f"{len(unadj)} profile point(s) without curvature in the adjustment coordinates: Λ_A = Λ_I "
                           "there (unadjusted)")
-    max_lam = max([p["lam_a"] for p in pts], default=0.0)
-    if max_lam < FLAT_LAMBDA:
-        r["identifiability"] = "structurally_non_identifiable"
+    if flat:
         r["notes"].append(f"flat profile: Λ_A < {FLAT_LAMBDA} everywhere explored")
     elif r["held"] == "flat":
         # no local curvature at the optimum, yet the profile is not flat: the likelihood is not smooth there
         # (e.g. a saturated evaporative fraction, a step function of the covariates), so no interval is trusted
-        r["identifiability"] = "practically_non_identifiable"
         r["notes"].append("no local curvature at the optimum but a profile that is not flat: the likelihood is not "
                           "smooth there (e.g. a saturated evaporative fraction), so its interval is not reliable")
-    elif open_sides:
-        r["identifiability"] = "practically_non_identifiable"
-    elif at_limit and len(at_limit) == len(explored) and (r["at_bound"] or len(explored) == 2):
-        # no side crossed: the interval is the whole physical range of the parameter
-        r["identifiability"] = "practically_non_identifiable"
+    elif cls == "practically_non_identifiable" and not open_sides:
         r["notes"].append("the 95% interval spans the whole physical range")
-    else:
-        r["identifiability"] = "identified"
-    grid = sorted([(r["estimate_data"] if not r["at_bound"] else float(bound), 0.0, lam0, None, 0.0)]
-                  + [(p["value"], p["lam_a"], p["lam_i"], p["R"], p.get("lam_a_ipath")) for p in pts],
+    x0 = r["estimate_data"] if not r["at_bound"] else float(bound)
+    grid = sorted([(x0, {m: 0.0 for m in st.modes}, lam0, {m: None for m in st.modes}, {m: 0.0 for m in st.modes})]
+                  + [(p["value"], p["lam_a"], p["lam_i"], p["R"], p.get("lam_a_ipath") or {}) for p in pts],
                   key=lambda t: t[0])
-    r["profile"] = {"grid": [g[0] for g in grid], "lambda_adj": [g[1] for g in grid],
-                    "lambda_naive": [g[2] for g in grid], "ratio": [g[3] for g in grid],
-                    "lambda_adj_ipath": [g[4] for g in grid],
-                    "sides_explored": explored,
-                    "stopped_at_bound": [n for n, res in r["_sides"].items() if res["edge"]]}
+    prof = {"grid": [g[0] for g in grid], "lambda_naive": [g[2] for g in grid],
+            "sides_explored": explored, "stopped_at_bound": [n for n, res in r["_sides"].items() if res["edge"]]}
+    for mode in st.modes:
+        sfx = _SUFFIX[mode]
+        prof["lambda_adj" + sfx] = [g[1][mode] for g in grid]
+        prof["ratio" + sfx] = [g[3].get(mode) for g in grid]
+        prof["lambda_adj_ipath" + sfx] = [g[4].get(mode) for g in grid]
+    r["profile"] = prof
 
 
 # --------------------------------------------------------------------------- the run's (penalized) optimum
@@ -1730,7 +1845,7 @@ def _penalized(st: _Study, pen: dict, dat: dict, held_flat: set) -> dict:
     s2 = pen["mse"]
     Hd = 2.0 * (J.T @ J) / (st.n * st.terms.var_y)
     Hp = _sym(torch.autograd.functional.hessian(pen_fn, _t(th)).numpy())
-    V = st.score_cov(st.scores(sp, th))
+    V = st.score_cov(st.scores(sp, th), st.primary)
     k = st.n * st.terms.var_y / (2.0 * s2)
     Ainv = _pos_inverse(k * (Hd + Hp))
     Sr = _sym(Ainv @ V @ Ainv)
@@ -1753,12 +1868,14 @@ def _linear_rows(st: _Study, dat: dict, pen: dict, pen_info: dict) -> list[dict]
         i_d = st.main.index(nm)
         i_p = pen_info["space"].index(nm)
         c = st.col[j]
-        sn_d = math.sqrt(max(st.C["Sn"][i_d, i_d], 0.0)) / c
-        sr_d = math.sqrt(max(st.C["Sr"][i_d, i_d], 0.0)) / c
+        sn_d = math.sqrt(max(st.Cs["blocks"]["Sn"][i_d, i_d], 0.0)) / c
+        sr_d = math.sqrt(max(st.Cs["blocks"]["Sr"][i_d, i_d], 0.0)) / c
+        sr_nb = (math.sqrt(max(st.Cs["neighbours"]["Sr"][i_d, i_d], 0.0)) / c if "neighbours" in st.Cs else None)
         sn_p = math.sqrt(max(pen_info["Sn"][i_p, i_p], 0.0)) / c
         sr_p = math.sqrt(max(pen_info["Sr"][i_p, i_p], 0.0)) / c
         rows.append({"key": nm, "label": label, "unit": unit,
                      "estimate_data": float(dat["coef"][j]), "se_naive_data": float(sn_d), "se_robust_data": float(sr_d),
+                     "se_robust_data_neighbours": sr_nb,
                      "estimate_run": float(pen["coef"][j]), "se_naive_run": float(sn_p), "se_robust_run": float(sr_p),
                      "adjust_factor": float((sn_d / sr_d) ** 2) if sr_d > 0 else None})
     return rows
@@ -1995,7 +2112,8 @@ def _profile_posterior(st: _Study, r: dict, spec: tuple, rng) -> None:
     interpolated linearly between profile points and extrapolated linearly to Λ = 36 past the last), sampled by
     inverse CDF; power-scaling with log π and −Λ_A/2 as the components.  The profile replaces integration
     over the other parameters (no Laplace volume term)."""
-    pts = sorted([(float(r["at_bound"]["bound"]), 0.0)] + [(p["value"], p["lam_a"]) for p in r["_points"]])
+    pts = sorted([(float(r["at_bound"]["bound"]), 0.0)] + [(p["value"], p["lam_a"][st.primary])
+                                                            for p in r["_points"]])
     xs = np.array([q[0] for q in pts])
     rs = np.sqrt(np.maximum(np.array([q[1] for q in pts]), 0.0))
     lower = r["at_bound"]["side"] == "lower"
@@ -2228,13 +2346,16 @@ def identifiability_markdown(rep: dict | None) -> str:
     L = [f"Profile likelihood per parameter (Raue et al. 2009) with the independence log-likelihood adjusted for "
          f"spatial dependence (Chandler & Bate 2007; clusters = the run's {rep['n_clusters']} CV blocks of "
          f"{_g(rep['cluster'].get('block_m'))} m; n = {rep['n']:,}"
-         + (f", {_g(rep['coarse_m'])} m cells" if rep.get("coarse_m") else "") + "). 95% intervals: Λ_A ≤ 3.841. "
+         + (f", {_g(rep['coarse_m'])} m cells" if rep.get("coarse_m") else "") + "). 95% intervals: Λ_A ≤ 3.841, "
+         "adjusted with Chandler & Bate's block score covariance and, as a sensitivity, with adjacent blocks' score "
+         "cross-products added (a block-level Conley 1999 spatial HAC); the class rests on the wider of the two. "
          "c = naive / block-adjusted variance. Prior share: the penalty's share of the run objective's profile "
          "curvature. Posterior: Laplace approximation of l_A + nominal priors (Ribatet et al. 2012), not MCMC. "
          "Power-scaling (Kallioinen et al. 2024): sensitivity ≥ 0.05 flags the component. Conflict: Evans & "
          "Moshonov (2006) tail probability.", "",
-         "| parameter | run | data-only | 95% CI (adjusted) | 95% CI (naive) | c | class | prior share | pull | "
-         "posterior mean ± sd | psens prior / lik | conflict p |", "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+         "| parameter | run | data-only | 95% CI (blocks) | 95% CI (neighbours) | 95% CI (naive) | c | class | "
+         "prior share | pull | posterior mean ± sd | psens prior / lik | conflict p |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rep.get("parameters") or []:
         cls = _CLASS.get(r.get("identifiability"), r.get("identifiability"))
         if r.get("open_sides") and r.get("identifiability") != "structurally_non_identifiable":
@@ -2264,7 +2385,8 @@ def identifiability_markdown(rep: dict | None) -> str:
         cfs = ("—" if not cf else f"{_g(cf['p'], 2)}" + (" **conflict**" if cf.get("flag") else "")
                if cf.get("p") is not None else "not testable")
         L.append(f"| {r['label']} ({r['unit']}) | {_g(r.get('estimate_run'))} | {_g(r.get('estimate_data'))} | "
-                 f"{_ci(r.get('ci95'))} | {_ci(r.get('ci95_naive'))} | {_g(r.get('adjust_factor'), 2)} | {cls} | "
+                 f"{_ci(r.get('ci95'))} | {_ci(r.get('ci95_neighbours'))} | {_ci(r.get('ci95_naive'))} | "
+                 f"{_g(r.get('adjust_factor'), 2)} | {cls} | "
                  f"{_g(r.get('prior_share_run'), 2)} | {_g(r.get('pull'), 2)} | {pm} | {pss} | {cfs} |")
     lin = rep.get("linear") or []
     if lin:
