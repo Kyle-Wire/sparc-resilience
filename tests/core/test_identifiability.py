@@ -552,6 +552,11 @@ def test_coverage_of_the_adjusted_profile_interval_for_L(noise):
 SHADE_TRUE = {"L": L_TRUE, "s": 0.4, "kc": 0.15, "e0": math.log(0.35 / 0.65), "e2": 1.0}
 SHADE_BLOCK_M = 180.0
 SHADE_CHUNKS, SHADE_R = 4, 15
+#: The near-boundary world (PHYSICS_PLAN W3 review F3): the shade world with a small planted shading s = 0.01 and an
+#: evaporative fraction that does not depend on canopy (e₂ = 0), so that s often lands on its bound 0 while the
+#: curvature extended by s stays well-conditioned (it is not collinear with e₂, which then sits on its bound too) and
+#: the Self & Liang one-sided bound with the scalar c is computed.
+BOUND_TRUE = {**SHADE_TRUE, "s": 0.01, "e2": 0.0}
 
 
 def shade_world(n=36, dx=30.0, noise=0.3, noise_range=SHADE_BLOCK_M / 30.0 / 1.73, seed=0, truth=SHADE_TRUE):
@@ -728,6 +733,21 @@ def test_indefinite_or_singular_curvature_does_not_crash(case):
         assert all(x["se_robust_data"] is None and x["se_robust_run"] is None for x in rep["linear"])
     for r in rep["parameters"]:
         assert r["identifiability"] is not None, r["key"]
+
+
+def test_a_nearly_confounded_direction_with_enough_clusters_keeps_the_adjustment():
+    """36 clusters for 8 parameters, but e₂ sits just above its bound, so e₀ is nearly confounded with the gain a and
+    V is numerically singular (rank 7).  That is not the few-clusters case (G − 1 ≥ p): the adjustment stays, with
+    a warning, instead of making every parameter not assessable."""
+    grid, frame, y, coords, cl, cfg = shade_world(seed=207, truth=BOUND_TRUE)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["s"], posterior=False,
+                     settings={**FAST, "max_points": 4, "block_m": SHADE_BLOCK_M})
+    h = rep["hessian"]
+    assert rep["n_clusters"] - 1 >= h["n_parameters"] and h["adjustable"] is True
+    s = _row(rep, "s")
+    assert s["identifiability"] != "not_assessable" or s["at_bound"], s
+    assert h["v_rank"] < h["n_parameters"]                       # the case under test
+    assert any("numerically singular" in w for w in rep["warnings"])
 
 
 def test_one_cluster_is_rejected_before_any_fit(monkeypatch):

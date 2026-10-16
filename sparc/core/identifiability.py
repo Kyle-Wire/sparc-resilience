@@ -32,8 +32,8 @@ Method
    Two score covariances are computed, and every interval is reported with both (below): ``blocks``,
    Chandler & Bate's V = Σ_b (U_b − Ū)(U_b − Ū)ᵀ (``ci95``, ``se_robust``, ``adjust_factor``), and
    ``neighbours``, a sensitivity that adds adjacent blocks' cross-products (``ci95_neighbours``, …).  The
-   centred V has rank ≤ G − 1 for G clusters.  With fewer clusters than parameters (G − 1 < p, or a V of rank
-   < p) it is singular: each [Σ_rob]_jj comes from a projection onto a (G − 1)-dimensional subspace and is too
+   centred V has rank ≤ G − 1 for G clusters.  With fewer clusters than parameters (G − 1 < p) it is
+   singular: each [Σ_rob]_jj comes from a projection onto a (G − 1)-dimensional subspace and is too
    small, so c > 1 and the "adjustment" would narrow the intervals it exists to widen (on the 13-parameter city
    world with 4 blocks it called 7 of 9 parameters identified, with c up to 12 and an L interval excluding the
    planted value).  Then no adjustment is computable: no adjusted interval, sandwich SE or calibrated posterior
@@ -1386,15 +1386,22 @@ def _at_optimum(st: _Study, dat_model, pen: dict, keys: list[str], fold_params):
     # intervals it exists to widen.  Then no adjustment is computable; with fewer than two clusters per parameter V
     # is poorly estimated, and an adjusted profile is floored at the naive one (never a narrower interval)
     st.v_rank = _unit_rank(st.Cs["blocks"]["V"])
-    st.adjustable = bool(G - 1 >= p_main and st.v_rank >= p_main)
+    # the rule is the cluster count: a V of numerically lower rank with enough clusters comes from a nearly
+    # confounded direction (e.g. e₀ with the gain a when the EF's only slope sits just above its bound), whose
+    # eigenvalues are floored as before
+    st.adjustable = bool(G - 1 >= p_main)
     st.floor_naive = bool(st.adjustable and G < 2 * p_main)
+    if st.adjustable and st.v_rank < p_main:
+        st.warn(f"the cluster-score covariance V is numerically singular (rank {st.v_rank} < {p_main} parameters, with "
+                f"{G} clusters): a nearly confounded parameter combination whose scores almost vanish in every "
+                "cluster; its eigenvalues were floored")
     st.not_adjustable_reason = None
     if not st.adjustable:
         st.not_adjustable_reason = (f"the run has {G} CV blocks for {p_main} parameters, so the cluster-score "
-                                    f"covariance V (rank {st.v_rank}, at most G − 1 = {G - 1}) is singular and no "
-                                    "adjustment for spatial dependence is computable")
-        st.warn(f"{G} clusters for {p_main} parameters: the centred cluster-score covariance V has rank {st.v_rank} "
-                f"(at most G − 1 = {G - 1}) < {p_main}, so the Chandler & Bate (2007) adjustment is not computable "
+                                    f"covariance V (rank at most G − 1 = {G - 1}) is singular and no adjustment for "
+                                    "spatial dependence is computable")
+        st.warn(f"{G} clusters for {p_main} parameters: the centred cluster-score covariance V has rank at most "
+                f"G − 1 = {G - 1} < {p_main}, so the Chandler & Bate (2007) adjustment is not computable "
                 "(it would narrow the intervals): no adjusted interval, sandwich SE or calibrated posterior is "
                 "reported, the naive intervals are labelled unadjusted (too narrow under spatial dependence), and "
                 "every profiled parameter is not assessable")
