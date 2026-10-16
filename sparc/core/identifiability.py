@@ -1424,6 +1424,11 @@ def _walk(st: _Study, r: dict, side: int, x_hat: float, h0: float, lo_w, hi_w, d
     thr, stop = CHI2_95, CHI2_95 + float(S["margin"])
     pts: list[dict] = []
     warm0 = {**dat["leaves"], "_coef": list(dat["coef"])}
+    if (side > 0 and hi_w is not None and x_hat >= hi_w) or (side < 0 and lo_w is not None and x_hat <= lo_w):
+        # the estimate already lies at or beyond the walk limit on this side (e.g. a saturated evaporative
+        # fraction past its EF walk limit): there is nothing to walk on that side, and clamping to the limit
+        # would step *backwards*, onto the other side of the estimate.  The side stays open.
+        return {"points": [], "edge": True, "beyond_limit": True}
     x_prev, lam_prev, warm, h, edge = x_hat, 0.0, warm0, h0, False
     for _ in range(int(S["max_points"])):
         progress.check_cancel()
@@ -1511,6 +1516,9 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
     for name, res in r["_sides"].items():
         seq = sorted(res["points"], key=lambda q: abs(q["x"] - x_hat))
         explored.append(name)
+        if res.get("beyond_limit"):
+            r["notes"].append(f"the data-only estimate lies beyond the profile's walk limit on the {name} side (the "
+                              "model is numerically saturated there): that side is not explored and stays open")
         xa = _crossing(seq, x_hat, 0.0, "lam_a")
         xi = _crossing(seq, x_hat, lam0, "lam_i")
         # a side that reaches a physical limit without crossing ends the interval there (finite, not open)

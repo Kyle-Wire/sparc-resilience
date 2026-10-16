@@ -377,6 +377,22 @@ def test_indefinite_or_singular_curvature_does_not_crash(case):
         assert r["identifiability"] is not None, r["key"]
 
 
+def test_an_estimate_beyond_its_walk_limit_is_not_walked_backwards():
+    """Night world: the data-only evaporative fraction saturates and e₀ lands far below its walk limit
+    (logit −30).  The lower side must not be "walked" by clamping to −30, a point *above* the estimate (that
+    produced an interval excluding its own estimate); it stays open, and every profile point lies on its side."""
+    grid, frame, y, coords, cl, cfg = city_world(window="night")
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=90.0, params=["e0", "e3"], posterior=False,
+                     settings={**QUICK, "block_m": 270.0})
+    e0 = _row(rep, "e0")
+    assert e0["estimate_data"] < -ID.EF_WALK_LOGIT                        # the case under test
+    assert e0["ci95"][0] is None and "lower" in e0["open_sides"] and "beyond the profile's walk limit on the lower side" in e0["note"]
+    for r in rep["parameters"]:
+        lo, hi = r["ci95"] if r["ci95"] else (None, None)
+        est = r["estimate_data"]
+        assert (lo is None or lo <= est + 1e-9) and (hi is None or hi >= est - 1e-9), (r["key"], r["ci95"], est)
+
+
 def test_advection_drift_profile_runs_on_its_own_coordinates():
     """With advection fitted, |v| is profiled through its angle (the drift's two leaves) and gets a delta-method
     SE; the planted drift lies inside the adjusted interval."""
