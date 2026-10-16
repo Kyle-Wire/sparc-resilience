@@ -236,6 +236,25 @@ def test_power_scaling_on_conjugate_gaussian_toys():
     assert conflict["ess_prior"] > 3900 and conflict["ess_likelihood"] > 3900
 
 
+def test_pareto_smoothed_weights_match_arviz():
+    """``psislw`` is ArviZ 0.20.0's ``psislw`` for a 1-D array, and ``power_scaling_sensitivity`` uses it as
+    ArviZ's ``psens``/``_powerscale_lw`` do.  The expected numbers were computed with ArviZ 0.20.0's own
+    ``_psislw``/``_gpdfit``/``_gpinv``/``_powerscale_sens`` (extracted from the wheel, sha256 5ec4f2ec…; the port
+    agreed to the last bit on 200 random vectors)."""
+    lw, k = ID.psislw(np.linspace(-3, 2, 101) ** 3 / 10.0)
+    assert k == pytest.approx(0.056273356286089496, rel=1e-12)
+    assert lw[0] == pytest.approx(-7.200318112436957, rel=1e-12)
+    assert lw[50] == pytest.approx(-4.512818112436957, rel=1e-12)
+    assert lw[-1] == pytest.approx(-3.700318112436957, rel=1e-12)
+    assert np.exp(lw).sum() == pytest.approx(1.0, rel=1e-12)
+    x = np.sin(np.arange(300) * 0.37) * 2 + np.arange(300) / 300
+    ps = ID.power_scaling_sensitivity(x, log_prior=-0.5 * (x - 0.3) ** 2)
+    assert ps["prior"] == pytest.approx(0.12976960390917533, rel=1e-12)
+    assert ps["khat_prior"] is not None and ps["ess_prior"] > 0 and ps["likelihood"] is None
+    _, k_short = ID.psislw(np.arange(5.0))                     # a tail of ≤ 4 draws: no Pareto fit
+    assert k_short == math.inf
+
+
 def test_cjs_distance_port():
     x = np.random.default_rng(0).standard_normal(500)
     assert ID.cjs_distance(x, np.ones_like(x)) == pytest.approx(0.0, abs=1e-6)     # rounding: cumsum vs linspace

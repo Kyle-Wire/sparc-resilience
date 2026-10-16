@@ -59,10 +59,16 @@ Method
    (:meth:`PhysicsModel.prior_terms`) — not the ``prior_weight``-scaled penalty the run minimises.  L, w, the
    drift and the linear coefficients have flat priors.  Laplace approximation at the posterior mode (L-BFGS
    from θ̂), covariance −(H_A + prior Hessian)⁻¹.  **This is a Laplace approximation, not MCMC.**
-7. **Power-scaling sensitivity** (Kallioinen et al. 2024; a port of ArviZ 0.20's ``psens``): ``draws`` draws
-   from the Laplace posterior, importance log-weights (α − 1)·(component log value) for α = 1/1.01 and 1.01,
-   the cumulative Jensen–Shannon distance (:func:`cjs_distance`) on the draws and their negation (the
-   larger), sensitivity = (CJS_lower + CJS_upper)/(2·log₂ 1.01), and the weights' effective sample size.
+7. **Power-scaling sensitivity** (Kallioinen et al. 2024), computed as ArviZ 0.20.0's ``psens`` does:
+   ``draws`` draws from the Laplace posterior, importance log-weights (α − 1)·(component log value) for
+   α = 1/1.01 and 1.01, Pareto-smoothed as ArviZ's ``_powerscale_lw`` does (:func:`psislw`, a port of ArviZ's
+   ``psislw``/``_psislw``/``_gpdfit``/``_gpinv`` for a 1-D array; checked against ArviZ 0.20.0's own functions,
+   identical to the last bit on 200 random weight vectors and 50 sensitivities), the cumulative Jensen–Shannon
+   distance (:func:`cjs_distance`, ArviZ's ``_cjs_dist``) on the draws and their negation (the larger),
+   sensitivity = (CJS_lower + CJS_upper)/(2·log₂ 1.01).  Reported with each component: the smoothed weights'
+   effective sample size (the smaller of the two α) and the larger Pareto k̂ of the two tail fits (ArviZ's
+   ``psens`` computes k̂ but does not report it; a large k̂ means the importance weights, and so the
+   sensitivity, are unreliable).
    Prior sensitivity ≥ 0.05 means an informative prior, likelihood sensitivity < 0.05 a weak likelihood; both
    sensitive is Kallioinen et al.'s potential prior–data conflict, prior only a strong prior with a weak
    likelihood.
@@ -325,11 +331,12 @@ def _norm_sf2(z: float) -> float:
     return float(math.erfc(abs(z) / math.sqrt(2.0)))
 
 
-# --------------------------------------------------------------------------- power-scaling (ArviZ port)
+# --------------------------------------------------------------------------- power-scaling (ArviZ 0.20.0 psens)
 def cjs_distance(draws, weights) -> float:
     """Cumulative Jensen–Shannon distance between the empirical distribution of ``draws`` and its
-    ``weights``-reweighted version: a line-by-line port of ArviZ 0.20.0 ``arviz.stats._cjs_dist``
-    (Kallioinen et al. 2024)."""
+    ``weights``-reweighted version: a port of ArviZ 0.20.0 ``arviz.stats._cjs_dist`` (Kallioinen et al. 2024),
+    the same arithmetic, except that draws with no spread (both ECDF integrals 0) give 0 where ArviZ gives
+    NaN (0/0)."""
     draws = np.asarray(draws, float).ravel()
     weights = np.asarray(weights, float).ravel()
     order = np.argsort(draws)
@@ -353,16 +360,102 @@ def cjs_distance(draws, weights) -> float:
     return float(math.sqrt((cjs_pq + cjs_qp) / bound))
 
 
-def _psens_weights(component, delta: float) -> tuple[np.ndarray, np.ndarray]:
-    """Normalised importance weights for power-scaling a component by α = 1/(1+δ) and 1+δ: log-weights
-    (α − 1)·log component (ArviZ ``_powerscale_lw``)."""
+def _logsumexp(x: np.ndarray) -> float:
+    """log Σ exp(x), stable (ArviZ 0.20.0 ``stats_utils.logsumexp`` for a 1-D array, b = None)."""
+    m = float(np.max(x))
+    return float(np.log(np.sum(np.exp(x - m))) + m)
+
+
+def _gpdfit(ary: np.ndarray) -> tuple[float, float]:
+    """Empirical-Bayes estimate (k, σ) of the generalized Pareto distribution of the sorted 1-D ``ary``: a port of
+    ArviZ 0.20.0 ``arviz.stats.stats._gpdfit`` (same constants: prior_bs 3, prior_k 10, m_est = 30 + ⌊√n⌋)."""
+    prior_bs, prior_k = 3, 10
+    n = len(ary)
+    m_est = 30 + int(n ** 0.5)
+    b_ary = 1 - np.sqrt(m_est / (np.arange(1, m_est + 1, dtype=float) - 0.5))
+    b_ary /= prior_bs * ary[int(n / 4 + 0.5) - 1]
+    b_ary += 1 / ary[-1]
+    k_ary = np.log1p(-b_ary[:, None] * ary).mean(axis=1)
+    len_scale = n * (np.log(-(b_ary / k_ary)) - k_ary - 1)
+    weights = 1 / np.exp(len_scale - len_scale[:, None]).sum(axis=1)
+    real_idxs = weights >= 10 * np.finfo(float).eps
+    if not np.all(real_idxs):
+        weights = weights[real_idxs]
+        b_ary = b_ary[real_idxs]
+    weights /= weights.sum()
+    b_post = np.sum(b_ary * weights)
+    k_post = np.log1p(-b_post * ary).mean()
+    sigma = -k_post / b_post
+    k_post = (n * k_post + prior_k * 0.5) / (n + prior_k)
+    return float(k_post), float(sigma)
+
+
+def _gpinv(probs: np.ndarray, kappa: float, sigma: float) -> np.ndarray:
+    """Inverse generalized Pareto distribution function (ArviZ 0.20.0 ``_gpinv``)."""
+    x = np.full_like(probs, np.nan)
+    if sigma <= 0:
+        return x
+    ok = (probs > 0) & (probs < 1)
+    if np.all(ok):
+        if np.abs(kappa) < np.finfo(float).eps:
+            x = -np.log1p(-probs)
+        else:
+            x = np.expm1(-kappa * np.log1p(-probs)) / kappa
+        x *= sigma
+    else:
+        if np.abs(kappa) < np.finfo(float).eps:
+            x[ok] = -np.log1p(-probs[ok])
+        else:
+            x[ok] = np.expm1(-kappa * np.log1p(-probs[ok])) / kappa
+        x *= sigma
+        x[probs == 0] = 0
+        x[probs == 1] = np.inf if kappa >= 0 else -sigma / kappa
+    return x
+
+
+def psislw(log_weights, reff: float = 1.0) -> tuple[np.ndarray, float]:
+    """Pareto-smoothed importance sampling of one vector of log-weights: (smoothed, truncated and normalised
+    log-weights, Pareto shape estimate k̂).  A port of ArviZ 0.20.0 ``arviz.stats.psislw`` / ``_psislw`` for a
+    1-D numpy array (the xarray wrapping dropped; the tail length, the cutoff, the generalized Pareto fit and
+    the truncation at the largest raw weight are ArviZ's).  k̂ is inf when the tail has ≤ 4 draws."""
+    x = np.array(log_weights, dtype=float, copy=True).ravel()
+    n_samples = x.size
+    cutoff_ind = -int(np.ceil(min(n_samples / 5.0, 3 * (n_samples / reff) ** 0.5))) - 1
+    cutoffmin = np.log(np.finfo(float).tiny)
+    x -= np.max(x)
+    x_sort_ind = np.argsort(x)
+    xcutoff = max(x[x_sort_ind[cutoff_ind]], cutoffmin)
+    expxcutoff = np.exp(xcutoff)
+    (tailinds,) = np.where(x > xcutoff)
+    x_tail = x[tailinds]
+    tail_len = len(x_tail)
+    if tail_len <= 4:
+        k = np.inf
+    else:
+        x_tail_si = np.argsort(x_tail)
+        x_tail = np.exp(x_tail) - expxcutoff
+        k, sigma = _gpdfit(x_tail[x_tail_si])
+        if np.isfinite(k):
+            sti = np.arange(0.5, tail_len) / tail_len
+            smoothed_tail = np.log(_gpinv(sti, k, sigma) + expxcutoff)
+            x[tailinds[x_tail_si]] = smoothed_tail
+            x[x > 0] = 0
+    x -= _logsumexp(x)
+    return x, float(k)
+
+
+def _psens_weights(component, delta: float) -> tuple[np.ndarray, np.ndarray, float, float]:
+    """Normalised importance weights for power-scaling a component by α = 1/(1+δ) and 1+δ, with the Pareto k̂ of
+    each: log-weights (α − 1)·(component's log value), Pareto-smoothed (:func:`psislw`), exponentiated and
+    normalised, as ArviZ 0.20.0 ``psens`` / ``_powerscale_lw`` do."""
     c = np.asarray(component, float)
-    out = []
+    out, ks = [], []
     for alpha in (1.0 / (1.0 + delta), 1.0 + delta):
-        lw = (alpha - 1.0) * c
-        w = np.exp(lw - lw.max())
-        out.append(w / w.sum())
-    return out[0], out[1]
+        lw, k = psislw((alpha - 1.0) * c)
+        w = np.exp(lw)
+        out.append(w / np.sum(w))
+        ks.append(k)
+    return out[0], out[1], ks[0], ks[1]
 
 
 def _ess(w: np.ndarray) -> float:
@@ -372,20 +465,23 @@ def _ess(w: np.ndarray) -> float:
 def power_scaling_sensitivity(draws, log_prior=None, log_lik=None, delta: float = PSENS_DELTA) -> dict:
     """Prior and likelihood power-scaling sensitivity of one parameter's ``draws`` (ArviZ 0.20 ``psens``;
     Kallioinen et al. 2024): sensitivity = (CJS_lower + CJS_upper)/(2·log₂(1+δ)), each CJS the larger of the
-    draws' and their negation's.  ``log_prior`` / ``log_lik``: the component's log value at each draw.  Returns
-    ``{prior, likelihood, ess_prior, ess_likelihood, diagnosis}`` (None for a component not given)."""
+    draws' and their negation's, the importance weights Pareto-smoothed (:func:`psislw`) as ArviZ does.
+    ``log_prior`` / ``log_lik``: the component's log value at each draw.  Returns ``{prior, likelihood,
+    ess_prior, ess_likelihood, khat_prior, khat_likelihood, diagnosis}`` (None for a component not given; k̂ is
+    the larger of the two power-scalings')."""
     x = np.asarray(draws, float)
     denom = 2.0 * math.log2(1.0 + delta)
     out: dict = {}
     for name, comp in (("prior", log_prior), ("likelihood", log_lik)):
         if comp is None:
-            out[name], out[f"ess_{name}"] = None, None
+            out[name], out[f"ess_{name}"], out[f"khat_{name}"] = None, None, None
             continue
-        lo, hi = _psens_weights(comp, delta)
+        lo, hi, k_lo, k_hi = _psens_weights(comp, delta)
         cjs_lo = max(cjs_distance(x, lo), cjs_distance(-x, lo))
         cjs_hi = max(cjs_distance(x, hi), cjs_distance(-x, hi))
         out[name] = float((cjs_lo + cjs_hi) / denom)
         out[f"ess_{name}"] = float(min(_ess(lo), _ess(hi)))
+        out[f"khat_{name}"] = _f(max(k_lo, k_hi)) if math.isfinite(max(k_lo, k_hi)) else None
     out["diagnosis"] = psens_diagnosis(out.get("prior"), out.get("likelihood"))
     return out
 
@@ -1811,6 +1907,7 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
         ps_a = power_scaling_sensitivity(x, log_lik=lA, delta=float(st.S["delta"]))
         r["psens"] = {"prior": ps["prior"], "likelihood": ps["likelihood"], "diagnosis": ps["diagnosis"],
                       "ess": {"prior": ps["ess_prior"], "likelihood": ps["ess_likelihood"]},
+                      "khat": {"prior": ps["khat_prior"], "likelihood": ps["khat_likelihood"]},
                       "likelihood_lA": ps_a["likelihood"], "ess_likelihood_lA": ps_a["ess_likelihood"],
                       "method": "laplace"}
     st.posterior_info = {
@@ -1879,7 +1976,8 @@ def _profile_posterior(st: _Study, r: dict, spec: tuple, rng) -> None:
                               "profile (1-D, no Laplace step)"}
     ps = power_scaling_sensitivity(x, log_prior=lp, log_lik=-0.5 * lam_x, delta=float(st.S["delta"]))
     r["psens"] = {"prior": ps["prior"], "likelihood": ps["likelihood"], "diagnosis": ps["diagnosis"],
-                  "ess": {"prior": ps["ess_prior"], "likelihood": ps["ess_likelihood"]}, "method": "profile"}
+                  "ess": {"prior": ps["ess_prior"], "likelihood": ps["ess_likelihood"]},
+                  "khat": {"prior": ps["khat_prior"], "likelihood": ps["khat_likelihood"]}, "method": "profile"}
 
 
 def _conflict(r: dict, prior_spec: dict) -> None:
