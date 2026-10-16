@@ -95,7 +95,10 @@ Method
    likelihood.
 8. **Prior–data conflict** (Evans & Moshonov 2006), Gaussian approximation of the prior-predictive tail:
    z = (θ̂_data − μ)/√(sd² + SE_rob²), p = 2(1 − Φ(|z|)), conflict when p < 0.05 (κ on the log scale).  Not
-   testable when the data-only estimate sits on a fit bound or the parameter is not identified.
+   testable when the data give no interior estimate to compare (the data-only estimate sits on a fit bound, or
+   the parameter is not identified), or when the data bound it on one side only (an interior estimate with an
+   SE, but a one-sided profile, which the Gaussian tail approximation does not describe); ``conflict.reason``
+   says which.
 
 Choices beyond the plan (each argued; the simulation numbers are from the albedo world of
 ``tests/core/test_identifiability.py``: planted L = 90 m, 36 blocks of 300 m, 60 replicates per setting)
@@ -2594,8 +2597,16 @@ def _conflict(r: dict, prior_spec: dict) -> None:
     if pr["scale"] == "log" and est is not None and est > 0:
         se = se / est if se is not None else None
         est = math.log(est)
+    reason = None
+    if not r["at_bound"] and r["identifiability"] == "one_sided":
+        # an interior estimate with an SE, but bounded by the data on one side only: the Gaussian tail approximation
+        # of the prior-predictive check does not describe a likelihood that is open on one side
+        reason = ("bounded by the data on one side only (one-sided profile): the Gaussian tail approximation does not "
+                  "apply")
+    elif not r["at_bound"] and r["identifiability"] == "not_assessable":
+        reason = "no adjustment for spatial dependence is computable, so there is no block-adjusted SE to compare with"
     r["conflict"] = prior_data_conflict(est, se, pr["mean"], pr["sd"], at_bound=bool(r["at_bound"]),
-                                        identified=r["identifiability"] == "identified")
+                                        identified=r["identifiability"] == "identified", reason=reason)
     r["conflict"]["scale"] = pr["scale"]
 
 

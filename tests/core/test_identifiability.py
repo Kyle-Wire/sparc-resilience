@@ -384,6 +384,16 @@ def test_prior_data_conflict_formula_and_not_testable_cases():
     n = ID.prior_data_conflict(0.3, 0.1, 0.6, 0.3, identified=False)
     assert n["p"] is None and "not identified" in n["reason"]
     assert "standard error" in ID.prior_data_conflict(0.3, None, 0.6, 0.3)["reason"]
+    # a one-sided row has an interior estimate and an SE: not testable, but not for want of an estimate
+    row = {"prior": {"mean": 0.0, "sd": 5.0, "scale": "linear"}, "_in_model": True, "estimate_data": 2.2,
+           "se_robust": 0.4, "at_bound": None, "identifiability": "one_sided"}
+    ID._conflict(row, {})
+    cf = row["conflict"]
+    assert cf["p"] is None and "one side only" in cf["reason"] and "Gaussian tail" in cf["reason"]
+    assert "no data estimate" not in cf["reason"]
+    row2 = {**row, "identifiability": "practically_non_identifiable"}
+    ID._conflict(row2, {})
+    assert "not identified" in row2["conflict"]["reason"]
 
 
 # ---------------------------------------------------------------------------
