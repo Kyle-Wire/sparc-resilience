@@ -306,9 +306,10 @@ def _study_for(run: Path, *, L_mean=None) -> dict:
                             "lambda_naive": [0.0, 40.0, 300.0]}, "note": None}
 
     L = mean("L_m")
-    params = [row("L", "Mixing length L", "m", "identified", [0.7 * L, 1.5 * L], L, 1.05 * L, 0.05),
+    # estimate_run is the study's full-data refit, which differs from the run's own fold mean
+    params = [row("L", "Mixing length L", "m", "identified", [0.7 * L, 1.5 * L], 1.02 * L, 1.05 * L, 0.05),
               row("s", "Canopy shading strength s", "fraction of absorbed sunlight", "identified", [0.0, 0.49],
-                  mean("s"), 0.0, 0.93, {"side": "lower", "bound": 0.0})]
+                  mean("s") + 0.02, 0.0, 0.93, {"side": "lower", "bound": 0.0})]
     a = mean("a")
     lin = [{"key": "a", "label": "Source gain a", "unit": "target units per unit q", "estimate_data": a,
             "se_naive_data": 0.5, "se_robust_data": 5.0, "estimate_run": a, "se_naive_run": 0.5, "se_robust_run": 5.0,
@@ -355,7 +356,15 @@ def test_identifiability_card_shows_the_study_and_its_profiles(studied):
     assert s["ci95_neighbours"] == [0.0, 1.1 * 0.49] and s["profile"]["lambda_adj_neighbours"] == [0.0, 0.8, 4.5]
     assert s["threshold"] == pytest.approx(2.7055, abs=1e-4) and card["rows"][0]["threshold"] == pytest.approx(3.8415, abs=1e-4)
     assert card["score_covariance"] == "blocks" and card["sandwich"][0]["kind"] == "block sandwich"
-    assert "set mostly by the penalty (prior share 0.93)" in s["text"]
+    assert "full-data refit value" in s["text"] and "set mostly by the penalty (prior share 0.93; the run's own " \
+        "value, its fold mean, is" in s["text"]
+    # "Run value" is the run's own fold mean (as the parameter panel shows); the full-data refit is labelled apart
+    m = json.loads((run / "physics.json").read_text())
+    on = [f for f in m if f["a"] > 0 and not f.get("fit_warning")]
+    assert card["rows"][0]["run_value"] == pytest.approx(float(np.mean([f["L_m"] for f in on])))
+    assert s["run_value"] == pytest.approx(float(np.mean([f["s"] for f in on])))
+    panel_s = next(r for r in blob["mechanisms"]["panel"]["rows"] if r["key"] == "s")
+    assert s["run_value"] == pytest.approx(panel_s["value"]) and s["estimate_run"] == pytest.approx(s["run_value"] + 0.02)
     assert card["sandwich"] and card["sandwich"][0]["label"] == "Aerodynamic resistance r_a"
     assert card["sandwich"][0]["jackknife_se"] != card["sandwich"][0]["sandwich_se"]
     # the register on the page was recomputed with the study (the fixture's manifest has none)
@@ -365,7 +374,8 @@ def test_identifiability_card_shows_the_study_and_its_profiles(studied):
     assert data["identifiability"]["rows"][0]["profile"]["grid"] == card["rows"][0]["profile"]["grid"]
     assert "Can the data pin down the physics?" in html and "function identifiabilityCard()" in html
     assert "identifiabilityCard();" in html and 'id="identProfiles"' in html
-    for phrase in ("the block sandwich of Chandler & Bate 2007: the default", "Conley 1999",
+    for phrase in ("full-data refit", "Run value: the run's own value, the mean over its folds",
+                   "run's value (fold mean)", "the block sandwich of Chandler & Bate 2007: the default", "Conley 1999",
                    "The class rests on the wider of the two intervals", "With adjacent blocks",
                    "with adjacent blocks (sensitivity)", "Self & Liang 1987"):
         assert phrase in html, phrase
@@ -403,4 +413,5 @@ def test_identifiability_card_renders_in_chromium(studied, tmp_path):
     assert card.count("<figure>") == 2 and card.count('role="img"') == 2
     assert "0 not excluded" in card and "identified" in card and "potential prior–data conflict" in card
     assert "With adjacent blocks" in card and card.count('stroke-dasharray="1.5 3"') == 2   # one dotted curve each
+    assert "full-data refit" in card                     # under the run value (the run's fold mean)
     assert "Laplace (Gaussian) approximation" in card

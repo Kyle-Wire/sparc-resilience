@@ -141,7 +141,11 @@ def _identifiability_facts(m: dict) -> dict | None:
                               if p["class"] in ("practically_non_identifiable", "structurally_non_identifiable",
                                                 "not_assessable")
                               or (p["class"] == "one_sided" and not p.get("reaches_zero"))],
-           "penalty": [f"{sym(p)} = {_sig(p['estimate_run'])} (prior share {float(p['prior_share_run']):.2f})"
+           # the prior share describes the study's full-data refit of the run's objective, not the run's own fold
+           # mean: both are named (PHYSICS_PLAN W3 review X15)
+           "penalty": [f"{sym(p)} = {_sig(p['estimate_run'])} in the full-data refit"
+                       + (f" (run's fold mean {_sig(p['run_value'])})" if p.get("run_value") is not None else "")
+                       + f", prior share {float(p['prior_share_run']):.2f}"
                        for p in ps if p.get("prior_share_run") is not None and float(p["prior_share_run"]) > 0.5
                        and p.get("estimate_run") is not None],
            "conflict": [f"{sym(p)} (p = {float(p['conflict']['p']):.2g})" for p in ps
@@ -183,8 +187,9 @@ def _identifiability_text(f: dict) -> list[str]:
         out["pinned"] += " Bounded by the data but not excluded from zero: " + "; ".join(f["zero"]) + "."
     if f["not_identified"]:
         out["pinned"] += " Not identified by the data alone: " + "; ".join(f["not_identified"]) + "."
-    out["penalty"] = ("Set mostly by the penalty (prior share above one half): " + "; ".join(f["penalty"]) + "."
-                      if f["penalty"] else "No parameter's value is set mostly by the penalty.")
+    out["penalty"] = ("Set mostly by the penalty (prior share above one half: the penalty supplies most of the "
+                      "curvature of the run's objective, refitted on all labelled cells): " + "; ".join(f["penalty"])
+                      + "." if f["penalty"] else "No parameter's value is set mostly by the penalty.")
     cf = []
     if f["conflict"]:
         cf.append("the Evans–Moshonov check flags a prior–data conflict for " + ", ".join(f["conflict"]))

@@ -804,13 +804,14 @@ def test_identifiability_fills_the_panel_and_replaces_the_not_yet_tested_notes()
 
     assert all(M.REFERENCES[k] == ID.REFERENCES[k] for k in ID.REFERENCES)
     md = M.mechanisms_markdown(reg)
-    assert "**Identifiability from the data alone (W3).**" in md and "| Canopy shading strength s | 0.34 |" in md
+    assert "**Identifiability from the data alone (W3).**" in md and "| Canopy shading strength s | 0.34 | 0.34 |" in md
+    assert "| parameter | run (fold mean) | full-data refit |" in md
     assert "come later" not in md
 
 
 def test_non_identified_s_is_set_by_the_penalty_in_the_register_and_the_lever_statement():
     folds = _folds()
-    rep = _ident(folds, [_prow("s", cls="structurally_non_identifiable", ci=(None, None), run=0.34, data=0.9,
+    rep = _ident(folds, [_prow("s", cls="structurally_non_identifiable", ci=(None, None), run=0.36, data=0.9,
                                share=0.83),
                          _prow("e2", ci=(0.0, 2.9), run=0.5, data=0.6, sides_at_limit=("lower",))])
     reg = M.evaluate(_m(identifiability=rep), folds, _cfg())         # read from the manifest section
@@ -818,8 +819,12 @@ def test_non_identified_s_is_set_by_the_penalty_in_the_register_and_the_lever_st
     assert reg["identifiability"]["not_identified"] == ["s"]
     lever = reg["gates"]["levers"]["Pct_Canopy"]
     st = lever["statement"]
-    assert ("Canopy shading strength s: not identified by the data alone (flat profile likelihood); its run value "
-            "0.34 is set mostly by the penalty (prior share 0.83).") in st
+    # the run's own value is its fold mean (0.34); the study's full-data refit (0.36) is labelled as such (review X15)
+    assert ("Canopy shading strength s: not identified by the data alone (flat profile likelihood); its full-data "
+            "refit value 0.36 is set mostly by the penalty (prior share 0.83; the run's own value, its fold mean, is "
+            "0.34).") in st
+    assert lever["identifiability"]["s"]["run_value"] == pytest.approx(0.34)
+    assert lever["identifiability"]["s"]["estimate_run"] == 0.36 and "run value" not in st
     assert "the data alone do not exclude e₂ = 0" in st
     assert lever["not_identified"] == ["s"] and set(lever["identifiability"]) == {"s", "e2"}
     assert "identifiability" not in reg["gates"]["levers"]["Albedo"]                # no parameter of its own
@@ -843,8 +848,8 @@ def test_s_on_its_lower_bound_is_bounded_but_does_not_exclude_zero():
     p = _panel(reg, "s")["identifiability"]
     assert p["reaches_zero"] and p["class"] == "identified"
     assert p["text"] == ("Canopy shading strength s: the data alone do not exclude s = 0 (the data-only fit sits at 0; "
-                         "95% profile interval 0 to 0.49); its run value 0.335 is set mostly by the penalty (prior "
-                         "share 0.93); power-scaling flags a potential prior–data conflict (prior and likelihood both "
+                         "95% profile interval 0 to 0.49); its full-data refit value 0.335 is set mostly by the "
+                         "penalty (prior share 0.93; the run's own value, its fold mean, is 0.34); power-scaling flags a potential prior–data conflict (prior and likelihood both "
                          "sensitive).")
     assert "| identified; does not exclude 0 |" in M.mechanisms_markdown(reg)
     assert "not testable" in M.mechanisms_markdown(reg)              # the conflict check at a bound
@@ -1013,7 +1018,8 @@ def test_writeups_report_identifiability_from_the_register():
     assert "Identified by the data alone: mixing length L (200 to 420 m)." in sec
     assert "not excluded from zero: canopy shading strength s (0 to 0.49)" in sec
     assert "Not identified by the data alone: shade saturation scale κ (structurally non-identifiable)." in sec
-    assert "s = 0.335 (prior share 0.93); κ = 2.3 (prior share 0.99)" in sec
+    assert ("s = 0.335 in the full-data refit (run's fold mean 0.34), prior share 0.93; κ = 2.3 in the full-data "
+            "refit (run's fold mean 2), prior share 0.99") in sec
     assert "power-scaling flags a potential prior–data conflict for s" in sec
     assert "key parameters not identified: M1 (κ)" in sec and "against the fold jackknife" in sec
     card = model_card_markdown(m)

@@ -2718,13 +2718,15 @@ def identifiability_markdown(rep: dict | None) -> str:
          + (f", {_g(rep['coarse_m'])} m cells" if rep.get("coarse_m") else "") + "). 95% intervals: Λ_A ≤ 3.841, "
          "adjusted with Chandler & Bate's block score covariance and, as a sensitivity, with adjacent blocks' score "
          "cross-products added (a block-level Conley 1999 spatial HAC); the class rests on the wider of the two. "
-         "c = naive / block-adjusted variance. Prior share: the penalty's share of the run objective's profile "
-         "curvature. Posterior: Laplace approximation of l_A + nominal priors (Ribatet et al. 2012), not MCMC. "
+         "c = naive / block-adjusted variance. Run (fold mean): the run's own value, the mean over its folds "
+         "(physics.json). Full-data refit: this study's refit of the run's objective (penalty on) on every labelled "
+         "cell, the value the prior share and the pull describe. Prior share: the penalty's share of the run "
+         "objective's profile curvature. Posterior: Laplace approximation of l_A + nominal priors (Ribatet et al. 2012), not MCMC. "
          "Power-scaling (Kallioinen et al. 2024): sensitivity ≥ 0.05 flags the component. Conflict: Evans & "
          "Moshonov (2006) tail probability.", "",
-         "| parameter | run | data-only | 95% CI (blocks) | 95% CI (neighbours) | 95% CI (naive) | c | class | "
-         "prior share | pull | posterior mean ± sd | psens prior / lik | conflict p |",
-         "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+         "| parameter | run (fold mean) | full-data refit | data-only | 95% CI (blocks) | 95% CI (neighbours) | "
+         "95% CI (naive) | c | class | prior share | pull | posterior mean ± sd | psens prior / lik | conflict p |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for r in rep.get("parameters") or []:
         cls = _CLASS.get(r.get("identifiability"), r.get("identifiability"))
         if r.get("summary") and r.get("identifiability") not in ("identified", "structurally_non_identifiable"):
@@ -2752,13 +2754,14 @@ def identifiability_markdown(rep: dict | None) -> str:
         cfs = ("—" if not cf else f"{_g(cf['p'], 2)}" + (" **conflict**" if cf.get("flag") else "")
                if cf.get("p") is not None else "not testable")
         naive = _ci(r.get("ci95_naive")) + (f" {r['ci95_naive_label']}" if r.get("ci95_naive_label") else "")
-        L.append(f"| {r['label']} ({r['unit']}) | {_g(r.get('estimate_run'))} | {_g(r.get('estimate_data'))} | "
+        L.append(f"| {r['label']} ({r['unit']}) | {_g(r.get('estimate_run_folds'))} | {_g(r.get('estimate_run'))} | "
+                 f"{_g(r.get('estimate_data'))} | "
                  f"{_ci(r.get('ci95'))} | {_ci(r.get('ci95_neighbours'))} | {naive} | "
                  f"{_g(r.get('adjust_factor'), 2)} | {cls} | "
                  f"{_g(r.get('prior_share_run'), 2)} | {_g(r.get('pull'), 2)} | {pm} | {pss} | {cfs} |")
     lin = rep.get("linear") or []
     if lin:
-        L += ["", "| linear coefficient | data-only ± SE naive / block | run ± SE naive / "
+        L += ["", "| linear coefficient | data-only ± SE naive / block | full-data refit ± SE naive / "
               + ("adjacent-block" if (rep.get("covariance") or {}).get("used") == "neighbours" else "block")
               + " | c |",
               "|---|---|---|---|"]
@@ -2773,7 +2776,7 @@ def identifiability_markdown(rep: dict | None) -> str:
         if not x:
             continue
         fj = x.get("fold_jackknife")
-        L += ["", f"*{name} ({x['unit']}):* run {_g(x['run']['value'])} ± {_g(x['run']['se_robust'])} "
+        L += ["", f"*{name} ({x['unit']}):* full-data refit {_g(x['run']['value'])} ± {_g(x['run']['se_robust'])} "
                   f"({'adjacent-block' if used == 'neighbours' else 'block'} sandwich; naive ± "
                   f"{_g(x['run']['se_naive'])}), data-only {_g(x['data_only']['value'])} ± "
                   f"{_g(x['data_only']['se_robust'])} (block sandwich)"

@@ -470,6 +470,10 @@ DATA_DICTIONARY: dict[str, dict[str, tuple[str, str, str]]] = {
         "ci95_neighbours": ("", "", "The same interval with adjacent blocks' score cross-products added to the block "
                                     "sandwich (a Conley 1999-type spatial HAC): a sensitivity; the class rests on the "
                                     "wider of the two intervals on each side (ci95_conservative)"),
+        "estimate_run": ("", "", "The study's full-data refit of the run's objective (penalty on) on every labelled "
+                                 "cell: the value the prior share and the pull describe, not the run's own value"),
+        "estimate_run_folds": ("", "", "The run's own value: the mean over its folds with the physics term on "
+                                       "(physics.json), as the parameter panel shows it"),
         "identifiability": ("", "", "identified, practically_non_identifiable (the profile stays below 3.84 on a "
                                     "side) or structurally_non_identifiable (flat profile)"),
         "prior_share_run": ("1", "", "The penalty's share of the run objective's curvature in the parameter: above "

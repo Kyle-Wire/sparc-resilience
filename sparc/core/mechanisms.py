@@ -87,8 +87,9 @@ manifest's ``identifiability`` section; ``sparc core identifiability -r RUN_DIR`
   operational threshold of the W3 task, not a published one).
 * **Lever statements** cite, in plain words, the identifiability of the parameters their role acts through
   (:data:`ROLE_PARAMS`): whether the data alone pin the parameter down or do not exclude zero, and whether the
-  run's value is set mostly by the penalty (prior share above one half: the penalty supplies most of the run
-  objective's curvature in it).
+  study's full-data refit of the run's objective is set mostly by the penalty (prior share above one half: the
+  penalty supplies most of the run objective's curvature in it).  The run's own value is its fold mean
+  (``run_value``, as the panel shows); the refit (``estimate_run``) is always labelled "full-data refit".
 
 Everything here is a pure function of plain dicts — the manifest, the per-fold physics parameters
 (``physics.json``), the config and the identifiability report — so old run directories can be re-evaluated
@@ -1100,8 +1101,12 @@ def _ident_mismatch(ident: dict, ctx: dict) -> str | None:
     return None
 
 
-def _ident_param(p: dict, laplace_ok) -> dict:
-    """A report parameter row in the register's compact form, with its plain-words sentence."""
+def _ident_param(p: dict, laplace_ok, run_value: float | None = None) -> dict:
+    """A report parameter row in the register's compact form, with its plain-words sentence.  ``run_value``: the
+    run's own value of the parameter, the mean over its folds with the physics term on (``physics.json``, as the
+    parameter panel shows it; default the fold mean the study recorded).  ``estimate_run`` is the study's full-data
+    refit with the run's objective (penalty on), which is what the prior share and the pull describe: it is labelled
+    "full-data refit" wherever it is shown, never "run value"."""
     cls = p.get("identifiability")
     ci = p.get("ci95") if isinstance(p.get("ci95"), (list, tuple)) and len(p["ci95"]) == 2 else None
     ab = p.get("at_bound") if isinstance(p.get("at_bound"), dict) else None
@@ -1123,6 +1128,8 @@ def _ident_param(p: dict, laplace_ok) -> dict:
     out = {"key": p.get("key"), "label": p.get("label") or p.get("key"), "unit": p.get("unit") or "",
            "class": cls, "class_label": IDENT_LABELS.get(cls, cls), "identified": cls == "identified",
            "in_model": p.get("estimate_data") is not None,
+           "run_value": run_value if _num(run_value) else (p.get("estimate_run_folds")
+                                                           if _num(p.get("estimate_run_folds")) else None),
            "estimate_run": p.get("estimate_run"), "estimate_data": p.get("estimate_data"),
            "ci95": list(ci) if ci else None, "ci95_neighbours": p.get("ci95_neighbours"),
            "ci95_conservative": p.get("ci95_conservative"), "class_by_covariance": p.get("class_by_covariance"),
@@ -1193,8 +1200,11 @@ def _ident_sentence(p: dict) -> str:
     parts = [core]
     sh = p.get("prior_share_run")
     if _num(sh) and p.get("estimate_run") is not None:
-        parts.append(f"its run value {_sig(p['estimate_run'])}{u} is set mostly by the penalty (prior share "
-                     f"{float(sh):.2f})" if float(sh) > 0.5 else f"prior share {float(sh):.2f}")
+        # the prior share is the penalty's share of the run objective's curvature at the full-data refit
+        rv = p.get("run_value")
+        run = f"; the run's own value, its fold mean, is {_sig(rv)}{u}" if _num(rv) else ""
+        parts.append(f"its full-data refit value {_sig(p['estimate_run'])}{u} is set mostly by the penalty (prior "
+                     f"share {float(sh):.2f}{run})" if float(sh) > 0.5 else f"prior share {float(sh):.2f}")
     ps = p.get("psens") or {}
     if ps.get("diagnosis") in _PSENS_TEXT:
         parts.append(_PSENS_TEXT[ps["diagnosis"]])
@@ -1223,7 +1233,7 @@ def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict
     params = {}
     for p in ident.get("parameters") or []:
         if isinstance(p, dict) and p.get("key"):
-            params[p["key"]] = _ident_param(p, laplace_ok)
+            params[p["key"]] = _ident_param(p, laplace_ok, run_value=_fold_mean(ctx["folds"], p["key"]))
     linear = {}
     for r in ident.get("linear") or []:
         if isinstance(r, dict) and r.get("key"):
@@ -1293,8 +1303,8 @@ def _ident_panel(P: dict, info: dict) -> None:
         r["identifiability"] = p
         pr = r.get("prior")
         if pr and "not yet tested" in str(pr.get("note") or ""):
-            r["prior"] = {**pr, "note": "information; its influence on the run's value is the W3 prior share, pull "
-                                        "and power-scaling"}
+            r["prior"] = {**pr, "note": "information; its influence is the W3 prior share and pull (at the study's "
+                                        "full-data refit of the run's objective) and power-scaling"}
         if r.get("status_note"):
             r["status_note"] = r["status_note"].replace(
                 "whether this map identifies s is the profile-likelihood test (W3)",
@@ -1609,7 +1619,8 @@ def _gates(rows: list[dict], mechs: list[dict], ctx: dict, physics_status: str) 
                           if k in ident["params"] and ident["params"][k]["in_model"]]
                 if params:
                     entry["identifiability"] = {p["key"]: {k: p.get(k) for k in ("class", "ci95", "prior_share_run",
-                                                                                   "reaches_zero", "estimate_run")}
+                                                                                   "reaches_zero", "run_value",
+                                                                                   "estimate_run")}
                                                 for p in params}
                     entry["not_identified"] = [p["key"] for p in params if p["class"] in NOT_IDENTIFIED]
                     s += " Identifiability from the data alone (W3): " + " ".join(p["text"] for p in params)
@@ -1648,15 +1659,18 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
          f"labelled cells with every prior off (Raue et al. 2009; n = {int(block['n']) if _num(block.get('n')) else '—'}"
          + (f", {_sig(block['coarse_m'])} m cells" if _num(block.get("coarse_m")) else "") + "), "
          + covariance_text(block) + ". 95% interval: Λ_A ≤ 3.84 (2.71 one-sided for an estimate on its fit bound, "
-         "Self & Liang 1987). Prior share: the penalty's share of the run objective's curvature in the parameter. Posterior: "
+         "Self & Liang 1987). Run: the run's own value (mean over its folds, as in the parameter panel). Full-data "
+         "refit: the study's refit of the run's objective (penalty on) on all labelled cells, the value the prior "
+         "share and the pull describe. Prior share: the penalty's share of the run objective's curvature in the "
+         "parameter. Pull: (full-data refit − data-only estimate) / block-sandwich SE. Posterior: "
          "a Laplace approximation of the block-adjusted likelihood with the nominal priors (Ribatet, Cooley & "
          "Davison 2012)" + ("" if block.get("laplace_adequate") is not False else
                             ", poor for this run (the profile intervals do not rely on it)")
          + ". Power-scaling sensitivity ≥ 0.05 flags a component (Kallioinen et al. 2024). Conflict: Evans & "
          "Moshonov (2006) tail probability.", "",
-         "| parameter | run | data-only 95% CI (block sandwich) | with adjacent blocks | class | prior share | pull | "
-         "posterior mean ± sd | power-scaling prior / likelihood | conflict p |",
-         "|---|---|---|---|---|---|---|---|---|---|"]
+         "| parameter | run (fold mean) | full-data refit | data-only 95% CI (block sandwich) | with adjacent blocks | "
+         "class | prior share | pull | posterior mean ± sd | power-scaling prior / likelihood | conflict p |",
+         "|---|---|---|---|---|---|---|---|---|---|---|"]
     for p in (block.get("parameters") or {}).values():
         if not p.get("in_model"):
             continue
@@ -1674,7 +1688,8 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
         cf = p.get("conflict") or {}
         cfs = (f"{float(cf['p']):.2g}" + (" (conflict)" if cf.get("flag") else "") if _num(cf.get("p")) else
                "not testable" if cf else "—")
-        L.append(f"| {_md(p['label'])} | {_sig(p.get('estimate_run'), u)} | {_ci_text(p.get('ci95'), u)} | "
+        L.append(f"| {_md(p['label'])} | {_sig(p.get('run_value'), u)} | {_sig(p.get('estimate_run'), u)} | "
+                 f"{_ci_text(p.get('ci95'), u)} | "
                  f"{_ci_text(p.get('ci95_neighbours'), u)} | {cls} | "
                  f"{_fmt(p.get('prior_share_run'), 2)} | {_fmt(p.get('pull'), 2)} | {pm} | {_md(pss)} | {cfs} |")
     for r in ((reg or {}).get("panel") or {}).get("rows") or []:

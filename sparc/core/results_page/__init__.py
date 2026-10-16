@@ -465,7 +465,8 @@ def _identifiability_section(m: dict, run: Path, mech: dict | None) -> dict | No
         return None
     rep, _ = run_identifiability(run, m)
     prof = {r["key"]: r.get("profile") or {} for r in (rep or {}).get("parameters") or [] if isinstance(r, dict)}
-    keep = ("key", "label", "unit", "class", "class_label", "estimate_run", "estimate_data", "ci95", "ci95_neighbours",
+    keep = ("key", "label", "unit", "class", "class_label", "run_value", "estimate_run", "estimate_data", "ci95",
+            "ci95_neighbours",
             "ci95_conservative", "class_by_covariance", "threshold", "ci95_naive", "summary", "open_sides", "sides_at_limit",
             "at_bound", "reaches_zero", "prior", "prior_share_run", "pull", "posterior", "psens", "conflict", "text")
     rows = []
