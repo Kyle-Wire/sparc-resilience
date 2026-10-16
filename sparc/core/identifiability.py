@@ -810,17 +810,56 @@ class _Study:
 
 
 # --------------------------------------------------------------------------- analysis
-def _requested(params, active_keys: list[str]) -> list[str]:
-    if not params:
-        return list(active_keys)
-    out = []
-    for p in params:
-        k = ALIASES.get(str(p).strip(), str(p).strip())
-        if k not in PARAMS:
-            raise ValueError(f"unknown physics parameter {p!r}; one of {sorted(PARAMS)} (aliases {sorted(ALIASES)})")
+#: Smallest accepted ``max_points`` (profile points per side): one point cannot bracket a crossing, so a side
+#: would be called open by construction.
+MIN_MAX_POINTS = 2
+#: Smallest accepted ``draws``: power-scaling's CJS distance and the importance ESS need a sample (operational).
+MIN_DRAWS = 100
+
+
+def normalise_params(params) -> list[str] | None:
+    """Report keys of :data:`PARAMS` for the requested names (aliases resolved, duplicates dropped), or None for
+    "every active parameter".  Raises ValueError naming the unknown ones."""
+    if params is None:
+        return None
+    if isinstance(params, str):
+        params = [p for p in params.split(",")]
+    names = [str(p).strip() for p in params if str(p).strip()]
+    if not names:
+        return None
+    unknown = [p for p in names if ALIASES.get(p, p) not in PARAMS]
+    if unknown:
+        raise ValueError(f"unknown physics parameter(s) {', '.join(repr(p) for p in unknown)}; known: "
+                         f"{', '.join(PARAMS)} (aliases: {', '.join(sorted(ALIASES))})")
+    out: list[str] = []
+    for p in names:
+        k = ALIASES.get(p, p)
         if k not in out:
             out.append(k)
     return out
+
+
+def check_arguments(params=None, max_points=None, draws=None, posterior: bool = True, coarse=None) -> list[str] | None:
+    """Validate the study's arguments before any data are loaded or fitted (fail fast): known parameter names,
+    ``max_points`` ≥ :data:`MIN_MAX_POINTS`, ``draws`` ≥ :data:`MIN_DRAWS` (when the posterior is computed), a
+    positive ``coarse``.  Returns the normalised parameter keys (:func:`normalise_params`)."""
+    keys = normalise_params(params)
+    if max_points is not None:
+        if isinstance(max_points, bool) or int(max_points) != max_points or int(max_points) < MIN_MAX_POINTS:
+            raise ValueError(f"max_points must be an integer ≥ {MIN_MAX_POINTS} (profile points per side; one point "
+                             f"cannot bracket the 95% threshold), got {max_points!r}")
+    if draws is not None and posterior:
+        if isinstance(draws, bool) or int(draws) != draws or int(draws) < MIN_DRAWS:
+            raise ValueError(f"draws must be an integer ≥ {MIN_DRAWS} (Laplace-posterior draws for power-scaling), "
+                             f"got {draws!r}")
+    if coarse is not None and not (float(coarse) > 0):
+        raise ValueError(f"coarse must be a positive cell size in metres, got {coarse!r}")
+    return keys
+
+
+def _requested(params, active_keys: list[str]) -> list[str]:
+    keys = normalise_params(params)
+    return list(active_keys) if keys is None else keys
 
 
 def analyse(grid, frame, y, coords, clusters, cfg_physics: dict, *, L_init: float | None = None,
@@ -835,6 +874,8 @@ def analyse(grid, frame, y, coords, clusters, cfg_physics: dict, *, L_init: floa
     from sparc.core.physics import _torch_threads
 
     S = {**(settings or {})}
+    params = check_arguments(params, max_points if max_points is not None else S.get("max_points"),
+                             draws if draws is not None else S.get("draws"), posterior)
     if max_points is not None:
         S["max_points"] = int(max_points)
     if draws is not None:
@@ -1877,6 +1918,7 @@ def identifiability_report(run_dir, cfg=None, *, params=None, coarse: float | No
     from sparc.core.baselines import load_run
     from sparc.core.config import recorded_advection_scheme
 
+    params = check_arguments(params, max_points, draws, posterior, coarse)     # before loading or fitting anything
     run_dir = Path(run_dir)
     m0 = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
     register_cfg = copy.deepcopy(cfg.raw) if cfg is not None else None

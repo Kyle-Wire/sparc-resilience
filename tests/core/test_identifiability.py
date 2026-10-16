@@ -379,6 +379,33 @@ def test_a_parameter_on_its_fit_bound_gets_a_one_sided_profile_and_no_conflict_t
 # (f) the CLI on a small synthetic run directory
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("args, msg", [(["--draws", "0"], "draws must be an integer ≥ 100"),
+                                       (["--max-points", "0"], "max_points must be an integer ≥ 2"),
+                                       (["--max-points", "1"], "max_points must be an integer ≥ 2"),
+                                       (["--params", "L,sss,kappa"], "unknown physics parameter(s) 'sss'"),
+                                       (["--coarse", "-5"], "coarse must be a positive")])
+def test_cli_and_api_reject_bad_arguments_before_any_fit(tmp_path, monkeypatch, capsys, args, msg):
+    """--draws 0, --max-points 0 or 1 and unknown --params names fail fast with a clear message: nothing is loaded
+    or fitted (the reference fit and the run loader are booby-trapped)."""
+    from sparc.core import cli
+
+    def boom(*a, **k):
+        raise AssertionError("fitted or loaded before the arguments were checked")
+
+    monkeypatch.setattr(ID._Study, "reference", boom)
+    monkeypatch.setattr(ID, "identifiability_report", boom)
+    (tmp_path / "manifest.json").write_text("{}")
+    assert cli.main(["identifiability", "-r", str(tmp_path), *args]) == 2
+    assert msg in capsys.readouterr().err
+    grid, frame, y, coords, cl, cfg = albedo_world(n=20)
+    kw = {"--draws": "draws", "--max-points": "max_points", "--params": "params"}
+    if args[0] in kw:
+        val = args[1] if args[0] == "--params" else int(args[1])
+        with pytest.raises(ValueError, match=msg.split("(")[0].strip()):
+            ID.analyse(grid, frame, y, coords, cl, cfg, **{kw[args[0]]: val})
+    assert ID.check_arguments("L,kappa,kc", 2, 100) == ["L", "kappa_canopy"]
+    assert ID.check_arguments(None, None, 0, posterior=False) is None      # draws unused without the posterior
+
 @pytest.fixture(scope="module")
 def small_run(tmp_path_factory):
     from sparc.core.config import load_core_config

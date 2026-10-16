@@ -159,8 +159,8 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
                                                    "nonlinear parameter)")
     p_id.add_argument("--coarse", type=float, default=None, metavar="M",
                       help="refit on M-metre cells (faster; clusters stay the run's CV blocks)")
-    p_id.add_argument("--max-points", type=int, default=None, help="profile points per side (default 12)")
-    p_id.add_argument("--draws", type=int, default=None, help="Laplace-posterior draws for power-scaling (default 2000)")
+    p_id.add_argument("--max-points", type=int, default=None, help="profile points per side (default 12; at least 2)")
+    p_id.add_argument("--draws", type=int, default=None, help="Laplace-posterior draws for power-scaling (default 2000; at least 100)")
     p_id.add_argument("--seed", type=int, default=0)
     p_id.add_argument("--threads", type=int, default=0, help="torch threads (0 = the physics config's num_threads)")
     p_id.set_defaults(func=cmd_core_identifiability)
@@ -521,9 +521,14 @@ def cmd_core_mechanisms(args) -> int:
 
 @tracked_command
 def cmd_core_identifiability(args) -> int:
-    from sparc.core.identifiability import identifiability_markdown, identifiability_report
+    from sparc.core.identifiability import check_arguments, identifiability_markdown, identifiability_report
 
     run = args.run_dir_opt or args.run_dir
+    try:                                             # fail fast on bad arguments, before loading or fitting
+        params = check_arguments(args.params, args.max_points, args.draws, coarse=args.coarse or None)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     if not run or not (Path(run) / "manifest.json").is_file():
         print(f"ERROR: {run} is not a run directory (no manifest.json)", file=sys.stderr)
         return 2
@@ -536,7 +541,6 @@ def cmd_core_identifiability(args) -> int:
     settings = {}
     if args.threads:
         settings["num_threads"] = int(args.threads)
-    params = [p.strip() for p in args.params.split(",") if p.strip()] or None
     rep = identifiability_report(run, cfg, params=params, coarse=args.coarse or None, max_points=args.max_points,
                                  draws=args.draws, seed=args.seed, settings=settings)
     print(identifiability_markdown(rep))
