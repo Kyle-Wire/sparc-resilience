@@ -437,6 +437,58 @@ def test_identifiability_card_of_a_disabled_study_says_nothing_was_profiled(demo
         assert "Identifiability: W3 profile likelihood not done" in mcap and "are in the next card" not in mcap
 
 
+def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_path):
+    """PHYSICS_PLAN W3 review X18: plain-language pills for one_sided and not_assessable, "not reliable" (not numbers
+    or a diagnosis) where the posterior or power-scaling rests on a poor Laplace approximation, and Kallioinen et
+    al.'s reading in the caption (likelihood sensitivity BELOW 0.05 = weak likelihood)."""
+    from sparc.core.results_page import collect, render_page
+
+    _, cfg = demo
+    run = tmp_path / "synth_run"
+    shutil.copytree(SYNTH, run)
+    rep = _study_for(run)
+    L, s = rep["parameters"]
+    L.update(identifiability="one_sided", ci95=[L["ci95"][0], None], ci95_neighbours=[L["ci95"][0], None],
+             open_sides=["upper"], summary="L ≥ 100 m; upper side open at the end of the search range (2000)",
+             psens={"prior": 0.2, "likelihood": 0.01, "diagnosis": "weak_likelihood", "method": "laplace",
+                    "reliable": False, "reason": "the Laplace approximation is poor"},
+             posterior={"method": "laplace", "mean": 300.0, "sd": 10.0, "reliable": False,
+                        "reason": "the Laplace approximation is poor"})
+    s.update(identifiability="not_assessable", ci95=None, ci95_neighbours=None, ci95_conservative=None,
+             ci95_naive=[0.0, 0.18], ci95_naive_label="unadjusted (too narrow under spatial dependence)",
+             psens=None, posterior={"method": None, "note": "not assessable"})
+    (run / "identifiability.json").write_text(json.dumps(rep))
+    blob = collect(run, cfg)
+    rows = {r["key"]: r for r in blob["identifiability"]["rows"]}
+    assert rows["L"]["class_short"] == "one side only" and rows["L"]["posterior_unreliable"]
+    assert rows["L"]["psens"] is None and rows["L"]["posterior"] is None
+    assert rows["s"]["class_short"] == "not assessable" and rows["s"]["ci95_naive_label"].startswith("unadjusted")
+    html = render_page(blob, cfg)
+    assert "a likelihood sensitivity below" in html and "marks a weak (non-informative) likelihood" in html
+    assert "or more flags the prior (informative) or the likelihood" not in html
+    if not Path(CHROMIUM).exists():
+        pytest.skip(f"no Chromium at {CHROMIUM}")
+    page = tmp_path / "page.html"
+    page.write_text(html, encoding="utf-8")
+    res = subprocess.run([CHROMIUM, "--headless=new", "--no-sandbox", "--disable-gpu", "--enable-logging=stderr",
+                          "--v=0", "--virtual-time-budget=5000", "--dump-dom", page.as_uri()],
+                         capture_output=True, text=True, timeout=180)
+    assert res.returncode == 0 and "Uncaught" not in res.stderr, res.stderr[-2000:]
+    dom = res.stdout
+    tbl = dom[dom.index('id="tbl-ident"'):]
+    tbl = tbl[:tbl.index("</table>")]
+    trs = tbl.split("<tr>")[2:]
+    tr_L = next(t for t in trs if "Mixing length L" in t)
+    tr_s = next(t for t in trs if "Canopy shading strength s" in t)
+    assert "one side only" in tr_L and "bounded by the data on one side only: L ≥ 100 m" in tr_L
+    assert tr_L.count("<div>not reliable") == 2 and "weak likelihood" not in tr_L and "300" not in tr_L
+    assert "not assessable" in tr_s and "is too narrow" in tr_s and "0 to 0.18" in tr_s
+    cap = dom[dom.index('id="identCap"'):]
+    cap = cap[:cap.index("</p>")]
+    assert "a likelihood sensitivity below 0.05 marks a weak (non-informative) likelihood" in cap
+    assert "both at 0.05 or more is a potential prior–data conflict" in cap and '"not assessable" means' in cap
+
+
 @pytest.mark.slow
 def test_identifiability_card_renders_in_chromium(studied, tmp_path):
     """The card's script runs without a console error and fills the table and one profile chart per parameter

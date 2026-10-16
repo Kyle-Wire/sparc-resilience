@@ -138,7 +138,9 @@ def _identifiability_facts(m: dict) -> dict | None:
     out = {"status": "used", "block": ib,
            "identified": [item(p) for p in ps if p["class"] == "identified" and not p.get("reaches_zero")],
            "zero": [item(p) for p in ps if p["class"] in ("identified", "one_sided") and p.get("reaches_zero")],
-           "not_identified": [f"{_lc(p['label'])} ({p['class_label']})" for p in ps
+           "not_identified": [f"{_lc(p['label'])} ("
+                              + (f"one-sided: {p['summary']}" if p["class"] == "one_sided" and p.get("summary")
+                                 else p["class_label"]) + ")" for p in ps
                               if p["class"] in ("practically_non_identifiable", "structurally_non_identifiable",
                                                 "not_assessable")
                               or (p["class"] == "one_sided" and not p.get("reaches_zero"))],
@@ -151,8 +153,11 @@ def _identifiability_facts(m: dict) -> dict | None:
                        and p.get("estimate_run") is not None],
            "conflict": [f"{sym(p)} (p = {float(p['conflict']['p']):.2g})" for p in ps
                         if (p.get("conflict") or {}).get("flag") and p["conflict"].get("p") is not None],
-           "psens": {d: [sym(p) for p in ps if (p.get("psens") or {}).get("diagnosis") == d]
-                     for d in ("prior_data_conflict", "weak_likelihood")},
+           # Kallioinen et al. (2024)'s reading (mechanisms._psens_reading); unreliable ones are not findings
+           "psens": {d: [sym(p) for p in ps if ((p.get("psens") or {}).get("reading")
+                                                 or (p.get("psens") or {}).get("diagnosis")) == d]
+                     for d in ("prior_data_conflict", "weak_likelihood", "likelihood_only_weak")},
+           "psens_unreliable": [sym(p) for p in ps if p.get("posterior_unreliable")],
            "laplace_poor": ib.get("laplace_adequate") is False,
            "gated": [r["id"] for r in reg.get("rows") or [] if r.get("identifiability_gate")],
            "blocked": [f"{mm['id']} ({', '.join(_SYM.get(k, k) for k in mm['identifiability']['not_identified'])})"
@@ -195,8 +200,10 @@ def _identifiability_text(f: dict) -> list[str]:
              "statistic stays below 3.84 (2.71 for a one-sided bound from an estimate on its fit bound, Self & Liang "
              "1987). The priors' influence on the run is the penalty's share of the run "
              "objective's curvature in each parameter (prior share), power-scaling sensitivity of a Laplace "
-             "approximation of the calibrated posterior (Kallioinen et al. 2024; Ribatet, Cooley & Davison 2012) "
-             "and the Evans & Moshonov (2006) prior–data conflict check."}
+             "approximation of the calibrated posterior (Ribatet, Cooley & Davison 2012), read as Kallioinen et al. "
+             "(2024) do (a prior sensitivity of 0.05 or more marks an informative prior, a likelihood sensitivity "
+             "below 0.05 a weak likelihood, both at 0.05 or more a potential prior–data conflict), and the Evans & "
+             "Moshonov (2006) prior–data conflict check."}
     out["pinned"] = ("Identified by the data alone: " + "; ".join(f["identified"]) + "." if f["identified"] else
                      "No physics parameter is identified away from its limits by the data alone.")
     if f["zero"]:
@@ -215,12 +222,18 @@ def _identifiability_text(f: dict) -> list[str]:
     if f["psens"]["prior_data_conflict"]:
         cf.append("power-scaling flags a potential prior–data conflict for " + ", ".join(f["psens"]["prior_data_conflict"]))
     if f["psens"]["weak_likelihood"]:
-        cf.append("power-scaling flags a strong prior with a weak likelihood for " + ", ".join(f["psens"]["weak_likelihood"]))
+        cf.append("power-scaling flags an informative prior with a weak likelihood (prior sensitivity 0.05 or more, "
+                  "likelihood sensitivity below 0.05) for " + ", ".join(f["psens"]["weak_likelihood"]))
+    if f["psens"]["likelihood_only_weak"]:
+        cf.append("power-scaling flags a weak likelihood (likelihood sensitivity below 0.05) for "
+                  + ", ".join(f["psens"]["likelihood_only_weak"]))
     # power-scaling that rests on a poor Laplace approximation is not in the register (flagged unreliable by the
     # study), so the flags listed here are reliable ones (e.g. a 1-D profile posterior's); say what was left out
     out["conflict"] = "Conflict: " + "; ".join(cf) + (
-        " (power-scaling of the Laplace posterior is not reported: the Laplace approximation is poor for this run; "
-        "the profile intervals do not rely on it)" if f["laplace_poor"] else "") + "."
+        " (power-scaling of the Laplace posterior is not reliable and not reported"
+        + (f" for {', '.join(f['psens_unreliable'])}" if f["psens_unreliable"] else "")
+        + ": the Laplace approximation is poor for this run; the profile intervals do not rely on it)"
+        if f["laplace_poor"] else "") + "."
     gate = ("A mechanism signature cannot be Supported while a key parameter is not identified by the data alone"
             + (f" (key parameters not identified: {', '.join(f['blocked'])})" if f["blocked"] else "")
             + (f"; downgraded to Not testable: {', '.join(f['gated'])}" if f["gated"] else "") + ".")

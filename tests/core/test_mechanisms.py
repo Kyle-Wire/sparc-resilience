@@ -849,8 +849,8 @@ def test_s_on_its_lower_bound_is_bounded_but_does_not_exclude_zero():
     assert p["reaches_zero"] and p["class"] == "identified"
     assert p["text"] == ("Canopy shading strength s: the data alone do not exclude s = 0 (the data-only fit sits at 0; "
                          "95% profile interval 0 to 0.49); its full-data refit value 0.335 is set mostly by the "
-                         "penalty (prior share 0.93; the run's own value, its fold mean, is 0.34); power-scaling flags a potential prior–data conflict (prior and likelihood both "
-                         "sensitive).")
+                         "penalty (prior share 0.93; the run's own value, its fold mean, is 0.34); power-scaling flags a potential prior–data conflict (prior and likelihood "
+                         "sensitivity both 0.05 or more).")
     assert "| identified; does not exclude 0 |" in M.mechanisms_markdown(reg)
     assert "not testable" in M.mechanisms_markdown(reg)              # the conflict check at a bound
 
@@ -945,7 +945,8 @@ def test_lever_text_flags_a_conflict_and_a_poor_laplace_approximation():
     assert "identified by the data alone (data-only estimate 0.75; 95% profile interval 0.6 to 0.9); prior share 0.20" in st
     # power-scaling of a poor Laplace approximation is not presented as a finding (PHYSICS_PLAN W3 review X10)
     assert "weak likelihood" not in st
-    assert "its posterior summaries and power-scaling are not reported (they rest on a Laplace approximation that is poor" in st
+    assert ("its posterior summaries and power-scaling are not reliable, so they are not reported (they rest on a "
+            "Laplace approximation that is poor") in st
     assert "the prior–data conflict check finds a conflict (p = 0.012)" in st
 
 
@@ -1068,6 +1069,69 @@ def test_study_warnings_appear_in_the_register_and_both_writeups():
     m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=rep)
     assert "The study raised 1 warning, which qualify these results" in methods_markdown(m)
     assert "- **Warnings.**" in model_card_markdown(m) and ws[0] in M.mechanisms_markdown(m["mechanisms"])
+
+
+@pytest.mark.parametrize("prior, lik, reading, phrase", [
+    (0.20, 0.30, "prior_data_conflict", "power-scaling flags a potential prior–data conflict"),
+    (0.20, 0.01, "weak_likelihood", "power-scaling flags an informative prior with a weak likelihood"),
+    (0.01, 0.02, "likelihood_only_weak", "power-scaling flags a weak likelihood (likelihood sensitivity below 0.05)"),
+    (0.01, 0.30, None, None),
+])
+def test_power_scaling_is_read_as_kallioinen_et_al_do(prior, lik, reading, phrase):
+    """PHYSICS_PLAN W3 review X18: a prior sensitivity ≥ 0.05 marks an informative prior, a likelihood sensitivity
+    BELOW 0.05 a weak likelihood, both ≥ 0.05 a potential prior–data conflict (Kallioinen et al. 2024)."""
+    from sparc.core.identifiability import psens_diagnosis
+    from sparc.core.writeup import methods_markdown
+
+    folds = _folds()
+    ps = {"prior": prior, "likelihood": lik, "diagnosis": psens_diagnosis(prior, lik), "method": "laplace"}
+    rep = _ident(folds, [_prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.2, psens=ps)])
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    p = _panel(reg, "s")["identifiability"]
+    assert p["psens"]["reading"] == reading
+    assert p["psens"]["prior_informative"] == (prior >= 0.05) and p["psens"]["likelihood_weak"] == (lik < 0.05)
+    md = M.mechanisms_markdown(reg)
+    assert "a likelihood sensitivity below 0.05 marks a weak (non-informative) likelihood" in md
+    assert "≥ 0.05 flags a component" not in md
+    sec = methods_markdown(m).split("## Identifiability", 1)[1].split("\n## ", 1)[0]
+    assert "a likelihood sensitivity below 0.05 a weak likelihood" in sec
+    if phrase:
+        assert phrase in p["text"] and phrase.split(" (")[0] in sec
+    else:
+        assert "power-scaling flags" not in p["text"] and "power-scaling flags" not in sec
+
+
+def test_new_classes_and_unreliable_cells_have_plain_labels():
+    """PHYSICS_PLAN W3 review X18: one_sided and not_assessable get plain labels (and short pill labels), and a
+    posterior or power-scaling that rests on a poor Laplace approximation reads "not reliable", not as a finding."""
+    folds = _folds()
+    one = _prow("L", cls="one_sided", ci=(200.0, None), run=256.0, data=270.0, open_sides=("upper",))
+    one["summary"] = "L ≥ 200 m; upper side open at the end of the search range (2000)"
+    na = _prow("a1", cls="not_assessable", ci=None, run=0.3, data=0.0, at_bound={"side": "lower", "bound": 0.0})
+    na.update(ci95_naive=[0.0, 0.18], ci95_naive_label="unadjusted (too narrow under spatial dependence)")
+    bad = _prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.2,
+                psens={"prior": 0.2, "likelihood": 0.01, "diagnosis": "weak_likelihood", "method": "laplace",
+                       "reliable": False, "reason": "the Laplace approximation is poor"})
+    bad["posterior"].update(reliable=False, reason="the Laplace approximation is poor")
+    rep = _ident(folds, [one, na, bad])
+    reg = M.evaluate(_m(), folds, _cfg(), identifiability=rep)
+    ps = reg["identifiability"]["parameters"]
+    assert ps["L"]["class_label"] == "one-sided: bounded by the data on one side only"
+    assert ps["L"]["class_short"] == "one side only" and ps["a1"]["class_short"] == "not assessable"
+    assert ps["a1"]["class_label"].startswith("not assessable: on its fit bound")
+    assert ps["a1"]["ci95_naive_label"].startswith("unadjusted")
+    assert ps["s"]["posterior"] is None and ps["s"]["psens"] is None and ps["s"]["posterior_unreliable"]
+    assert "weak likelihood" not in ps["s"]["text"] and "not reliable" in ps["s"]["text"]
+    md = M.mechanisms_markdown(reg)
+    md = md[md.index("**Identifiability from the data alone"):]           # the study's table, not the panel
+    line = next(ln for ln in md.splitlines() if ln.startswith("| Canopy shading strength s"))
+    assert line.count("not reliable (Laplace poor)") == 2 and "weak likelihood" not in line
+    line = next(ln for ln in md.splitlines() if ln.startswith("| Mixing length L"))
+    assert "one-sided: bounded by the data on one side only (L ≥ 200 m; upper side open" in line
+    line = next(ln for ln in md.splitlines() if ln.startswith("| Impervious heat storage"))
+    assert "not assessable: on its fit bound" in line and "unadjusted one-sided bound 0 to 0.18" in line
 
 
 def test_writeups_report_identifiability_from_the_register():

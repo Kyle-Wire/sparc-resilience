@@ -241,9 +241,21 @@ ROLE_PARAMS = {"canopy": ("s", "kappa_canopy", "shade_c0", "shade_width", "e2"),
 #: non-identifiable on the other (``one_sided``), and one whose adjustment is not computable is not assessable
 NOT_IDENTIFIED = ("practically_non_identifiable", "structurally_non_identifiable", "not_assessable", "one_sided")
 IDENT_LABELS = {"identified": "identified", "practically_non_identifiable": "practically non-identifiable",
-                "one_sided": "one-sided (bounded on one side only)",
-                "not_assessable": "not assessable (no adjustment for spatial dependence computable at its bound)",
+                "one_sided": "one-sided: bounded by the data on one side only",
+                "not_assessable": "not assessable: on its fit bound, where no adjustment for spatial dependence is "
+                                  "computable",
                 "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted"}
+#: Short plain-language labels (the results card's pills)
+IDENT_SHORT = {"identified": "identified", "one_sided": "one side only", "practically_non_identifiable": "not identified",
+               "structurally_non_identifiable": "not identified (flat)", "not_assessable": "not assessable",
+               "not_fitted": "not fitted"}
+#: Kallioinen et al. (2024)'s reading of power-scaling sensitivity (threshold 0.05, as ArviZ / priorsense): a prior
+#: sensitivity ≥ 0.05 marks an informative prior, a likelihood sensitivity < 0.05 a weak (non-informative)
+#: likelihood, and both ≥ 0.05 a potential prior–data conflict.
+PSENS_THRESHOLD = 0.05
+PSENS_READING = ("a prior sensitivity of 0.05 or more marks an informative prior; a likelihood sensitivity below "
+                 "0.05 marks a weak (non-informative) likelihood; both at 0.05 or more is a potential prior–data "
+                 "conflict (Kallioinen et al. 2024)")
 #: Parameters whose physical lower limit is 0 (a fraction, a non-negative slope, sink or drift;
 #: ``identifiability.PHYSICAL_LIMITS``): an interval that reaches 0 means the data do not exclude "no effect".
 _ZERO_LIMIT = ("s", "a1", "a1n", "e1", "e2", "e3", "w", "v")
@@ -252,10 +264,13 @@ _SYM = {"L": "L", "v": "|v|", "s": "s", "kappa_canopy": "κ", "shade_c0": "c₀"
 #: report key → parameter-panel row key, where they differ (the panel shows σ(e₀), the report e₀ itself)
 _PANEL_KEY = {"e0": "ef0"}
 _PSENS_TEXT = {"prior_data_conflict": "power-scaling flags a potential prior–data conflict (prior and likelihood "
-                                      "both sensitive)",
-               "weak_likelihood": "power-scaling flags a strong prior with a weak likelihood (prior sensitive only)"}
+                                      "sensitivity both 0.05 or more)",
+               "weak_likelihood": "power-scaling flags an informative prior with a weak likelihood (prior sensitivity "
+                                  "0.05 or more, likelihood sensitivity below 0.05)",
+               "likelihood_only_weak": "power-scaling flags a weak likelihood (likelihood sensitivity below 0.05)"}
 _PSENS_SHORT = {"prior_data_conflict": "potential prior–data conflict",
-                "weak_likelihood": "strong prior, weak likelihood"}
+                "weak_likelihood": "informative prior, weak likelihood",
+                "likelihood_only_weak": "weak likelihood"}
 #: The register's note on a study that profiled nothing (``status: "disabled"``)
 DISABLED_NOTE = ("the identifiability study profiled nothing: its data-only physics fit (every prior off) is "
                  "anti-physical (gain a ≤ 0), so no parameter's identifiability, prior share or prior sensitivity was "
@@ -1130,7 +1145,8 @@ def _ident_param(p: dict, laplace_ok, run_value: float | None = None) -> dict:
 
     post_bad, ps_bad = (unreliable(post) if post else None), (unreliable(ps) if ps else None)
     out = {"key": p.get("key"), "label": p.get("label") or p.get("key"), "unit": p.get("unit") or "",
-           "class": cls, "class_label": IDENT_LABELS.get(cls, cls), "identified": cls == "identified",
+           "class": cls, "class_label": IDENT_LABELS.get(cls, cls), "class_short": IDENT_SHORT.get(cls, cls),
+           "identified": cls == "identified",
            "in_model": p.get("estimate_data") is not None,
            "run_value": run_value if _num(run_value) else (p.get("estimate_run_folds")
                                                            if _num(p.get("estimate_run_folds")) else None),
@@ -1138,7 +1154,7 @@ def _ident_param(p: dict, laplace_ok, run_value: float | None = None) -> dict:
            "ci95": list(ci) if ci else None, "ci95_neighbours": p.get("ci95_neighbours"),
            "ci95_conservative": p.get("ci95_conservative"), "class_by_covariance": p.get("class_by_covariance"),
            "threshold": p.get("threshold"),
-           "ci95_naive": p.get("ci95_naive"),
+           "ci95_naive": p.get("ci95_naive"), "ci95_naive_label": p.get("ci95_naive_label"),
            "open_sides": list(p.get("open_sides") or []), "sides_at_limit": list(p.get("sides_at_limit") or []),
            "summary": p.get("summary"),
            "at_bound": ab, "held": p.get("held"), "reaches_zero": bool(zero),
@@ -1153,8 +1169,23 @@ def _ident_param(p: dict, laplace_ok, run_value: float | None = None) -> dict:
            "conflict": ({k: cf.get(k) for k in ("p", "z", "flag", "reason")} if cf else None)}
     if out["psens"] is not None:
         out["psens"]["laplace_poor"] = False
+        out["psens"].update(_psens_reading(out["psens"]))
     out["text"] = _ident_sentence(out)
     return out
+
+
+def _psens_reading(ps: dict) -> dict:
+    """Kallioinen et al. (2024)'s reading of one parameter's power-scaling sensitivities (:data:`PSENS_READING`):
+    ``prior_informative`` (prior ≥ 0.05), ``likelihood_weak`` (likelihood < 0.05) and ``reading``, the flag to
+    report: the study's diagnosis (``prior_data_conflict``, ``weak_likelihood`` = informative prior with a weak
+    likelihood), else ``likelihood_only_weak`` when the likelihood alone is below 0.05, else None."""
+    pr, lk = ps.get("prior"), ps.get("likelihood")
+    pi = bool(_num(pr) and float(pr) >= PSENS_THRESHOLD)
+    lw = bool(_num(lk) and float(lk) < PSENS_THRESHOLD)
+    reading = ps.get("diagnosis") if ps.get("diagnosis") in ("prior_data_conflict", "weak_likelihood") else (
+        "likelihood_only_weak" if lw else None)
+    return {"prior_informative": pi if _num(pr) else None, "likelihood_weak": lw if _num(lk) else None,
+            "reading": reading}
 
 
 def _ident_sentence(p: dict) -> str:
@@ -1210,11 +1241,11 @@ def _ident_sentence(p: dict) -> str:
         parts.append(f"its full-data refit value {_sig(p['estimate_run'])}{u} is set mostly by the penalty (prior "
                      f"share {float(sh):.2f}{run})" if float(sh) > 0.5 else f"prior share {float(sh):.2f}")
     ps = p.get("psens") or {}
-    if ps.get("diagnosis") in _PSENS_TEXT:
-        parts.append(_PSENS_TEXT[ps["diagnosis"]])
+    if ps.get("reading") in _PSENS_TEXT:
+        parts.append(_PSENS_TEXT[ps["reading"]])
     elif p.get("posterior_unreliable"):
-        parts.append("its posterior summaries and power-scaling are not reported (they rest on a Laplace "
-                     "approximation that is poor for this run)")
+        parts.append("its posterior summaries and power-scaling are not reliable, so they are not reported (they rest "
+                     "on a Laplace approximation that is poor for this run)")
     cf = p.get("conflict") or {}
     if cf.get("flag") and _num(cf.get("p")):
         parts.append(f"the prior–data conflict check finds a conflict (p = {float(cf['p']):.2g})")
@@ -1679,8 +1710,8 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
          "a Laplace approximation of the block-adjusted likelihood with the nominal priors (Ribatet, Cooley & "
          "Davison 2012)" + ("" if block.get("laplace_adequate") is not False else
                             ", poor for this run (the profile intervals do not rely on it)")
-         + ". Power-scaling sensitivity ≥ 0.05 flags a component (Kallioinen et al. 2024). Conflict: Evans & "
-         "Moshonov (2006) tail probability.", "",
+         + ". Power-scaling: " + PSENS_READING + "; \"not reliable\" where it rests on a poor Laplace "
+         "approximation. Conflict: Evans & Moshonov (2006) tail probability.", "",
          "| parameter | run (fold mean) | full-data refit | data-only 95% CI (block sandwich) | with adjacent blocks | "
          "class | prior share | pull | posterior mean ± sd | power-scaling prior / likelihood | conflict p |",
          "|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -1689,15 +1720,21 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
             continue
         u = p["unit"] if p["unit"] in ("m", "W/m²") else ""
         cls = p.get("class_label") or "—"
-        if p.get("open_sides") and p.get("class") != "structurally_non_identifiable":
+        if p.get("open_sides") and p.get("class") not in ("structurally_non_identifiable", "one_sided"):
             cls += f" (open: {', '.join(p['open_sides'])})"
+        elif p.get("class") == "one_sided" and p.get("summary"):
+            cls += f" ({p['summary']})"
+        elif p.get("class") == "not_assessable" and p.get("ci95_naive"):
+            cls += (f" (unadjusted one-sided bound {_ci_text(p['ci95_naive'], u)}, too narrow under spatial "
+                    "dependence)")
         if p.get("reaches_zero"):
             cls += "; does not exclude 0"
         post = p.get("posterior") or {}
-        pm = f"{_sig(post.get('mean'))} ± {_sig(post.get('sd'))}" if post.get("mean") is not None else "—"
+        bad = "not reliable (Laplace poor)" if p.get("posterior_unreliable") else "—"
+        pm = f"{_sig(post.get('mean'))} ± {_sig(post.get('sd'))}" if post.get("mean") is not None else bad
         ps = p.get("psens") or {}
         pss = (f"{_fmt(ps.get('prior'), 3)} / {_fmt(ps.get('likelihood'), 3)}"
-               + (f": {_PSENS_SHORT[ps['diagnosis']]}" if ps.get("diagnosis") in _PSENS_SHORT else "")) if ps else "—"
+               + (f": {_PSENS_SHORT[ps['reading']]}" if ps.get("reading") in _PSENS_SHORT else "")) if ps else bad
         cf = p.get("conflict") or {}
         cfs = (f"{float(cf['p']):.2g}" + (" (conflict)" if cf.get("flag") else "") if _num(cf.get("p")) else
                "not testable" if cf else "—")

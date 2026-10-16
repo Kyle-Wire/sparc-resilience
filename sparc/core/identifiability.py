@@ -366,8 +366,12 @@ _NEEDS = {"s": "canopy", "kappa_canopy": "canopy", "shade_c0": "canopy", "shade_
 _LINEAR_LABELS = {"a": ("Source gain a", "target units per unit q"), "b": ("Offset b", "target units"),
                   "gamma": ("Elevation coefficient γ", "target units per m"),
                   "beta_x": ("Trend βx", "target units per m"), "beta_y": ("Trend βy", "target units per m")}
-DIAGNOSIS_TEXT = {"prior_data_conflict": "potential prior–data conflict (prior and likelihood sensitive)",
-                  "weak_likelihood": "potential strong prior and weak likelihood (prior sensitive only)",
+#: Kallioinen et al. (2024)'s reading: prior ≥ 0.05 = informative prior, likelihood < 0.05 = weak likelihood, both
+#: ≥ 0.05 = potential prior–data conflict.  ``weak_likelihood`` (priorsense's "strong prior / weak likelihood") is an
+#: informative prior with a weak likelihood; a likelihood below 0.05 with a prior below it is still a weak likelihood
+#: (the markdown says so; the diagnosis stays "none", as in priorsense).
+DIAGNOSIS_TEXT = {"prior_data_conflict": "potential prior–data conflict (prior and likelihood ≥ 0.05)",
+                  "weak_likelihood": "informative prior, weak likelihood (prior ≥ 0.05, likelihood < 0.05)",
                   "none": "—"}
 
 
@@ -2682,9 +2686,10 @@ def _register_with(run_dir: Path, config_raw: dict | None, rep: dict) -> dict | 
 
 
 # --------------------------------------------------------------------------- markdown
-_CLASS = {"identified": "identified", "one_sided": "one-sided", "practically_non_identifiable":
+_CLASS = {"identified": "identified", "one_sided": "one-sided (bounded on one side only)", "practically_non_identifiable":
           "practically non-identifiable", "structurally_non_identifiable": "structurally non-identifiable",
-          "not_fitted": "not fitted", "not_assessable": "not assessable", None: "—"}
+          "not_fitted": "not fitted", "not_assessable": "not assessable (no adjustment computable at its bound)",
+          None: "—"}
 
 
 def _g(v, nd=3) -> str:
@@ -2722,8 +2727,9 @@ def identifiability_markdown(rep: dict | None) -> str:
          "(physics.json). Full-data refit: this study's refit of the run's objective (penalty on) on every labelled "
          "cell, the value the prior share and the pull describe. Prior share: the penalty's share of the run "
          "objective's profile curvature. Posterior: Laplace approximation of l_A + nominal priors (Ribatet et al. 2012), not MCMC. "
-         "Power-scaling (Kallioinen et al. 2024): sensitivity ≥ 0.05 flags the component. Conflict: Evans & "
-         "Moshonov (2006) tail probability.", "",
+         "Power-scaling (Kallioinen et al. 2024): a prior sensitivity ≥ 0.05 marks an informative prior, a likelihood "
+         "sensitivity < 0.05 a weak likelihood, both ≥ 0.05 a potential prior–data conflict; 'not reliable' where "
+         "it rests on a poor Laplace approximation. Conflict: Evans & Moshonov (2006) tail probability.", "",
          "| parameter | run (fold mean) | full-data refit | data-only | 95% CI (blocks) | 95% CI (neighbours) | "
          "95% CI (naive) | c | class | prior share | pull | posterior mean ± sd | psens prior / lik | conflict p |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
@@ -2738,18 +2744,21 @@ def identifiability_markdown(rep: dict | None) -> str:
         if post.get("mean") is None:
             pm = "—"
         elif post.get("reliable") is False:
-            pm = "unreliable (Laplace poor)"          # flagged in the JSON, not a finding
+            pm = "not reliable (Laplace poor)"        # flagged in the JSON, not a finding
         else:
             pm = f"{_g(post.get('mean'))} ± {_g(post.get('sd'))}{tag}"
         ps = r.get("psens") or {}
         if not ps:
             pss = "—"
         elif ps.get("reliable") is False:
-            pss = "unreliable (Laplace poor)"
+            pss = "not reliable (Laplace poor)"
         else:
+            lw = ps.get("diagnosis") in (None, "none") and _f(ps.get("likelihood")) is not None \
+                and float(ps["likelihood"]) < PSENS_THRESHOLD
             pss = (f"{_g(ps.get('prior'), 2)} / {_g(ps.get('likelihood'), 2)}"
                    + (f" ({DIAGNOSIS_TEXT.get(ps.get('diagnosis'), ps.get('diagnosis'))})"
-                      if ps.get("diagnosis") not in (None, "none") else "") + tag)
+                      if ps.get("diagnosis") not in (None, "none") else
+                      " (weak likelihood: < 0.05)" if lw else "") + tag)
         cf = r.get("conflict") or {}
         cfs = ("—" if not cf else f"{_g(cf['p'], 2)}" + (" **conflict**" if cf.get("flag") else "")
                if cf.get("p") is not None else "not testable")
@@ -2788,7 +2797,7 @@ def identifiability_markdown(rep: dict | None) -> str:
                   f"draws for exp(l_A + log prior)" + ("" if post.get("laplace_adequate") else
                                                        " — poor: the Laplace posterior summaries and power-scaling"
                                                        + (f" ({', '.join(lk)})" if lk else "")
-                                                       + " are flagged unreliable and not reported; the profile "
+                                                       + " are not reliable (flagged) and not reported; the profile "
                                                          "intervals do not rely on it")
               + (f". The Laplace step is conditional on {', '.join(post['conditional_on'])} held fixed"
                  if post.get("conditional_on") else "")

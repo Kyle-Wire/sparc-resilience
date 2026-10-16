@@ -877,7 +877,7 @@ def test_a_poor_laplace_approximation_flags_its_summaries_unreliable(monkeypatch
         post["conditional_on"]
     md = ID.identifiability_markdown(rep)
     line = next(ln for ln in md.splitlines() if ln.startswith("| Mixing length"))
-    assert line.count("unreliable (Laplace poor)") == 2
+    assert line.count("not reliable (Laplace poor)") == 2
     assert "(1-D profile)" in next(ln for ln in md.splitlines() if ln.startswith("| Canopy shading"))
     w = next(x for x in rep["warnings"] if "Laplace approximation" in x)
     assert "1-D profile posteriors of s do not use it" in w and "flagged unreliable" in w
