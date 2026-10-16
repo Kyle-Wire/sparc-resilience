@@ -940,6 +940,12 @@ def _side(st_, x=None, why=None):
      "s ≤ 0.49; lower side open at the physical limit 0 (the estimate is on it); one-sided 95% bound"),
     ({"lower": ("limit", 0.0, "at the physical limit 0"), "upper": ("limit", 1.0, "at the physical limit 1")},
      None, "practically_non_identifiable", ["lower", "upper"], ["lower", "upper"], "lower side open"),
+    # a reason that is not a place reads after a colon (it used to run on: "upper side open the estimate lies …")
+    ({"lower": ("cross", 0.2, None),
+      "upper": ("open", None, "the estimate lies beyond the walk limit (a numerically saturated model)")}, None,
+     "one_sided", ["upper"], [], "s ≥ 0.2; upper side open: the estimate lies beyond the walk limit"),
+    ({"lower": ("cross", 0.2, None), "upper": ("open", None, "not crossed within the explored range (to 0.9)")},
+     None, "one_sided", ["upper"], [], "s ≥ 0.2; upper side open: not crossed within the explored range (to 0.9)"),
 ])
 def test_raue_classes_keep_the_informative_side(sides, at_bound, cls, open_, limit, text):
     """A side that reaches a physical limit without crossing is open (practically non-identifiable on that

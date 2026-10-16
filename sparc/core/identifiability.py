@@ -2114,7 +2114,11 @@ def _summary(r: dict, cls: str, sides: dict) -> str:
         parts.append(f"{sym} ≤ {_g(hi[1])}{u}" if hi[0] == "cross" else f"{sym} ≥ {_g(lo[1])}{u}")
     for n, sd in (("lower", lo), ("upper", hi)):
         if sd is not None and sd[0] != "cross":
-            parts.append(f"{n} side open {sd[2]}")
+            why = sd[2] or ""
+            # "open at the physical limit 0", "open at the end of the search range (…)"; a reason that is not a place
+            # ("the estimate lies beyond …", "not crossed within …") after a colon
+            parts.append(f"{n} side open {why}" if why.startswith("at ") else f"{n} side open: {why}" if why
+                         else f"{n} side open")
     return "; ".join(parts) + tail
 
 
