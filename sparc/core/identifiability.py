@@ -38,10 +38,11 @@ Method
 
        l_A(θ) = l_I(θ̂) + [δᵀH_Aδ / δᵀH_Iδ]·[l_I(θ) − l_I(θ̂)],   δ = θ − θ̂,   H_A⁻¹ = −H_I⁻¹VH_I⁻¹,
 
-   gives Λ_A(ψ) = 2[l_A(θ̂) − l_A(θ_ψ)].  At each ψ, l_I is maximised over every other parameter (warm-started
-   L-BFGS walking outward from θ̂ in both directions with adaptive steps; a side stops once both Λ_A and the
-   naive Λ_I exceed χ²₁(0.95) = 3.841 by ``margin``, at the fit bound, or after ``max_points``), and from that
-   point l_A is maximised over the other parameters too (below).  The 95% pointwise interval is
+   gives Λ_A(ψ) = 2[l_A(θ̂) − l_A(θ_ψ)].  At each ψ, l_I is maximised over every other parameter (L-BFGS
+   walking outward from θ̂ in both directions with adaptive steps; a side stops once every Λ_A and the naive
+   Λ_I exceed χ²₁(0.95) = 3.841 by ``margin``, at the fit bound, or after ``max_points``), and from that point
+   l_A is maximised over the other parameters too (below).  No maximisation on a profile is single-start
+   (below: *Profile maximisation*).  The 95% pointwise interval is
    {ψ : Λ_A ≤ 3.841}, its ends interpolated in √Λ; the naive interval uses Λ_I.  Following Raue et al. (2009)
    a parameter is *identified* when the profile exceeds the threshold on both sides, *practically
    non-identifiable* when it does not on one or both sides (``open_sides``), and *structurally
@@ -122,8 +123,19 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   Λ_A = (ψ − ψ̂)²·aᵀΣ_rob⁻¹a/a_j² with a = Σ_naive·e_j, which by Cauchy–Schwarz is ≥ (ψ − ψ̂)²/[Σ_rob]_jj,
   the adjusted profile's value, with equality only when the naive and robust covariances share the profile
   direction.  So l_A is re-maximised over the other parameters (as chandwich's ``conf_intervals`` profile the
-  adjusted log-likelihood), from the best of the l_I-profile point, the previous point's l_A optimum and the
-  quadratic adjusted path θ̂ + Δψ·Σ_rob e_ψ/[Σ_rob]_ψψ; ``lambda_adj_ipath`` keeps the design's value.
+  adjusted log-likelihood); ``lambda_adj_ipath`` keeps the design's value.
+* **Profile maximisation.**  Each profile point is maximised from several starts and the best optimum is
+  kept: for l_I, the previous point's optimum, the reference optimum with ψ substituted, and both with the
+  parameters held on a bound released inside it; for l_A, the l_I-profile point, the previous point's l_A
+  optimum, the quadratic adjusted path θ̂ + Δψ·Σ_rob e_ψ/[Σ_rob]_ψψ and the reference optimum with ψ
+  substituted.  Every distinct start is run for a quarter of the iterations and the best continued for the
+  full count (the physics fit's own multistart scheme), and the best value seen is kept, so Λ_A never exceeds
+  its value at the l_I-profile point without taking a minimum over different paths.  A profile (a maximum
+  over the other parameters) cannot rise inward: a point whose Λ (naive or either adjusted one) exceeds the
+  next point outward's by more than :data:`MONO_TOL` is re-maximised from that point's optimum and the better
+  optima kept (two passes); what remains is recorded (``profile.monotone``, ``non_monotone``) and warned
+  about.  On the 13-parameter city world of the tests the single-start version gave L's adjusted profile 3.94
+  at 92.0 m and 3.48 at 92.2 m, and an upper 95% end of 91.9 m instead of 92.8 m.
 * **Profile range.**  A side also stops at a physical limit (:data:`PHYSICAL_LIMITS`: a fraction's 0 or 1,
   the 0 of a non-negative slope, sink or drift), where the interval ends rather than staying open, and an EF
   parameter stops where its own term reaches logit ±30 (:func:`_ef_walk_limit`): σ rounds to 1 in float64
@@ -245,7 +257,7 @@ DEFAULTS = {
     "margin": 1.0,           # a side stops once Λ_A ≥ 3.841 + margin
     "target_step": 1.0,      # aimed-at increase of Λ_A per profile step
     "refine": 2,             # bisections of the crossing bracket
-    "profile_iter": 40,      # L-BFGS iterations per profile point (warm-started)
+    "profile_iter": 40,      # L-BFGS iterations per profile point (best start; each start gets a quarter)
     "ref_starts": 4,         # starts per reference fit (default, the other fit's optimum, 2 perturbed)
     "polish_iter": 200,      # L-BFGS iterations polishing the best start
     "mode_iter": 100,        # L-BFGS iterations for the posterior mode
@@ -875,34 +887,55 @@ class _Study:
         def fixed_of(st_):
             return {n: _t(st_.get(n, space.base.get(n))) for n in const if n in st_ or n in space.base}
 
-        best = None
-        with torch.no_grad():
-            for st_ in starts:
-                if st_ is None:
-                    continue
-                lv = {n: _t(st_[n]) for n in free}
-                a0 = _t(st_.get("_alpha", 0.0))
-                val, _ = build(lv, _t(np.asarray(st_["_coef"], float) * self.col), a0, fixed_of(st_))
-                if math.isfinite(float(val)) and (best is None or float(val) > best[0]):
-                    best = (float(val), st_)
-        st_ = best[1]
-        fx = fixed_of(st_)
-        x = {n: _t(st_[n]).clone().requires_grad_(True) for n in free}
-        c = _t(np.asarray(st_["_coef"], float) * self.col).clone().requires_grad_(True)
-        params = list(x.values()) + [c]
-        alpha = None
-        if drift:
-            alpha = _t(st_.get("_alpha", vspec[1])).clone().requires_grad_(True)
-            params.append(alpha)
-        _lbfgs(params, lambda: -build(x, c, alpha, fx)[0], int(self.S["adj_iter"]))
-        with torch.no_grad():
-            val, th = build(x, c, alpha, fx)
-        out = {n: float(v.detach()) for n, v in x.items()}
-        out.update({n: float(v) for n, v in fx.items()})
-        out["_coef"] = (c.detach().numpy() / self.col).tolist()
-        if drift:
-            out["_alpha"] = float(alpha.detach())
-        return float(val), out, th.detach().numpy().copy()
+        def run(st_: dict, iters: int):
+            """L-BFGS on −l_A from ``st_`` for ``iters`` iterations: (l_A, state, θ) at the end (and at the
+            start: the better of the two, so a failed line search never loses a start's value)."""
+            fx = fixed_of(st_)
+            x = {n: _t(st_[n]).clone().requires_grad_(True) for n in free}
+            c = _t(np.asarray(st_["_coef"], float) * self.col).clone().requires_grad_(True)
+            params = list(x.values()) + [c]
+            alpha = None
+            if drift:
+                alpha = _t(st_.get("_alpha", vspec[1])).clone().requires_grad_(True)
+                params.append(alpha)
+            with torch.no_grad():
+                v0, th0 = build(x, c, alpha, fx)
+            if not math.isfinite(float(v0)):
+                return None
+            snap0 = (float(v0), _state(x, c, alpha, fx), th0.numpy().copy())
+            if iters > 0:
+                _lbfgs(params, lambda: -build(x, c, alpha, fx)[0], int(iters))
+            with torch.no_grad():
+                v1, th1 = build(x, c, alpha, fx)
+            if not (math.isfinite(float(v1)) and float(v1) >= snap0[0]):
+                return snap0
+            return float(v1), _state(x, c, alpha, fx), th1.numpy().copy()
+
+        def _state(x, c, alpha, fx):
+            out = {n: float(v.detach()) for n, v in x.items()}
+            out.update({n: float(v) for n, v in fx.items()})
+            out["_coef"] = (c.detach().numpy() / self.col).tolist()
+            if drift:
+                out["_alpha"] = float(alpha.detach())
+            return out
+
+        # every distinct start is run for a quarter of the iterations, the best is continued for the full count
+        # (the physics fit's own multistart scheme), and the best value seen is kept
+        uniq = _distinct([st_ for st_ in starts if st_ is not None], free + (["_alpha"] if drift else []) + ["_coef"])
+        iters = int(self.S["adj_iter"])
+        if len(uniq) == 1:
+            res = [run(uniq[0], iters)]
+        else:
+            res = [run(st_, max(5, iters // 4)) for st_ in uniq]
+            ok = [q for q in res if q is not None]
+            if ok:
+                top = max(ok, key=lambda q: q[0])
+                res.append(run(top[1], iters))
+        ok = [q for q in res if q is not None]
+        if not ok:
+            raise FloatingPointError("no finite start for the adjusted profile")
+        val, out, th = max(ok, key=lambda q: q[0])
+        return float(val), out, th
 
     # ------------------------------------------------------------ setup at the data-only optimum
     def setup(self, model) -> None:
@@ -1541,10 +1574,13 @@ def _coord_limits(st: _Study, space: _Space, k: str) -> tuple[float | None, floa
     return (-ef, ef) if ef is not None else (None, None)
 
 
-def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict) -> dict:
-    """One profile point: ψ fixed at ``value``, every other free parameter refitted (data-only objective, linear
-    coefficients by variable projection, warm-started from ``warm``); then the adjusted profile value, l_A
-    maximised over the other parameters (:meth:`_Study.max_adj`)."""
+def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> dict:
+    """One profile point: ψ fixed at ``value``, every other parameter refitted (data-only objective, linear
+    coefficients by variable projection); then the adjusted profile value, l_A maximised over the other
+    parameters (:meth:`_Study.max_adj`).  Both maximisations start from several candidates and keep the best:
+    for l_I, ``warms`` (the previous point's optimum; a neighbour's when repairing), the reference optimum with ψ
+    substituted, and the first with the parameters held on a bound released; for l_A, the l_I-profile point,
+    each warm's l_A optimum, the quadratic adjusted path and the reference optimum with ψ substituted."""
     import torch
 
     from sparc.core.physics import NATURAL_LEAF, _lbfgs
@@ -1558,7 +1594,7 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
     free = [n for n in st.active if n not in psi_leaves]
     natural = None if drift else {nat: float(value)}
 
-    def fit_from(start: dict):
+    def fit_from(start: dict, iters: int):
         P = {k: _t(v) for k, v in dat["leaves"].items()}
         for n in free:
             P[n] = _t(start[n]).clone().requires_grad_(True)
@@ -1580,25 +1616,36 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
             set_v()
             return st.terms.evaluate(P, prior_scale=0.0, natural=natural)[0]
 
-        if params:
-            _lbfgs(params, objective, int(st.S["profile_iter"]))
+        if params and iters > 0:
+            _lbfgs(params, objective, int(iters))
         with torch.no_grad():
             set_v()
             res = st.terms.evaluate(P, prior_scale=0.0, natural=natural)
         return float(res[0]), P, alpha, res
 
-    # from the warm start, and from it with the parameters held on a bound released inside their bounds (a
-    # leaf on a softplus floor or a sigmoid end has a vanishing gradient, so the warm start cannot move them)
-    starts = [warm]
-    rel = _released(st, warm, psi_leaves)
-    if rel is not None:
-        starts.append(rel)
-    best = None
-    for start in starts:
-        cand = fit_from(start)
-        if best is None or cand[0] < best[0]:
-            best = cand
-    _, P, alpha, (loss, coef, mse, T, _) = best
+    def as_start(P, alpha):
+        out = {n: float(P[n].detach()) for n in free}
+        if drift:
+            out["_alpha"] = float(alpha.detach())
+        return out
+
+    warms = [warms] if isinstance(warms, dict) else [w for w in warms if w is not None]
+    ref = {**dat["leaves"], "_coef": list(dat["coef"])}
+    if drift:
+        ref["_alpha"] = math.atan2(dat["leaves"]["uy"], dat["leaves"]["ux"])
+    # the parameters held on a bound sit where their leaf has a vanishing gradient, so a start cannot move them:
+    # also start with them released inside their bounds (from the warm start and from the reference)
+    starts = warms + [ref] + [x for x in (_released(st, warms[0], psi_leaves) if warms else None,
+                                          _released(st, ref, psi_leaves)) if x is not None]
+    starts = _distinct(starts, free + (["_alpha"] if drift else []))
+    iters = int(st.S["profile_iter"])
+    if len(starts) == 1:
+        cands = [fit_from(starts[0], iters)]
+    else:                                   # each start for a quarter of the iterations, the best continued
+        cands = [fit_from(x, max(5, iters // 4)) for x in starts]
+        top = min(cands, key=lambda c: c[0])
+        cands.append(fit_from(as_start(top[1], top[2]), iters))
+    _, P, alpha, (loss, coef, mse, T, _) = min(cands, key=lambda c: c[0])
     leaves = {k: float(v.detach()) for k, v in P.items()}
     if drift:
         leaves["_alpha"] = float(alpha.detach())
@@ -1617,7 +1664,6 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
     out = {"value": float(value), "l": lval, "loss": float(loss), "leaves": leaves, "lam_i": lam_i,
            "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
     leaves["_adj"] = {}
-    warm_adj = warm.get("_adj") or {}
     for mode in st.modes:                              # one profile of l_I, one adjustment per score covariance
         C = None if flat else Cs[mode]
         R = None if flat else st.ratio(C, th - th_hat)
@@ -1625,17 +1671,42 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
         if R is None:
             lam_a, R_eff = lam_i, None                 # no curvature to adjust with: Λ_A = Λ_I (noted)
         else:
-            starts = [leaves, warm_adj.get(mode)]
+            # the l_I-profile point is one of the starts and the best value seen is kept, so Λ_A ≤ Λ_A at the
+            # l_I-profile point (the design's value) without taking a minimum over different paths
+            starts = [leaves] + [(w.get("_adj") or {}).get(mode) for w in warms] + [ref]
             if not drift:
                 starts.append(_quadratic_start(st, sp, C, th_hat, nat, value, dat["leaves"]))
             lA, adj, _ = st.max_adj(sp, C, th_hat, "v" if drift else nat, value, starts,
                                     vspec=(float(value), float(alpha.detach())) if drift else None)
-            lam_a = min(max(2.0 * (st.l_hat - lA), 0.0), lam_ipath)
+            lam_a = max(2.0 * (st.l_hat - lA), 0.0)
             R_eff = lam_a / lam_i if lam_i > 0 else R
             leaves["_adj"][mode] = adj
         out["R"][mode], out["R_ipath"][mode] = R_eff, R
         out["lam_a"][mode], out["lam_a_ipath"][mode] = lam_a, lam_ipath
     return out
+
+
+def _distinct(starts: list[dict], keys: list[str]) -> list[dict]:
+    """``starts`` without repeats (the same values of ``keys`` to 12 significant digits), in order."""
+    seen, out = set(), []
+    for st_ in starts:
+        sig = []
+        for k in keys:
+            v = st_.get(k)
+            if isinstance(v, (list, tuple, np.ndarray)):
+                sig += [float(f"{float(u):.12g}") for u in v]
+            elif v is not None:
+                sig.append(float(f"{float(v):.12g}"))
+        key = tuple(sig)
+        if key not in seen:
+            seen.add(key)
+            out.append(st_)
+    return out
+
+
+#: Λ (naive or adjusted) of a profile point above the next point outward by more than this: the profile is not
+#: monotone, so a maximisation failed (operational tolerance; 0.1 = the restart threshold in Λ)
+MONO_TOL = 0.1
 
 
 #: Leaf value a parameter held on a fit bound is released to (inside the bound: σ(±3) = 0.047 of a sigmoid's range
@@ -1694,7 +1765,7 @@ def _walk(st: _Study, r: dict, side: int, x_hat: float, h0: float, lo_w, hi_w, d
             x, edge = lo_w, True
         if abs(x - x_prev) <= 1e-12 * max(1.0, abs(x)):
             break
-        p = _point(st, r, _from_walk(r, x), warm, dat, cache)
+        p = _point(st, r, _from_walk(r, x), [warm], dat, cache)
         p["x"], p["side"] = x, side
         pts.append(p)
         lam_min = min(p["lam_a"].values())                  # the smallest adjusted Λ (the widest interval)
@@ -1722,13 +1793,65 @@ def _walk(st: _Study, r: dict, side: int, x_hat: float, h0: float, lo_w, hi_w, d
             if b["lam_a"][mode] - thr <= float(S["margin"]) and thr - a["lam_a"][mode] <= float(S["margin"]):
                 break
             xm = 0.5 * (a["x"] + b["x"])
-            p = _point(st, r, _from_walk(r, xm), a["leaves"], dat, cache)
+            p = _point(st, r, _from_walk(r, xm), [a["leaves"], b["leaves"]], dat, cache)
             p["x"], p["side"] = xm, side
             pts.append(p)
     pts.sort(key=lambda q: abs(q["x"] - x_hat))
+    bad = _repair_monotone(st, r, pts, dat, cache)
     at_edge = bool(pts) and ((lo_w is not None and side < 0 and pts[-1]["x"] <= lo_w)
                              or (hi_w is not None and side > 0 and pts[-1]["x"] >= hi_w))
-    return {"points": pts, "edge": bool(edge or at_edge)}
+    return {"points": pts, "edge": bool(edge or at_edge), "non_monotone": bad}
+
+
+def _nonmonotone(st: _Study, seq: list[dict]) -> list[tuple[int, str]]:
+    """(i, which) where point i's Λ (naive "naive", or an adjusted one by its score covariance) exceeds that of
+    the next point outward, i + 1, by more than :data:`MONO_TOL` (``seq`` ordered outward)."""
+    bad = []
+    for i in range(len(seq) - 1):
+        a, b = seq[i], seq[i + 1]
+        if a["lam_i"] > b["lam_i"] + MONO_TOL:
+            bad.append((i, "naive"))
+        bad += [(i, mode) for mode in st.modes if a["lam_a"][mode] > b["lam_a"][mode] + MONO_TOL]
+    return bad
+
+
+def _merge_point(st: _Study, p: dict, q: dict) -> None:
+    """Keep, in ``p``, the better l_I optimum and the better l_A optimum per score covariance of ``p`` and of
+    ``q`` (two maximisations at the same ψ)."""
+    if q["l"] > p["l"]:
+        adj = p["leaves"].get("_adj") or {}
+        p.update(l=q["l"], lam_i=q["lam_i"], loss=q["loss"])
+        p["leaves"] = {**q["leaves"], "_adj": dict(adj)}
+    for mode in st.modes:
+        if q["lam_a"][mode] < p["lam_a"][mode]:
+            p["lam_a"][mode] = q["lam_a"][mode]
+            p["lam_a_ipath"][mode] = q["lam_a_ipath"][mode]
+            if (q["leaves"].get("_adj") or {}).get(mode) is not None:
+                p["leaves"].setdefault("_adj", {})[mode] = q["leaves"]["_adj"][mode]
+        if p["R"][mode] is not None or q["R"][mode] is not None:
+            p["R"][mode] = p["lam_a"][mode] / p["lam_i"] if p["lam_i"] > 0 else (p["R"][mode] or q["R"][mode])
+
+
+def _repair_monotone(st: _Study, r: dict, seq: list[dict], dat: dict, cache: dict) -> list[dict]:
+    """A profile (max over the other parameters) cannot rise inward: where a point's Λ exceeds the next point
+    outward's by more than :data:`MONO_TOL`, its maximisation failed, so it is redone with the outer point's
+    optimum as an extra start and the better optima kept (:func:`_merge_point`; two passes).  Returns the
+    violations left, [{inner, outer, profile}] (ψ values), each one also warned about."""
+    for _ in range(2):
+        bad = _nonmonotone(st, seq)
+        if not bad:
+            break
+        for i in sorted({i for i, _ in bad}, reverse=True):
+            inner, outer = seq[i], seq[i + 1]
+            q = _point(st, r, inner["value"], [outer["leaves"], inner["leaves"]], dat, cache)
+            _merge_point(st, inner, q)
+    left = [{"inner": seq[i]["value"], "outer": seq[i + 1]["value"], "profile": which}
+            for i, which in _nonmonotone(st, seq)]
+    for v in left:
+        st.warn(f"the {v['profile']} profile of {r['key']} is not monotone beyond {MONO_TOL} in Λ between "
+                f"{v['inner']:.4g} and {v['outer']:.4g} after re-maximising from the outer point: a local optimum or a "
+                "rough likelihood there; its interval end on that side is uncertain")
+    return left
 
 
 def _profile(st: _Study, r: dict, dat: dict, cache: dict) -> None:
@@ -1871,8 +1994,14 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
     grid = sorted([(x0, {m: 0.0 for m in st.modes}, lam0, {m: None for m in st.modes}, {m: 0.0 for m in st.modes})]
                   + [(p["value"], p["lam_a"], p["lam_i"], p["R"], p.get("lam_a_ipath") or {}) for p in pts],
                   key=lambda t: t[0])
+    nonmono = [v for res in r["_sides"].values() for v in (res.get("non_monotone") or [])]
     prof = {"grid": [g[0] for g in grid], "lambda_naive": [g[2] for g in grid],
-            "sides_explored": explored, "stopped_at_bound": [n for n, res in r["_sides"].items() if res["edge"]]}
+            "sides_explored": explored, "stopped_at_bound": [n for n, res in r["_sides"].items() if res["edge"]],
+            "monotone": not nonmono, "non_monotone": nonmono}
+    if nonmono:
+        r["notes"].append("the profile is not monotone after re-maximisation ("
+                          + "; ".join(f"{v['profile']}: {_g(v['inner'])} above {_g(v['outer'])}" for v in nonmono)
+                          + "): its interval end on that side is uncertain")
     for mode in st.modes:
         sfx = _SUFFIX[mode]
         prof["lambda_adj" + sfx] = [g[1][mode] for g in grid]

@@ -562,6 +562,62 @@ def test_a_profile_maximises_over_parameters_held_on_a_bound_or_flat():
     assert moved                                    # the case under test: w leaves its bound along L's profile
 
 
+def _outward(prof, x0, key):
+    """(lower side, upper side) of a profile curve ordered outward from x0."""
+    g, lam = prof["grid"], prof[key]
+    lo = [lam[i] for i in sorted((i for i in range(len(g)) if g[i] < x0), key=lambda i: -g[i])]
+    hi = [lam[i] for i in sorted((i for i in range(len(g)) if g[i] > x0), key=lambda i: g[i])]
+    return lo, hi
+
+
+def test_profiles_are_multi_started_and_monotone():
+    """Every profile point is maximised from several starts and the best kept; a point whose Λ exceeds the next
+    point outward's is re-maximised from that point.  On the city world (13 parameters, a₁ on its bound) the
+    single-start version gave L's adjusted profile 3.94 at 91.99 m and 3.48 at 92.22 m (a failed maximisation:
+    the upper 95% end came out at 91.9 m instead of 92.8 m)."""
+    grid, frame, y, coords, cl, cfg = city_world()
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L"], posterior=False,
+                     settings={**FAST, "max_points": 6, "block_m": 270.0})
+    L = _row(rep, "L")
+    prof = L["profile"]
+    assert prof["monotone"] is True and prof["non_monotone"] == []
+    for key in ("lambda_naive", "lambda_adj", "lambda_adj_neighbours"):
+        for seq in _outward(prof, L["estimate_data"], key):
+            assert all(b >= a - ID.MONO_TOL for a, b in zip(seq, seq[1:])), (key, seq)
+    # the adjusted profile is never above the design's value at the l_I-profile point (that point is a start)
+    for a, ip in zip(prof["lambda_adj"], prof["lambda_adj_ipath"]):
+        assert ip is None or a <= ip + 1e-9
+
+
+def test_non_monotone_profiles_are_repaired_or_reported(monkeypatch):
+    """A point whose Λ exceeds the next point outward's (a failed maximisation) is re-maximised from that point's
+    optimum and the better optima kept; what cannot be repaired is recorded and warned about."""
+    st = ID._Study.__new__(ID._Study)
+    st.modes, st.warnings = ["blocks"], []
+
+    def pt(v, lam_i, lam_a):
+        return {"value": v, "l": -lam_i / 2, "lam_i": lam_i, "loss": 0.0, "lam_a": {"blocks": lam_a},
+                "lam_a_ipath": {"blocks": lam_a}, "R": {"blocks": lam_a / lam_i}, "leaves": {"v": v, "_adj": {}}}
+
+    seq = [pt(1.0, 1.0, 0.5), pt(2.0, 6.0, 3.0), pt(3.0, 4.0, 2.0)]
+    redo = []
+
+    def remax(st_, r, value, warms, dat, cache):
+        redo.append((value, warms[0]["v"]))                    # started from the outer neighbour's optimum
+        return pt(value, 2.5, 1.2)
+
+    monkeypatch.setattr(ID, "_point", remax)
+    assert ID._repair_monotone(st, {"key": "L"}, seq, {}, {}) == []
+    assert redo == [(2.0, 3.0)] and seq[1]["lam_i"] == 2.5 and seq[1]["lam_a"]["blocks"] == 1.2
+    assert seq[1]["R"]["blocks"] == pytest.approx(1.2 / 2.5) and not st.warnings
+    # re-maximisation that does not help: reported (no Λ is ever raised by a merge)
+    seq = [pt(1.0, 1.0, 0.5), pt(2.0, 6.0, 3.0), pt(3.0, 4.0, 2.0)]
+    monkeypatch.setattr(ID, "_point", lambda *a: pt(2.0, 7.0, 3.5))
+    left = ID._repair_monotone(st, {"key": "L"}, seq, {}, {})
+    assert seq[1]["lam_i"] == 6.0 and {v["profile"] for v in left} == {"naive", "blocks"}
+    assert left[0]["inner"] == 2.0 and left[0]["outer"] == 3.0 and any("not monotone" in w for w in st.warnings)
+
+
 # ---------------------------------------------------------------------------
 # (c) a canopy layer the model cannot use; (e) a parameter on its fit bound
 # ---------------------------------------------------------------------------
