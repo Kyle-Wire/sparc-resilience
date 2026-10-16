@@ -674,6 +674,11 @@ def test_coverage_in_a_multi_parameter_shade_world(chunk, tmp_path_factory):
 
 @pytest.mark.slow
 def test_coverage_in_a_multi_parameter_shade_world_summary(tmp_path_factory):
+    """The shade world's coverage and its decomposition (:func:`shade_summary`, printed with -s): the bias-removed
+    coverage, the right-width coverage and the z-score sd say whether an under-coverage comes from bias or from
+    intervals that are too narrow (for s, mostly the latter: module docstring), and the split by held parameters
+    whether those (left out of H_I, V and δ) matter.  The floors are gross-failure checks below the validation run's
+    numbers, and the naive interval must stay far below the adjusted ones."""
     d = tmp_path_factory.getbasetemp() / "shade_coverage"
     files = sorted(d.glob("*.json")) if d.exists() else []
     if len(files) < SHADE_CHUNKS:
@@ -742,8 +747,10 @@ BOUND_MIN = {"interior": 0.85}
 
 
 #: coverage floors of the neighbours interval in the shade world, set below the validation run's 97% (L) and 80%
-#: (s) (module docstring): s under-covers there because its estimator is biased upward, which no variance
-#: adjustment fixes
+#: (s) (module docstring).  s under-covers there mostly because its adjusted intervals are too narrow (about 25–30%:
+#: z-score sd 3.0 / 2.3 with the block / neighbours SE; with the bias removed the coverage is still 72% / 75%, while
+#: intervals of the right width with the same bias would cover 88%), not because of its bias; the floor documents
+#: that shortfall, it does not excuse it
 SHADE_MIN = {"L": 0.85, "s": 0.7}
 
 

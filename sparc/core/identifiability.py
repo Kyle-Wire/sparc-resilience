@@ -141,11 +141,22 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   neighbours 88%, naive 20% (median c 0.048 and 0.035); with independent noise blocks 92%, neighbours 93%, naive
   93% (median c 1.15 and 0.96).  On the multi-parameter shade world (closer to Providence: L, canopy shading
   s saturating with κ, the EF intercept and canopy slope, 9 free parameters, 36 blocks of 180 m, noise of
-  practical range = the block size; the data are the model's own forward map, 60 replicates): L blocks 80%,
-  neighbours 97%, naive 38%; s blocks 72%, neighbours 80%, naive 25% (median c 0.11 and 0.12 with the block V).
-  s under-covers because its estimator is biased upward (mean 0.47 for a planted 0.40, sd 0.13; the EF canopy
-  slope, planted 1.0, landed on its bound 0 in 14 replicates), which no variance adjustment can fix; the
-  adjusted intervals are still far closer to nominal than the naive ones.
+  practical range = the block size; the data are the model's own forward map, 60 replicates, seeds 0–59): L
+  blocks 80%, neighbours 97%, naive 38%; s blocks 73%, neighbours 80%, naive 25% (median c 0.11 and 0.12 with
+  the block V).  **s under-covers mostly because its adjusted intervals are too narrow, not because of its
+  bias** (the slow test prints this decomposition, ``shade_summary``): the estimates have mean 0.47 for the
+  planted 0.40 (bias +0.07) and sd 0.125; shifting every interval down by the mean bias covers 72% (blocks) and
+  75% (neighbours), no better, while intervals of the right width with the same bias (ŝ ± 1.96·sd of the
+  estimates) would cover 88%.  The half-width toward the truth is a median 0.69× (blocks) and 0.74×
+  (neighbours) of the 1.96·sd needed, and the z-scores (ŝ − 0.4)/SE_rob have sd 3.0 and 2.3 (robust sd 2.1 and
+  1.7) against about 1 for a calibrated SE: the adjusted intervals for s are about 25–30% too narrow and its
+  sandwich SEs too small, which a better variance estimate would address and removing the bias would not.
+  Likely causes are V estimated from 36 blocks for 9 parameters, and parameters held at θ̂ that move inside the
+  interval while H_I, V and δ leave them out (*Held parameters*, below): 34 of the 60 replicates hold an EF
+  parameter at θ̂ (e₂ on its bound 0 in 14, e₀ flat in 21, e₂ flat in 5), and their s coverage is 71% (blocks)
+  and 76% (neighbours) against 77% and 85% for the 26 that hold none (suggestive at this n, not conclusive); in
+  19 replicates a held parameter left its value inside s's 95% region.  The adjusted intervals are still far
+  closer to nominal than the naive ones.
   V is centred (U_b − Ū): identical at an interior maximum (Ū = ∇l_I/G = 0), and the score
   variance where the mean score is not zero (the penalized optimum, a bound).
 * **Coordinates of H_I, V and δ: walk coordinates, not the fit's unconstrained leaves.**  The vertical
