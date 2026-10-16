@@ -1033,6 +1033,43 @@ def test_a_disabled_study_is_not_written_up_as_profiled():
             assert claim not in sec, claim
 
 
+def test_study_warnings_appear_in_the_register_and_both_writeups():
+    """PHYSICS_PLAN W3 review X17: the study's warnings (a reference that is not a maximum, a poor Laplace
+    approximation, too few clusters per parameter, …) qualify its numbers, so methods.md and model_card.md carry
+    them, as the register's markdown does."""
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    folds = _folds()
+    rep = _ident(folds, [_prow("L", ci=(200.0, 420.0), run=256.0, data=270.0, share=0.05)])
+    ws = ["after 2 restart(s) a profile point still improves on the data-only optimum by Δl = 0.31 (L = 512): the "
+          "reference is not a maximum and the profiles are approximate",
+          "only 1.6 clusters per parameter: the sandwich covariance is poorly estimated."]
+    rep["warnings"] = ws
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    assert reg["identifiability"]["warnings"] == ws
+    md = M.mechanisms_markdown(reg)
+    assert all(f"*Identifiability warning:* {w}" in md for w in ws)
+    sec = methods_markdown(m)
+    sec = sec[sec.index("## Identifiability"):]
+    sec = sec[:sec.index("\n## ", 3)]
+    assert "The study raised 2 warnings, which qualify these results: " + ws[0] + "; " + ws[1].rstrip(".") + "." in sec
+    card = model_card_markdown(m)
+    csec = card[card.index("## Identifiability"):]
+    csec = csec[:csec.index("\n## ", 3)]
+    assert "- **Warnings.** The study raised 2 warnings" in csec and "not a maximum" in csec
+    # none: no warning sentence
+    rep["warnings"] = []
+    m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    assert "warning" not in methods_markdown(m).split("## Identifiability", 1)[1].split("\n## ", 1)[0]
+    # a disabled study: its warnings too
+    rep.update(status="disabled", parameters=[], linear=[], warnings=ws[:1])
+    m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    assert "The study raised 1 warning, which qualify these results" in methods_markdown(m)
+    assert "- **Warnings.**" in model_card_markdown(m) and ws[0] in M.mechanisms_markdown(m["mechanisms"])
+
+
 def test_writeups_report_identifiability_from_the_register():
     from sparc.core.writeup import methods_markdown, model_card_markdown
 

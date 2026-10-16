@@ -123,7 +123,8 @@ def _identifiability_facts(m: dict) -> dict | None:
             return {"status": "unregistered"}
         return None
     if ib.get("status") != "used":
-        return {"status": ib.get("status"), "note": ib.get("note")}
+        return {"status": ib.get("status"), "note": ib.get("note"),
+                "warnings": [str(w) for w in ib.get("warnings") or []] if ib.get("status") == "disabled" else []}
     from sparc.core.mechanisms import _SYM
 
     ps = [p for p in (ib.get("parameters") or {}).values() if p.get("in_model")]
@@ -158,8 +159,18 @@ def _identifiability_facts(m: dict) -> dict | None:
                        for mm in reg.get("mechanisms") or []
                        if (mm.get("identifiability") or {}).get("not_identified")],
            "sandwich": [(r["label"], r["sandwich"], r) for r in ((reg.get("panel") or {}).get("rows") or [])
-                        if r.get("sandwich")]}
+                        if r.get("sandwich")],
+           "warnings": [str(w) for w in ib.get("warnings") or []]}
     return out
+
+
+def _warnings_text(ws: list[str]) -> str | None:
+    """The study's warnings as one sentence (PHYSICS_PLAN W3 review X17: they qualify its numbers)."""
+    ws = [w.strip().rstrip(".") for w in ws or [] if str(w).strip()]
+    if not ws:
+        return None
+    return (f"The study raised {len(ws)} warning{'s' if len(ws) > 1 else ''}, which qualify these results: "
+            + "; ".join(ws) + ".")
 
 
 def _cap(text) -> str:
@@ -308,13 +319,14 @@ def methods_markdown(m: dict) -> str:
         L += ["", "## Identifiability", ""]
         if idf["status"] == "used":
             t = _identifiability_text(idf)
-            L += [" ".join(x for x in (t["method"], t["pinned"], t["penalty"], t["conflict"], t["gate"], t["sandwich"])
-                           if x) + " Details: `identifiability.json`."]
+            L += [" ".join(x for x in (t["method"], t["pinned"], t["penalty"], t["conflict"], t["gate"], t["sandwich"],
+                                       _warnings_text(idf["warnings"])) if x) + " Details: `identifiability.json`."]
         elif idf["status"] == "unregistered":
             L += ["An identifiability study (`identifiability.json`) exists, but the mechanism register predates it: "
                   "re-run `sparc core mechanisms` to use it."]
         elif idf["status"] == "disabled":
-            L += [f"Not done. {_cap(idf.get('note'))}."]
+            L += [" ".join(x for x in (f"Not done. {_cap(idf.get('note'))}.", _warnings_text(idf.get("warnings")))
+                           if x)]
         else:
             L += [f"Not used: {idf.get('note')}."]
     if cv:
@@ -479,11 +491,15 @@ def model_card_markdown(m: dict) -> str:
                   f"- **{t['conflict'].split(':', 1)[0]}.**{t['conflict'].split(':', 1)[1]}", f"- {t['gate']}"]
             if t["sandwich"]:
                 L += [f"- {t['sandwich']}"]
+            if idf["warnings"]:
+                L += [f"- **Warnings.** {_warnings_text(idf['warnings'])}"]
         elif idf["status"] == "unregistered":
             L += ["- An identifiability study exists, but the mechanism register predates it: re-run "
                   "`sparc core mechanisms`."]
         elif idf["status"] == "disabled":
             L += [f"- Not done. {_cap(idf.get('note'))}."]
+            if idf.get("warnings"):
+                L += [f"- **Warnings.** {_warnings_text(idf['warnings'])}"]
         else:
             L += [f"- Not used: {idf.get('note')}."]
     L += ["", "## Noise floor", "",

@@ -1781,6 +1781,9 @@ def mechanisms_markdown(reg: dict | None) -> str:
         L += ["", identifiability_markdown_table(ib, reg)]
     elif ib.get("status") in ("ignored", "disabled"):
         L += ["", f"*Identifiability (W3):* {ib.get('note')}."]
+        if ib.get("status") == "disabled":
+            for w in ib.get("warnings") or []:
+                L += ["", f"*Identifiability warning:* {w}"]
     G = reg.get("gates") or {}
     if G.get("statements"):
         L += ["", "**Gates:** " + " ".join(G["statements"])]

@@ -282,6 +282,10 @@ def test_page_passes_check_page(built, demo):
 # W3: "Can the data pin down the physics?" (identifiability card)
 # ---------------------------------------------------------------------------
 
+STUDY_WARNING = ("the profile of e0 is not monotone after re-maximisation (naive: 3.1 above 2.4): its interval end on "
+                 "that side is uncertain")
+
+
 def _study_for(run: Path, *, L_mean=None) -> dict:
     """A hand-made identifiability report that belongs to ``run`` (its cells, CV design and the physics fold
     means), profiling L (identified) and s (on its lower bound, prior-dominated)."""
@@ -318,7 +322,7 @@ def _study_for(run: Path, *, L_mean=None) -> dict:
             "units": m["config"]["data"]["target_units"], "window": "day",
             "cluster": {"kind": "cv_block", "block_m": m["cv"]["block_m"]},
             "settings": {"chi2_95": 3.841458820694124, "psens_threshold": 0.05}, "posterior": {"laplace_adequate": False},
-            "warnings": [], "parameters": params, "linear": lin,
+            "warnings": [STUDY_WARNING], "parameters": params, "linear": lin,
             "run": {"n_points_run": m["n_points"], "cv": m["cv"],
                     "fold_means": {"L": L if L_mean is None else L_mean, "s": mean("s")}}}
 
@@ -356,6 +360,7 @@ def test_identifiability_card_shows_the_study_and_its_profiles(studied):
     assert s["ci95_neighbours"] == [0.0, 1.1 * 0.49] and s["profile"]["lambda_adj_neighbours"] == [0.0, 0.8, 4.5]
     assert s["threshold"] == pytest.approx(2.7055, abs=1e-4) and card["rows"][0]["threshold"] == pytest.approx(3.8415, abs=1e-4)
     assert card["score_covariance"] == "blocks" and card["sandwich"][0]["kind"] == "block sandwich"
+    assert card["warnings"] == [STUDY_WARNING]               # shown on the card (review X17)
     assert "full-data refit value" in s["text"] and "set mostly by the penalty (prior share 0.93; the run's own " \
         "value, its fold mean, is" in s["text"]
     # "Run value" is the run's own fold mean (as the parameter panel shows); the full-data refit is labelled apart
@@ -424,6 +429,9 @@ def test_identifiability_card_of_a_disabled_study_says_nothing_was_profiled(demo
         cap = dom[dom.index('id="identCap"'):]
         cap = cap[:cap.index("</p>")]
         assert "profiled nothing, so nothing on this card was assessed" in cap
+        warn = dom[dom.index('id="identWarn"'):]
+        warn = warn[:warn.index("</p>")]
+        assert "The study raised 1 warning" in warn and "nothing to profile" in warn and "hidden" not in warn[:40]
         mcap = dom[dom.index('id="mechPanelCap"'):]
         mcap = mcap[:mcap.index("</p>")]
         assert "Identifiability: W3 profile likelihood not done" in mcap and "are in the next card" not in mcap
@@ -451,4 +459,7 @@ def test_identifiability_card_renders_in_chromium(studied, tmp_path):
     assert "0 not excluded" in card and "identified" in card and "potential prior–data conflict" in card
     assert "With adjacent blocks" in card and card.count('stroke-dasharray="1.5 3"') == 2   # one dotted curve each
     assert "full-data refit" in card                     # under the run value (the run's fold mean)
+    warn = dom[dom.index('id="identWarn"'):]
+    warn = warn[:warn.index("</p>")]
+    assert "The study raised 1 warning, which qualify its results: " + STUDY_WARNING + "." in warn
     assert "Laplace (Gaussian) approximation" in card
