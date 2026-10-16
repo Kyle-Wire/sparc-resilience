@@ -108,16 +108,24 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   notes, such a sum need not be positive semi-definite; this module's own choice is to add only its positive
   part *relative to the block V* (the generalized eigenvalues of the cross-product matrix with respect to V,
   clipped at 0: :func:`_pos_part_rel`), which is invariant to the parameter coordinates (a test rescales them)
-  and never puts V below Chandler & Bate's.  It is *not* Chandler & Bate's V under independence: the sampled
-  cross-products are noise there and their positive part is upward-biased, so it is conservative.  The
-  identifiability class rests on the wider of the two intervals (per side), so it is conservative too.  On the
-  albedo world (60 replicates; coverage of the planted L by the 95% interval), with noise of practical range
-  = the block size, the ideal sandwich (V from 300 noise draws) gives sd(L̂) = 11.4 m, matching the 12.8 m
-  spread of the estimates (the linearisation holds), while the block V gives 8.8 m in expectation: coverage
-  blocks 80%, neighbours 92%, naive 20% (median c 0.048 / 0.025); with independent noise, blocks 92%
-  (median c 1.15), neighbours 95% (median c 0.76: upward-biased by the clipped noise), naive 93%.  These
-  numbers are from the validation before this release's profile changes; see X11 in the tests for the
-  current ones.  V is centred (U_b − Ū): identical at an interior maximum (Ū = ∇l_I/G = 0), and the score
+  and never puts V below Chandler & Bate's.  It is *not* Chandler & Bate's V under independence: there the
+  sampled cross-products are noise and their positive part is kept, so it is upward-biased (on the albedo world
+  with independent noise its variance for L̂ is a median 14% above the block V's, 10–90% range 0–54%).  The
+  identifiability class rests on the wider of the two intervals (per side), so it is conservative too.  The
+  linearisation holds on the albedo world with noise of practical range = the block size: the ideal sandwich
+  (V from 300 noise draws) gives sd(L̂) = 11.4 m against the 12.1 m spread of the estimates, while the block V
+  gives 8.1 m (rms over replicates) and the neighbours V 9.8 m.
+  Validation (``tests/core/test_identifiability.py``, slow; coverage of the planted value by the 95% intervals):
+  on the albedo world (L only; 60 replicates, 36 blocks of 300 m) with that correlated noise, blocks 80%,
+  neighbours 88%, naive 20% (median c 0.048 and 0.035); with independent noise blocks 92%, neighbours 93%, naive
+  93% (median c 1.15 and 0.96).  On the multi-parameter shade world (closer to Providence: L, canopy shading
+  s saturating with κ, the EF intercept and canopy slope, 9 free parameters, 36 blocks of 180 m, noise of
+  practical range = the block size; the data are the model's own forward map, 60 replicates): L blocks 80%,
+  neighbours 97%, naive 38%; s blocks 72%, neighbours 80%, naive 25% (median c 0.11 and 0.12 with the block V).
+  s under-covers because its estimator is biased upward (mean 0.47 for a planted 0.40, sd 0.13; the EF canopy
+  slope, planted 1.0, landed on its bound 0 in 14 replicates), which no variance adjustment can fix; the
+  adjusted intervals are still far closer to nominal than the naive ones.
+  V is centred (U_b − Ū): identical at an interior maximum (Ū = ∇l_I/G = 0), and the score
   variance where the mean score is not zero (the penalized optimum, a bound).
 * **Coordinates of H_I, V and δ: walk coordinates, not the fit's unconstrained leaves.**  The vertical
   adjustment's ratio δᵀH_Aδ/δᵀH_Iδ depends on the coordinates away from θ̂.  In the leaves, a parameter (or a

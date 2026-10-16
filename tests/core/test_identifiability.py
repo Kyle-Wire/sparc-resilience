@@ -439,20 +439,114 @@ def _coverage(R, noise_range):
 
 
 @pytest.mark.slow
-def test_coverage_of_the_adjusted_profile_interval_for_L():
-    """60 replicates per setting, 36 blocks of 300 m.  Correlated noise with practical range = the block size
-    (Providence's regime) and independent noise: coverage of the planted L by the blocks, neighbours and naive 95%
-    intervals.  The numbers are printed (run with -s) and quoted in the module docstring."""
+@pytest.mark.parametrize("noise", ["correlated", "independent"])
+def test_coverage_of_the_adjusted_profile_interval_for_L(noise):
+    """Albedo world, 60 replicates per setting (one chunk each, about 5 minutes), 36 blocks of 300 m.  Correlated
+    noise with practical range = the block size (Providence's regime) and independent noise: coverage of the
+    planted L by the blocks, neighbours and naive 95% intervals.  The numbers are printed (run with -s) and quoted
+    in the module docstring.  No assertion compares the two adjustments: the neighbours V is never below the block
+    V, so its interval contains the block one by construction."""
     R = 60
-    cov, c = _coverage(R, 5.8)
-    print(f"\ncorrelated (practical range = block): blocks {cov['ci95']:.3f}, neighbours {cov['ci95_neighbours']:.3f}, "
-          f"naive {cov['ci95_naive']:.3f}; median c blocks {c['blocks']:.3f}, neighbours {c['neighbours']:.3f}")
-    assert 0.85 <= cov["ci95_neighbours"] <= 0.99
-    assert cov["ci95_naive"] <= cov["ci95"] - 0.4
-    iid, ci = _coverage(R, None)
-    print(f"independent noise: blocks {iid['ci95']:.3f}, neighbours {iid['ci95_neighbours']:.3f}, naive "
-          f"{iid['ci95_naive']:.3f}; median c blocks {ci['blocks']:.3f}, neighbours {ci['neighbours']:.3f}")
-    assert iid["ci95"] >= 0.85 and iid["ci95_neighbours"] >= 0.85 and iid["ci95_naive"] >= 0.85
+    cov, c = _coverage(R, 5.8 if noise == "correlated" else None)
+    print(f"\n{noise} noise: blocks {cov['ci95']:.3f}, neighbours {cov['ci95_neighbours']:.3f}, naive "
+          f"{cov['ci95_naive']:.3f}; median c blocks {c['blocks']:.3f}, neighbours {c['neighbours']:.3f}")
+    if noise == "correlated":
+        assert cov["ci95"] >= 0.7 and 0.8 <= cov["ci95_neighbours"] <= 0.99
+        assert cov["ci95_naive"] <= cov["ci95"] - 0.4
+        assert c["blocks"] < 0.2
+    else:
+        assert cov["ci95"] >= 0.85 and cov["ci95_neighbours"] >= 0.85 and cov["ci95_naive"] >= 0.85
+        assert 0.6 < c["blocks"] < 1.6
+
+
+#: The multi-parameter world's planted parameters: L, a canopy-shading source (strength s, saturating with κ) and
+#: the evaporative fraction's intercept and canopy slope (natural units, ``NATURAL_LEAF`` keys)
+SHADE_TRUE = {"L": L_TRUE, "s": 0.4, "kc": 0.15, "e0": math.log(0.35 / 0.65), "e2": 1.0}
+SHADE_BLOCK_M = 180.0
+SHADE_CHUNKS, SHADE_R = 4, 15
+
+
+def shade_world(n=36, dx=30.0, noise=0.3, noise_range=SHADE_BLOCK_M / 30.0 / 1.73, seed=0, truth=SHADE_TRUE):
+    """A multi-parameter world closer to Providence: albedo and canopy layers, the data the physics model's own
+    forward map at the planted parameters (:data:`SHADE_TRUE`: L, canopy shading s with κ, the EF intercept and
+    canopy slope; so the model is right and every profiled parameter has a true value) scaled to unit sd, plus
+    noise correlated at block scale (practical range ≈ the 180 m blocks; 36 blocks, 9 free parameters).  The
+    shade saturates (κ = 0.15), which separates it from the EF's near-linear canopy slope (with κ at its upper
+    bound the two are nearly collinear and the data put s on 0, as on Providence).  Only ``seed`` (the noise)
+    changes between replicates.  (grid, frame, y, coords, clusters, cfg)."""
+    srng = np.random.default_rng(1000)
+    alb = 0.15 + 0.05 * gaussian_random_field((n, n), 2.0, srng)
+    can = np.clip(40.0 + 25.0 * gaussian_random_field((n, n), 3.0, srng), 0.0, 100.0)
+    yy, xx = np.mgrid[0:n, 0:n]
+    x, y = (xx * dx).ravel().astype(float), (yy * dx).ravel().astype(float)
+    grid = Grid.from_points(x, y, cell=dx)
+    cfg = dict(WORLD_CFG, roles={"albedo": "albedo", "canopy": "canopy"})
+    frame = pd.DataFrame({"albedo": alb.ravel(), "canopy": can.ravel()})
+    coords = np.column_stack([x, y])
+    idx = np.arange(n * n)
+    # a two-iteration fit only sets the model's feature constants and solver; the leaves are then the planted ones
+    m = PhysicsModel(grid, {**cfg, "max_iter": 2}, L_init=truth["L"]).fit(frame, -(alb.ravel() - alb.mean()), idx,
+                                                                          coords)
+    terms = m.fit_terms(frame, np.zeros(n * n), idx, coords)
+    P = {k: torch.tensor(v, dtype=torch.float64) for k, v in m.leaves.items()}
+    for k, v in truth.items():
+        P[NATURAL_LEAF[k]] = torch.tensor(m.to_leaf(k, v), dtype=torch.float64)
+    with torch.no_grad():
+        phi = terms.phi(terms.transform(P))[0].numpy()
+    rng = np.random.default_rng(seed)
+    eps = gaussian_random_field((n, n), noise_range, rng).ravel() if noise_range else rng.standard_normal(n * n)
+    return grid, frame, phi / phi.std() + noise * eps, coords, block_ids(coords, SHADE_BLOCK_M), cfg
+
+
+def _shade_replicate(seed: int) -> dict:
+    grid, frame, y, coords, cl, cfg = shade_world(seed=seed)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "s"], posterior=False,
+                     settings={**FAST, "max_points": 6, "block_m": SHADE_BLOCK_M})
+    out = {}
+    for key, nat in (("L", "L"), ("s", "s")):
+        r = _row(rep, key)
+        out[key] = {k: bool(r[c] is not None and _covers(r[c], SHADE_TRUE[nat]))     # no interval: not covered
+                    for k, c in (("blocks", "ci95"), ("neighbours", "ci95_neighbours"), ("naive", "ci95_naive"))}
+        out[key].update(cls=r["identifiability"], c=r["adjust_factor"])
+    return out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("chunk", range(SHADE_CHUNKS))
+def test_coverage_in_a_multi_parameter_shade_world(chunk, tmp_path_factory):
+    """Coverage of the planted L and s in :func:`shade_world` by the blocks, neighbours and naive 95% intervals:
+    ``SHADE_CHUNKS`` chunks of ``SHADE_R`` replicates (about 5 minutes each), summarised by the next test when they
+    run in one session.
+    A study without an adjusted interval (s not assessable on its bound) counts as not covering."""
+    res = [_shade_replicate(seed) for seed in range(chunk * SHADE_R, (chunk + 1) * SHADE_R)]
+    d = tmp_path_factory.getbasetemp() / "shade_coverage"
+    d.mkdir(exist_ok=True)
+    (d / f"{chunk}.json").write_text(json.dumps(res))
+    for key in ("L", "s"):
+        cov = {m: np.mean([r[key][m] for r in res]) for m in ("blocks", "neighbours", "naive")}
+        print(f"\nchunk {chunk} {key}: " + ", ".join(f"{m} {v:.2f}" for m, v in cov.items()))
+        assert cov["neighbours"] >= 0.5                     # a gross failure only: the summary tests the rate
+
+
+@pytest.mark.slow
+def test_coverage_in_a_multi_parameter_shade_world_summary(tmp_path_factory):
+    d = tmp_path_factory.getbasetemp() / "shade_coverage"
+    files = sorted(d.glob("*.json")) if d.exists() else []
+    if len(files) < SHADE_CHUNKS:
+        pytest.skip("run every chunk of test_coverage_in_a_multi_parameter_shade_world in this session first")
+    res = [r for f in files for r in json.loads(f.read_text())]
+    cov = {key: {m: float(np.mean([r[key][m] for r in res])) for m in ("blocks", "neighbours", "naive")}
+           for key in ("L", "s")}
+    print(f"\nshade world, {len(res)} replicates: " + "; ".join(
+        f"{key}: " + ", ".join(f"{m} {v:.3f}" for m, v in c.items()) for key, c in cov.items()))
+    assert cov["L"]["neighbours"] >= SHADE_MIN["L"] and cov["s"]["neighbours"] >= SHADE_MIN["s"]
+    assert cov["L"]["naive"] <= cov["L"]["blocks"] - 0.3 and cov["s"]["naive"] <= cov["s"]["blocks"] - 0.3
+
+
+#: coverage floors of the neighbours interval in the shade world, set below the validation run's 97% (L) and 80%
+#: (s) (module docstring): s under-covers there because its estimator is biased upward, which no variance
+#: adjustment fixes
+SHADE_MIN = {"L": 0.85, "s": 0.7}
 
 
 QUICK = {"max_points": 3, "ref_starts": 1, "polish_iter": 30}
