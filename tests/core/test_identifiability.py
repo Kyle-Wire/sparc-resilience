@@ -91,6 +91,30 @@ def city_world(n=36, dx=30.0, roles=None, seed=5, noise_seed=1, block_m=270.0, *
     return grid, frame, t, coords, block_ids(coords, block_m), cfg
 
 
+def sink_world(n=60, dx=30.0, L=L_TRUE, noise=1.0, seed=4, frac=0.15, block_m=BLOCK_M):
+    """The albedo world plus a water-cell role whose cells sit at the albedo source's local minima (the lowest
+    ``frac`` of the source minus its 2L-smoothed self), with no water effect planted: the data-only sink w (≥ 0)
+    lands on its bound, and leaves it when L is pushed above its estimate (a sink at the source minima sharpens
+    an over-smoothed prediction) — the Providence pattern (s, w at 0 at θ̂, s ≈ 0.2 and w ≈ 10 W/m² at L = 460 m).
+    (grid, frame, y, coords, clusters, cfg)."""
+    rng = np.random.default_rng(seed)
+    srng = np.random.default_rng(1000)
+    alb = 0.15 + 0.05 * gaussian_random_field((n, n), 2.0, srng)
+    yy, xx = np.mgrid[0:n, 0:n]
+    x, y = (xx * dx).ravel().astype(float), (yy * dx).ravel().astype(float)
+    grid = Grid.from_points(x, y, cell=dx)
+    cfg = dict(WORLD_CFG, roles={"albedo": "albedo", "water_distance": "water_distance"})
+    pad = PhysicsModel(grid, cfg).pad
+    q = -(alb.ravel() - alb.mean())
+    hp = q - grid.sample(ops.solve(np.nan_to_num(grid.rasterize(q)), 2 * L, (0.0, 0.0), dx=dx, pad=pad))
+    wd = np.where(hp <= np.quantile(hp, frac), 0.0, 300.0)
+    phi = grid.sample(ops.solve(np.nan_to_num(grid.rasterize(q)), L, (0.0, 0.0), dx=dx, pad=pad))
+    t = phi / phi.std() + noise * rng.standard_normal(n * n)
+    coords = np.column_stack([x, y])
+    return (grid, pd.DataFrame({"albedo": alb.ravel(), "water_distance": wd}), t, coords, block_ids(coords, block_m),
+            cfg)
+
+
 def _finite_or_none(rep):
     """Every number in the report is finite (or None)."""
     def walk(o):
@@ -507,6 +531,35 @@ def test_advection_drift_profile_runs_on_its_own_coordinates():
         prof = r["profile"]
         i0 = prof["grid"].index(r["estimate_data"])
         assert prof["lambda_naive"][i0] == 0.0 and min(prof["lambda_naive"]) == 0.0
+
+
+def test_a_profile_maximises_over_parameters_held_on_a_bound_or_flat():
+    """A profile maximises over every other parameter, those held at θ̂ included.  Sink world: w is on its bound
+    and e₀ flat (confounded with a while w = 0) at θ̂.  Along L, w leaves its bound above L̂; along w, e₀ is no
+    longer confounded.  Each profile's outermost points must be as good as an independent fit with ψ fixed and
+    every other parameter free, started with w released inside its bound.  With them frozen (before the fix) L's
+    point at 107.6 m had Λ_I = 6.18 against 5.78 from the free fit, and w's profile was too steep likewise."""
+    grid, frame, y, coords, cl, cfg = sink_world()
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "w"], posterior=False,
+                     settings={**FAST, "max_points": 6, "block_m": BLOCK_M})
+    assert rep["hessian"]["held_at_bound"] == ["w"] and rep["hessian"]["held_flat"] == ["e0"]
+    idx = np.arange(y.size)
+    ref = PhysicsModel(grid, cfg, L_init=L_TRUE).fit(frame, y, idx, coords, prior_scale=0.0)
+    l_hat = rep["reference"]["data_only"]["loglik_independence"]
+    moved = 0
+    for key, nat in (("L", "L"), ("w", "w")):
+        prof = _row(rep, key)["profile"]
+        for i in (0, len(prof["grid"]) - 1):
+            v = prof["grid"][i]
+            if v == _row(rep, key)["estimate_data"] or (key == "w" and v <= 0.0):
+                continue
+            start = {**ref.leaves, "w": -3.0}
+            free = PhysicsModel(grid, cfg, L_init=L_TRUE).fit(frame, y, idx, coords, prior_scale=0.0, fixed={nat: v},
+                                                             init=start)
+            lam_free = 2.0 * (l_hat + 0.5 * y.size * math.log(free.train_rmse ** 2))
+            assert prof["lambda_naive"][i] <= lam_free + 0.02, (key, v, prof["lambda_naive"][i], lam_free)
+            moved += key == "L" and free.params["w"] > 0.5
+    assert moved                                    # the case under test: w leaves its bound along L's profile
 
 
 # ---------------------------------------------------------------------------

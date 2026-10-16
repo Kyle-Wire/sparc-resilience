@@ -139,8 +139,17 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   it is held at the bound for H, V and the Laplace step, and gets a one-sided profile.  So is a parameter that
   carries no information (a zero diagonal of H_I, or a direction of H_I with no curvature: e.g. the EF
   intercept when the source has no other term, which the gain a absorbs exactly); its profile is flat, and it
-  enters the posterior only through its prior.  Profiles of the other parameters keep held ones fixed (their
-  leaves cannot move anyway: the softplus slope there is ~10⁻¹¹).
+  enters the posterior only through its prior.  "Held" applies to the curvature only: **a profile maximises
+  over every other parameter, held ones included** (within their bounds).  Their leaves cannot move from the
+  bound (the softplus or sigmoid slope there is ~10⁻¹¹), so each profile point is also started with them
+  released inside their bounds (:data:`RELEASE_LEAF`) and the better optimum is kept.  They enter l_I there,
+  not δ: the adjustment is that of the profile of l_I over the bound-held ones, whose curvature and scores at θ̂
+  are those in the main coordinates (the bound stays active near θ̂), and the l_A maximisation moves them too.
+  A flat one is maximised in l_I but keeps the l_I-profile point's value in the l_A maximisation: it lies in a
+  direction of H_I without curvature (e₀ confounded with a), so moving it would move δ along that direction at
+  no cost in l_I and defeat the adjustment (on a test world it narrowed L's adjusted interval by a third).
+  Holding them fixed made the profiles too steep: on Providence (60 m cells) L = 460 m had Λ_I = 409 with s,
+  a₁, w and κ held and 126 with them free; on the sink world of the tests, 6.18 against 5.78.
 * **One-sided profiles of a held parameter** are adjusted in the main coordinates extended by that parameter's
   own walk coordinate (its leaf would be infinite at the bound).  At a boundary maximum the
   vertical adjustment is an approximation (Chandler & Bate derive it at an interior maximum).
@@ -837,11 +846,21 @@ class _Study:
         m = self.model
         drift = vspec is not None
         free = [NATURAL_LEAF[k] for k in space.keys if k != psi and not (drift and k in ("vx", "vy"))]
+        # parameters held on a fit bound at θ̂ are maximised too: they enter l_I (a true profile maximises over every
+        # other parameter), not δ; the bound is active near θ̂, so the curvature in the main coordinates is that of
+        # the profile over them.  Flat ones are not: they lie in a direction of H_I without curvature (e.g. e₀
+        # confounded with the gain a), so moving them would move δ along it at no cost in l_I and defeat the
+        # adjustment; they keep the start's value (an l_I-profile point's own maximiser)
+        skip = {"ux", "uy"} if drift else {NATURAL_LEAF[psi]}
+        free += [NATURAL_LEAF[k] for k in (getattr(self, "held_bound", None) or {})
+                 if NATURAL_LEAF[k] in self.active and NATURAL_LEAF[k] not in free and NATURAL_LEAF[k] not in skip]
+        const = [n for n in self.active if n not in free and n not in skip]       # flat: the start's values
         HA, HI, thh = _t(C["HA"]), _t(C["H"]), _t(th_hat)
         natural = None if drift else {psi: float(value)}
 
-        def build(leaves: dict, coef_s, alpha=None):
+        def build(leaves: dict, coef_s, alpha=None, fixed=None):
             P = {k: _t(v) for k, v in space.base.items()}
+            P.update(fixed or {})
             for n in free:
                 P[n] = leaves[n]
             if drift:
@@ -853,6 +872,9 @@ class _Study:
             lI = -0.5 * self.n * torch.log((r * r).sum() / self.n) - self.drift_l(P)
             return self.l_adj_t(lI, th, HA, HI, thh), th
 
+        def fixed_of(st_):
+            return {n: _t(st_.get(n, space.base.get(n))) for n in const if n in st_ or n in space.base}
+
         best = None
         with torch.no_grad():
             for st_ in starts:
@@ -860,10 +882,11 @@ class _Study:
                     continue
                 lv = {n: _t(st_[n]) for n in free}
                 a0 = _t(st_.get("_alpha", 0.0))
-                val, _ = build(lv, _t(np.asarray(st_["_coef"], float) * self.col), a0)
+                val, _ = build(lv, _t(np.asarray(st_["_coef"], float) * self.col), a0, fixed_of(st_))
                 if math.isfinite(float(val)) and (best is None or float(val) > best[0]):
                     best = (float(val), st_)
         st_ = best[1]
+        fx = fixed_of(st_)
         x = {n: _t(st_[n]).clone().requires_grad_(True) for n in free}
         c = _t(np.asarray(st_["_coef"], float) * self.col).clone().requires_grad_(True)
         params = list(x.values()) + [c]
@@ -871,10 +894,11 @@ class _Study:
         if drift:
             alpha = _t(st_.get("_alpha", vspec[1])).clone().requires_grad_(True)
             params.append(alpha)
-        _lbfgs(params, lambda: -build(x, c, alpha)[0], int(self.S["adj_iter"]))
+        _lbfgs(params, lambda: -build(x, c, alpha, fx)[0], int(self.S["adj_iter"]))
         with torch.no_grad():
-            val, th = build(x, c, alpha)
+            val, th = build(x, c, alpha, fx)
         out = {n: float(v.detach()) for n, v in x.items()}
+        out.update({n: float(v) for n, v in fx.items()})
         out["_coef"] = (c.detach().numpy() / self.col).tolist()
         if drift:
             out["_alpha"] = float(alpha.detach())
@@ -1194,6 +1218,7 @@ def _at_optimum(st: _Study, dat_model, pen: dict, keys: list[str], fold_params):
     t0 = time.perf_counter()
     with progress.task("curvature", key="data_only"):
         held_bound = set(dat["at_bound"])
+        st.held_bound = dict(dat["at_bound"])
         keys0 = [LEAF_NATURAL[n] for n in st.active if LEAF_NATURAL[n] not in held_bound]
         sp0 = _Space(st, dat["leaves"], keys0)
         th0 = sp0.pack(dat["natural"], dat["coef"])
@@ -1524,42 +1549,56 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
 
     from sparc.core.physics import NATURAL_LEAF, _lbfgs
 
-    m, main = st.model, st.main
+    m = st.model
     nat = r["_nat"]
     drift = r["key"] == "v"
     psi_leaves = {"ux", "uy"} if drift else {NATURAL_LEAF[nat]}
-    free = [NATURAL_LEAF[k] for k in main.keys if NATURAL_LEAF[k] not in psi_leaves]
-    P = {k: _t(v) for k, v in dat["leaves"].items()}
-    for n in free:
-        P[n] = _t(warm[n]).clone().requires_grad_(True)
-    params = [P[n] for n in free]
-    natural = None
-    alpha = None
-    if drift:
-        a0 = warm.get("_alpha")
-        if a0 is None:
-            a0 = math.atan2(warm["uy"], warm["ux"]) if math.hypot(warm["ux"], warm["uy"]) > 0 else 0.0
-        alpha = _t(a0).clone().requires_grad_(True)
-        params.append(alpha)
+    # a profile maximises over every other parameter: those held on a fit bound or flat at θ̂ included (within
+    # their bounds: the leaves map onto them)
+    free = [n for n in st.active if n not in psi_leaves]
+    natural = None if drift else {nat: float(value)}
+
+    def fit_from(start: dict):
+        P = {k: _t(v) for k, v in dat["leaves"].items()}
+        for n in free:
+            P[n] = _t(start[n]).clone().requires_grad_(True)
+        params = [P[n] for n in free]
+        alpha = None
+        if drift:
+            a0 = start.get("_alpha")
+            if a0 is None:
+                a0 = math.atan2(start["uy"], start["ux"]) if math.hypot(start["ux"], start["uy"]) > 0 else 0.0
+            alpha = _t(a0).clone().requires_grad_(True)
+            params.append(alpha)
 
         def set_v():
-            P["ux"] = value * torch.cos(alpha) / m.v_max
-            P["uy"] = value * torch.sin(alpha) / m.v_max
-    else:
-        natural = {nat: float(value)}
+            if drift:
+                P["ux"] = value * torch.cos(alpha) / m.v_max
+                P["uy"] = value * torch.sin(alpha) / m.v_max
 
-        def set_v():
-            return None
+        def objective():
+            set_v()
+            return st.terms.evaluate(P, prior_scale=0.0, natural=natural)[0]
 
-    def objective():
-        set_v()
-        return st.terms.evaluate(P, prior_scale=0.0, natural=natural)[0]
+        if params:
+            _lbfgs(params, objective, int(st.S["profile_iter"]))
+        with torch.no_grad():
+            set_v()
+            res = st.terms.evaluate(P, prior_scale=0.0, natural=natural)
+        return float(res[0]), P, alpha, res
 
-    if params:
-        _lbfgs(params, objective, int(st.S["profile_iter"]))
-    with torch.no_grad():
-        set_v()
-        loss, coef, mse, T, _ = st.terms.evaluate(P, prior_scale=0.0, natural=natural)
+    # from the warm start, and from it with the parameters held on a bound released inside their bounds (a
+    # leaf on a softplus floor or a sigmoid end has a vanishing gradient, so the warm start cannot move them)
+    starts = [warm]
+    rel = _released(st, warm, psi_leaves)
+    if rel is not None:
+        starts.append(rel)
+    best = None
+    for start in starts:
+        cand = fit_from(start)
+        if best is None or cand[0] < best[0]:
+            best = cand
+    _, P, alpha, (loss, coef, mse, T, _) = best
     leaves = {k: float(v.detach()) for k, v in P.items()}
     if drift:
         leaves["_alpha"] = float(alpha.detach())
@@ -1573,7 +1612,7 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
         e = _ext(st, nat, dat, cache)
         sp, th_hat, Cs, flat = e["space"], e["theta"], e["Cs"], e["flat"]
     else:
-        sp, th_hat, Cs, flat = main, st.th_main, st.Cs, False
+        sp, th_hat, Cs, flat = st.main, st.th_main, st.Cs, False
     th = sp.pack({k: float(T[k].detach()) for k in sp.keys}, coef.numpy())
     out = {"value": float(value), "l": lval, "loss": float(loss), "leaves": leaves, "lam_i": lam_i,
            "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
@@ -1597,6 +1636,26 @@ def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict
         out["R"][mode], out["R_ipath"][mode] = R_eff, R
         out["lam_a"][mode], out["lam_a_ipath"][mode] = lam_a, lam_ipath
     return out
+
+
+#: Leaf value a parameter held on a fit bound is released to (inside the bound: σ(±3) = 0.047 of a sigmoid's range
+#: in, softplus(−3) = 0.049 × scale above a floor), where its leaf has a usable gradient (operational).
+RELEASE_LEAF = 3.0
+
+
+def _released(st: _Study, start: dict, skip: set) -> dict | None:
+    """``start`` with the leaves of the parameters held on a fit bound at θ̂ (other than ``skip``) moved inside
+    their bounds (:data:`RELEASE_LEAF`); None when there are none."""
+    from sparc.core.physics import NATURAL_LEAF
+
+    out, moved = dict(start), False
+    for k, side in (getattr(st, "held_bound", None) or {}).items():
+        leaf = NATURAL_LEAF[k]
+        if leaf in skip or leaf not in st.active:
+            continue
+        out[leaf] = -RELEASE_LEAF if side == "lower" else RELEASE_LEAF
+        moved = True
+    return out if moved else None
 
 
 def _crossing(seq: list[dict], x0: float, lam0: float, key: str, thr: float = CHI2_95):
