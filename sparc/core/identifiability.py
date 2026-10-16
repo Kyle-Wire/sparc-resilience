@@ -149,11 +149,12 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   substituted.  Every distinct start is run for an eighth of the iterations (:data:`SCREEN_FRAC`) and the best
   continued for the full count (the physics fit's own multistart scheme, with a shorter screen), and the best
   value seen is kept, so Λ_A never exceeds
-  its value at the l_I-profile point without taking a minimum over different paths.  A profile (a maximum
-  over the other parameters) cannot rise inward: a point whose Λ (naive or either adjusted one) exceeds the
-  next point outward's by more than :data:`MONO_TOL` is re-maximised from that point's optimum and the better
-  optima kept (two passes); what remains is recorded (``profile.monotone``, ``non_monotone``) and warned
-  about.  On the 13-parameter city world of the tests the single-start version gave L's adjusted profile 3.94
+  its value at the l_I-profile point without taking a minimum over different paths.  A point whose Λ (naive
+  or either adjusted one) exceeds the next point outward's by more than :data:`MONO_TOL` suggests a failed
+  maximisation, so it is re-maximised from that point's optimum and the better optima kept (two passes).  A
+  profile likelihood need not be monotone away from ψ̂ (the likelihood can be multimodal), so what remains after
+  re-maximisation is recorded (``profile.monotone``, ``non_monotone``) and warned about: the profile may be
+  multimodal there, and the interval end on that side is uncertain.  On the 13-parameter city world of the tests the single-start version gave L's adjusted profile 3.94
   at 92.0 m and 3.48 at 92.2 m, and an upper 95% end of 91.9 m instead of 92.8 m.
 * **Profile range.**  A side also stops at a physical limit (:data:`PHYSICAL_LIMITS`: a fraction's 0 or 1,
   the 0 of a non-negative slope, sink or drift), where that side is open but the interval ends, and an EF
@@ -1942,10 +1943,11 @@ def _merge_point(st: _Study, p: dict, q: dict) -> None:
 
 
 def _repair_monotone(st: _Study, r: dict, seq: list[dict], dat: dict, cache: dict) -> list[dict]:
-    """A profile (max over the other parameters) cannot rise inward: where a point's Λ exceeds the next point
-    outward's by more than :data:`MONO_TOL`, its maximisation failed, so it is redone with the outer point's
-    optimum as an extra start and the better optima kept (:func:`_merge_point`; two passes).  Returns the
-    violations left, [{inner, outer, profile}] (ψ values), each one also warned about."""
+    """Where a point's Λ exceeds the next point outward's by more than :data:`MONO_TOL`, its maximisation has
+    probably failed, so it is redone with the outer point's optimum as an extra start and the better optima kept
+    (:func:`_merge_point`; two passes).  A profile likelihood can also be genuinely multimodal, so a violation
+    that persists is not an error: it is returned, [{inner, outer, profile}] (ψ values), and warned about (the
+    interval end on that side is uncertain)."""
     for _ in range(2):
         bad = _nonmonotone(st, seq)
         if not bad:
@@ -1958,8 +1960,8 @@ def _repair_monotone(st: _Study, r: dict, seq: list[dict], dat: dict, cache: dic
             for i, which in _nonmonotone(st, seq)]
     for v in left:
         st.warn(f"the {v['profile']} profile of {r['key']} is not monotone beyond {MONO_TOL} in Λ between "
-                f"{v['inner']:.4g} and {v['outer']:.4g} after re-maximising from the outer point: a local optimum or a "
-                "rough likelihood there; its interval end on that side is uncertain")
+                f"{v['inner']:.4g} and {v['outer']:.4g} after re-maximising from the outer point: a failed "
+                "maximisation or a multimodal profile likelihood there; its interval end on that side is uncertain")
     return left
 
 

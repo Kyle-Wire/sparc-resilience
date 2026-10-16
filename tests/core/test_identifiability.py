@@ -788,6 +788,8 @@ def test_non_monotone_profiles_are_repaired_or_reported(monkeypatch):
     left = ID._repair_monotone(st, {"key": "L"}, seq, {}, {})
     assert seq[1]["lam_i"] == 6.0 and {v["profile"] for v in left} == {"naive", "blocks"}
     assert left[0]["inner"] == 2.0 and left[0]["outer"] == 3.0 and any("not monotone" in w for w in st.warnings)
+    # a profile likelihood can be multimodal: the warning does not claim the violation must be a failed maximisation
+    assert all("multimodal" in w for w in st.warnings if "not monotone" in w)
 
 
 # ---------------------------------------------------------------------------
