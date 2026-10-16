@@ -948,8 +948,10 @@ def test_constant_canopy_makes_s_non_identifiable_and_prior_dominated():
     assert s["held"] == "flat" and s["identifiability"] == "structurally_non_identifiable"
     assert max(s["profile"]["lambda_adj"]) < ID.FLAT_LAMBDA and s["se_robust"] is None
     assert s["prior_share_run"] > 0.95
-    assert s["posterior"]["method"] == "laplace"
-    assert s["psens"]["prior"] >= 0.05 and s["psens"]["likelihood"] < 0.05
+    # no information in the data: its posterior is its nominal prior, not a Laplace step (F10)
+    assert s["posterior"]["method"] == "prior" and s["posterior"]["reliable"] is True
+    assert s["posterior"]["mean"] == pytest.approx(s["prior"]["mean"], abs=0.1)
+    assert s["psens"]["method"] == "prior" and s["psens"]["prior"] >= 0.05 and s["psens"]["likelihood"] < 1e-6
     assert s["psens"]["diagnosis"] == "weak_likelihood"
     assert s["conflict"]["p"] is None and "not identified" in s["conflict"]["reason"]
     assert {"s", "kappa_canopy", "e2"} <= set(rep["hessian"]["held_flat"])
@@ -957,6 +959,28 @@ def test_constant_canopy_makes_s_non_identifiable_and_prior_dominated():
     assert L["identifiability"] == "identified" and _covers(L["ci95"], L_TRUE)
     assert L["prior_share_run"] < 0.05                               # L has no prior
     assert set(rep["posterior"]["flat_prior_parameters"]) >= {"s", "kappa_canopy", "e2"}
+    assert set(rep["posterior"]["prior_parameters"]) >= {"s", "kappa_canopy", "e2"}
+    assert not set(rep["posterior"]["prior_parameters"]) & set(rep["posterior"]["laplace_parameters"])
+    assert {"s", "kappa_canopy", "e2"} <= set(rep["posterior"]["conditional_on"])
+
+
+def test_the_laplace_check_passes_on_the_iid_albedo_world_with_a_flat_ef_intercept():
+    """Albedo world, independent noise: e₀ is exactly confounded with the gain a (flat) and has a nominal prior.  It
+    used to be drawn from its prior at fixed a in the Laplace step, which collapsed l_A at the draws (an
+    importance-sampling ESS of ~1 of 300) and flagged every row, L included, unreliable, blaming a non-quadratic
+    l_I.  With e₀ out of the Laplace step (its posterior is its prior) the check passes and L's posterior is
+    reported."""
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.5, seed=0)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "e0"], draws=300,
+                     settings={**FAST, "max_points": 4, "block_m": BLOCK_M})
+    post = rep["posterior"]
+    assert rep["hessian"]["held_flat"] == ["e0"] and post["prior_parameters"] == ["e0"]
+    assert post["laplace_adequate"] is True and post["is_ess_frac"] > 0.5, post
+    L, e0 = _row(rep, "L"), _row(rep, "e0")
+    assert L["posterior"]["method"] == "laplace" and L["posterior"]["reliable"] is True
+    assert "e0" in L["posterior"]["conditional_on"] and "conditional on" in L["posterior"]["description"]
+    assert e0["posterior"]["method"] == "prior" and e0["posterior"]["sd"] == pytest.approx(e0["prior"]["sd"], rel=0.1)
+    assert not any("Laplace approximation" in w for w in rep["warnings"]), rep["warnings"]
 
 
 def _cross(prof, key, thr, x0):

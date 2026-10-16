@@ -72,12 +72,17 @@ Method
    (:meth:`PhysicsModel.prior_terms`) — not the ``prior_weight``-scaled penalty the run minimises.  L, w, the
    drift and the linear coefficients have flat priors.  Laplace approximation at the posterior mode (L-BFGS
    from θ̂), covariance −(H_A + prior Hessian)⁻¹.  **This is a Laplace approximation, not MCMC**, and it is
-   conditional on the parameters it holds fixed (those on a fit bound, and flat ones without a nominal prior:
+   conditional on the parameters it holds fixed (those on a fit bound and the flat ones:
    ``posterior.conditional_on``, repeated in each row's ``description``).  Its adequacy is checked (the
    importance-sampling ESS of its draws for exp(l_A + log prior), below); when the check fails, every Laplace
    row's ``posterior`` and ``psens`` carry ``reliable: false`` with the reason, the markdown and the register do
    not show them, and they are not findings.  A parameter on its bound with a nominal prior has a 1-D *profile*
-   posterior instead (``method: profile``, its own ``description``; the Laplace check does not apply to it).
+   posterior instead (``method: profile``, its own ``description``; the Laplace check does not apply to it).  A
+   flat parameter with a nominal prior (no information in the data) is not in the Laplace step: its posterior
+   is reported as its nominal prior within the fit bounds (``method: prior``), with power-scaling on prior
+   draws (likelihood sensitivity 0).  It is flat only along a direction shared with other parameters (e₀ with
+   the gain a: a·(1 − σ(e₀)) = const), not at their fixed values, so drawing it from its prior with the others
+   held collapsed l_A at the draws and failed the adequacy check by construction (``posterior.prior_parameters``).
 7. **Power-scaling sensitivity** (Kallioinen et al. 2024), computed as ArviZ 0.20.0's ``psens`` does:
    ``draws`` draws from the Laplace posterior, importance log-weights (α − 1)·(component log value) for
    α = 1/1.01 and 1.01, Pareto-smoothed as ArviZ's ``_powerscale_lw`` does (:func:`psislw`, a port of ArviZ's
@@ -2389,8 +2394,12 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
     from sparc.core.physics import _lbfgs
 
     m, main, C = st.model, st.main, st.C
+    # a held-flat parameter is not in the Laplace step: it is flat only along a direction it shares with other
+    # parameters (e₀ with the gain a: a·(1 − σ(e₀)) = const), not at their fixed values, so drawing it from its prior
+    # at fixed values of the others collapses l_A at the draws (an importance-sampling ESS of ~1); the data carry no
+    # information on it, and its posterior is reported as its nominal prior (_prior_posterior)
     flat_prior = [k for k in sorted(held_flat) if k in prior_spec]
-    post = _Space(st, dat["leaves"], main.keys + flat_prior)
+    post = _Space(st, dat["leaves"], main.keys)
     th_hat = post.pack(dat["natural"], dat["coef"])
     p = post.p
     pos = [post.index(nm) for nm in main.names]
@@ -2472,10 +2481,9 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
     is_ess = _ess(w)
     gap = (lA - st.l_hat) - lq
     adequate = bool(is_ess / Dk >= LAPLACE_MIN_ESS_FRAC)
-    # the Laplace step holds the parameters on a fit bound at their bound, and the flat ones without a nominal
-    # prior at their data-only values: its posterior is conditional on them
-    cond = sorted([_NAT_KEY.get(k, k) for k in held_bound] + [_NAT_KEY.get(k, k) for k in held_flat
-                                                               if k not in prior_spec])
+    # the Laplace step holds the parameters on a fit bound at their bound, and the flat ones at their data-only
+    # values: its posterior is conditional on them
+    cond = sorted([_NAT_KEY.get(k, k) for k in held_bound] + [_NAT_KEY.get(k, k) for k in held_flat])
     why_poor = None if adequate else (
         f"the Laplace approximation of the calibrated posterior is poor (importance-sampling ESS {is_ess:.0f} of {Dk} "
         f"draws for exp(l_A + log prior), below {LAPLACE_MIN_ESS_FRAC:.0%}): its mean, sd and power-scaling describe "
@@ -2498,7 +2506,9 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
             xm = post.natural(r["_nat"], mode[i])
         else:
             computable = (r.get("boundary_adjustment") or {}).get("computable")
-            if r["at_bound"] and r["prior"] and r.get("_points") and computable:
+            if r["held"] == "flat" and r["prior"]:
+                _prior_posterior(st, r, prior_spec[r["_nat"]], rng)
+            elif r["at_bound"] and r["prior"] and r.get("_points") and computable:
                 _profile_posterior(st, r, prior_spec[r["_nat"]], rng)
             else:
                 r["posterior"] = {"mean": None, "sd": None, "method": None,
@@ -2535,17 +2545,56 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
         "laplace_adequate": adequate, "reliable": adequate, "reason": why_poor, "conditional_on": cond,
         "laplace_parameters": laplace_keys,
         "profile_parameters": [r["key"] for r in rows if (r.get("posterior") or {}).get("method") == "profile"],
+        "prior_parameters": [r["key"] for r in rows if (r.get("posterior") or {}).get("method") == "prior"],
         "psens_components": "prior: the nominal log prior as stated; likelihood: the Laplace posterior's own "
                             "likelihood term ½δᵀH_Aδ (likelihood_lA: l_A at each draw, as a comparison)"}
     if not adequate:
         prof = st.posterior_info["profile_parameters"]
         st.warn(f"the Laplace approximation of the calibrated posterior is poor (importance-sampling ESS {is_ess:.0f} "
-                f"of {Dk} draws; median l_A − quadratic {np.median(gap):.3g}): l_I is far from quadratic on the "
-                "scale of the block-adjusted uncertainty, so the posterior mean/sd and power-scaling of "
-                f"{', '.join(laplace_keys) or 'no parameter'} (the Laplace step) are flagged unreliable "
-                "(reliable: false) and are not findings"
+                f"of {Dk} draws; median l_A − quadratic {np.median(gap):.3g}): at its draws the calibrated "
+                "log-likelihood l_A is far from the approximation's quadratic form, so the posterior mean/sd and "
+                f"power-scaling of {', '.join(laplace_keys) or 'no parameter'} (the Laplace step) are flagged "
+                "unreliable (reliable: false) and are not findings"
                 + (f"; the 1-D profile posteriors of {', '.join(prof)} do not use it" if prof else "")
                 + "; the profile intervals do not rely on it")
+
+
+def _prior_posterior(st: _Study, r: dict, spec: tuple, rng) -> None:
+    """The posterior of a held-flat parameter with a nominal prior: the data carry no information on it (a direction
+    of H_I without curvature), so it is reported as its nominal prior, restricted to the fit bounds (``method:
+    prior``), with power-scaling on prior draws (the likelihood component is constant along it: sensitivity 0, a
+    weak likelihood).  Not a Laplace step, so the Laplace adequacy check does not apply to it."""
+    sc, mu, sd = spec
+    lo, hi, kind = st.model.natural_bounds(r["_nat"])
+    D = int(st.S["draws"])
+    kept, proposed = [], 0
+    while sum(len(b) for b in kept) < D and proposed < 50 * D:
+        v = mu + sd * rng.standard_normal(D)
+        x = np.exp(np.minimum(v, 700.0)) if sc == "log" else v
+        ok = np.isfinite(x)
+        if kind != "free" and lo is not None:
+            ok &= x >= lo
+        if kind in ("lin", "log") and hi is not None:
+            ok &= x <= hi
+        proposed += D
+        kept.append(x[ok])
+    x = np.concatenate(kept)[:D]
+    if x.size < 10:
+        r["posterior"] = {"mean": None, "sd": None, "method": "prior", "note": "its prior lies outside the fit bounds"}
+        return
+    lp = _log_prior_nat(x, spec)
+    desc = ("the nominal prior (restricted to the fit bounds): the data carry no information on this parameter (a "
+            "direction of H_I without curvature), so its posterior is its prior; no Laplace step, so the Laplace "
+            "adequacy check does not apply")
+    r["posterior"] = {"method": "prior", "mean": float(np.mean(x)), "sd": float(np.std(x, ddof=1)),
+                      "mode": None, "q025": float(np.quantile(x, 0.025)), "q975": float(np.quantile(x, 0.975)),
+                      "reliable": True, "reason": None, "description": desc,
+                      "note": "no information in the data: the posterior is the nominal prior"}
+    ps = power_scaling_sensitivity(x, log_prior=lp, log_lik=np.zeros_like(x), delta=float(st.S["delta"]))
+    r["psens"] = {"prior": ps["prior"], "likelihood": ps["likelihood"], "diagnosis": ps["diagnosis"],
+                  "ess": {"prior": ps["ess_prior"], "likelihood": ps["ess_likelihood"]},
+                  "khat": {"prior": ps["khat_prior"], "likelihood": ps["khat_likelihood"]}, "method": "prior",
+                  "reliable": True, "reason": None, "description": "power-scaling of draws from " + desc}
 
 
 def _profile_posterior(st: _Study, r: dict, spec: tuple, rng) -> None:
