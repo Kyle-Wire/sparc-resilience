@@ -485,7 +485,7 @@ def _identifiability_section(m: dict, run: Path, mech: dict | None) -> dict | No
     keep = ("key", "label", "unit", "class", "class_label", "run_value", "estimate_run", "estimate_data", "ci95",
             "ci95_neighbours",
             "ci95_conservative", "class_by_covariance", "class_short", "threshold", "ci95_naive", "ci95_naive_label",
-            "summary", "posterior_unreliable", "open_sides", "sides_at_limit",
+            "summary", "posterior_unreliable", "open_sides", "sides_at_limit", "not_assessable_reason",
             "at_bound", "reaches_zero", "prior", "prior_share_run", "pull", "posterior", "psens", "conflict", "text")
     rows = []
     for key, p in (ib.get("parameters") or {}).items():

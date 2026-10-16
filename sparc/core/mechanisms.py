@@ -242,8 +242,8 @@ ROLE_PARAMS = {"canopy": ("s", "kappa_canopy", "shade_c0", "shade_width", "e2"),
 NOT_IDENTIFIED = ("practically_non_identifiable", "structurally_non_identifiable", "not_assessable", "one_sided")
 IDENT_LABELS = {"identified": "identified", "practically_non_identifiable": "practically non-identifiable",
                 "one_sided": "one-sided: bounded by the data on one side only",
-                "not_assessable": "not assessable: on its fit bound, where no adjustment for spatial dependence is "
-                                  "computable",
+                "not_assessable": "not assessable: no adjustment for spatial dependence is computable (an estimate "
+                                  "on its fit bound, or fewer CV blocks than parameters)",
                 "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted"}
 #: Short plain-language labels (the results card's pills)
 IDENT_SHORT = {"identified": "identified", "one_sided": "one side only", "practically_non_identifiable": "not identified",
@@ -1156,7 +1156,7 @@ def _ident_param(p: dict, laplace_ok, run_value: float | None = None) -> dict:
            "threshold": p.get("threshold"),
            "ci95_naive": p.get("ci95_naive"), "ci95_naive_label": p.get("ci95_naive_label"),
            "open_sides": list(p.get("open_sides") or []), "sides_at_limit": list(p.get("sides_at_limit") or []),
-           "summary": p.get("summary"),
+           "summary": p.get("summary"), "not_assessable_reason": p.get("not_assessable_reason"),
            "at_bound": ab, "held": p.get("held"), "reaches_zero": bool(zero),
            "se_robust": p.get("se_robust"), "adjust_factor": p.get("adjust_factor"), "prior": p.get("prior"),
            "prior_share_run": p.get("prior_share_run"), "pull": p.get("pull"),
@@ -1211,8 +1211,10 @@ def _ident_sentence(p: dict) -> str:
                 f"bounded by the data alone on one side only ({what})")
     elif cls == "not_assessable":
         nv = p.get("ci95_naive") or [None, None]
-        core = ("not assessable from the data alone (its data-only estimate sits on a fit bound, where no adjustment "
-                "for spatial dependence is computable; the unadjusted one-sided bound, "
+        why = p.get("not_assessable_reason") or ("its data-only estimate sits on a fit bound, where no adjustment "
+                                                 "for spatial dependence is computable")
+        what = "one-sided bound" if p.get("at_bound") else "interval"
+        core = (f"not assessable from the data alone ({why}; the unadjusted {what}, "
                 f"{_sig(nv[0]) if nv[0] is not None else 'open'} to {_sig(nv[1]) if nv[1] is not None else 'open'}{u}, "
                 "is too narrow)")
     elif cls == "practically_non_identifiable":
@@ -1722,8 +1724,8 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
         cls = p.get("class_label") or "—"
         if p.get("class") == "not_assessable":
             if p.get("ci95_naive"):
-                cls += (f" (unadjusted one-sided bound {_ci_text(p['ci95_naive'], u)}, too narrow under spatial "
-                        "dependence)")
+                cls += (f" (unadjusted {'one-sided bound' if p.get('at_bound') else 'interval'} "
+                        f"{_ci_text(p['ci95_naive'], u)}, too narrow under spatial dependence)")
         elif p.get("class") == "one_sided" and p.get("summary"):
             cls += f" ({p['summary']})"
         elif p.get("open_sides") and p.get("class") != "structurally_non_identifiable":

@@ -31,8 +31,17 @@ Method
    σ² held at its MLE; V is their covariance, Σ_rob = H_I⁻¹VH_I⁻¹, Σ_naive = −H_I⁻¹ (Chandler & Bate 2007).
    Two score covariances are computed, and every interval is reported with both (below): ``blocks``,
    Chandler & Bate's V = Σ_b (U_b − Ū)(U_b − Ū)ᵀ (``ci95``, ``se_robust``, ``adjust_factor``), and
-   ``neighbours``, a sensitivity that adds adjacent blocks' cross-products (``ci95_neighbours``, …).  A
-   warning is raised when there are fewer than two clusters per parameter.
+   ``neighbours``, a sensitivity that adds adjacent blocks' cross-products (``ci95_neighbours``, …).  The
+   centred V has rank ≤ G − 1 for G clusters.  With fewer clusters than parameters (G − 1 < p, or a V of rank
+   < p) it is singular: each [Σ_rob]_jj comes from a projection onto a (G − 1)-dimensional subspace and is too
+   small, so c > 1 and the "adjustment" would narrow the intervals it exists to widen (on the 13-parameter city
+   world with 4 blocks it called 7 of 9 parameters identified, with c up to 12 and an L interval excluding the
+   planted value).  Then no adjustment is computable: no adjusted interval, sandwich SE or calibrated posterior
+   is reported, the naive intervals are labelled unadjusted, and every profiled parameter is *not assessable*
+   (``hessian.adjustable``, ``v_rank``, ``not_adjustable_reason``).  With fewer than two clusters per parameter
+   (G < 2p) V is poorly estimated: a warning is raised and every adjusted profile is floored at the naive one
+   (Λ_A ≤ Λ_I, ``hessian.floored_at_naive``), so no adjusted interval is narrower than the naive one.  One
+   cluster is rejected before any fit (V = 0).
 3. **Adjusted profile** per parameter ψ in natural units (L in m, s, κ or c₀ and width, a₁/a₁ₙ, e₀–e₃, w, |v|).
    The vertical adjustment (Chandler & Bate 2007, as documented for the chandwich package)
 
@@ -52,7 +61,8 @@ Method
    crosses and the other is open (``open_sides``, ``open_reasons``); *practically non-identifiable* when
    neither crosses; *structurally non-identifiable* when Λ_A < 0.1 everywhere explored or the parameter does
    not enter the model (a missing role); *not assessable* when its adjustment is not computable (a parameter on
-   its fit bound without a well-conditioned curvature, below).  The class rests on the wider of the two
+   its fit bound without a well-conditioned curvature, below; every parameter when there are fewer clusters
+   than parameters, step 2).  The class rests on the wider of the two
    adjusted intervals per side (``ci95_conservative``).  The interval keeps its informative part: ``ci95``
    ends at a physical limit, also when the estimate sits on it (finite, with that side reported open); a side
    open at a search range, or at a fit bound that is not a physical limit (κ on its upper bound), has no finite
@@ -455,6 +465,15 @@ def _pos_part_rel(C: np.ndarray, M: np.ndarray, rtol: float = 1e-10) -> np.ndarr
     Bp = (Q[:, keep] / np.sqrt(w[keep])).T
     k, R = np.linalg.eigh(_sym(Bp @ Cs @ Bp.T))
     return _sym(B @ ((R * np.maximum(k, 0.0)) @ R.T) @ B.T) * np.outer(d, d)
+
+
+def _unit_rank(V: np.ndarray, rtol: float = 1e-10) -> int:
+    """Numerical rank of a positive semi-definite matrix in its unit-diagonal scaling (eigenvalues above ``rtol`` ×
+    the largest)."""
+    V = _sym(np.asarray(V, float))
+    d = np.sqrt(np.maximum(np.diag(V), 1e-300))
+    w = np.linalg.eigvalsh(V / np.outer(d, d))
+    return int(np.sum(w > rtol * max(float(w.max()) if w.size else 0.0, 1e-300)))
 
 
 def _schur(H: np.ndarray, j: int) -> float:
@@ -1196,6 +1215,12 @@ def analyse(grid, frame, y, coords, clusters, cfg_physics: dict, *, L_init: floa
     cfg_physics = dict(cfg_physics)
     if S.get("num_threads"):
         cfg_physics["num_threads"] = int(S.pop("num_threads"))
+    yv, cl = np.asarray(y, float), np.asarray(clusters)
+    G = int(np.unique(cl[np.isfinite(yv)]).size) if cl.shape == yv.shape else int(np.unique(cl).size)
+    if G < 2:
+        raise ValueError(f"the identifiability study needs at least two independent clusters (CV blocks) of labelled "
+                         f"cells, got {G}: the cluster-score covariance of Chandler & Bate (2007) is not defined "
+                         "with one cluster")
     st = _Study(grid, frame, y, coords, clusters, cfg_physics, L_init, S, seed=seed)
     with _torch_threads(cfg_physics.get("num_threads", 1)):
         return _analyse(st, params, units, posterior, fold_params, context or {})
@@ -1312,7 +1337,9 @@ def _analyse(st: _Study, params, units, posterior: bool, fold_params, context: d
                         "held_flat": sorted(_NAT_KEY.get(k, k) for k in held_flat),
                         "flat_partners": {_NAT_KEY.get(k, k): v for k, v in partners.items()},
                         "negative_definite": st.C["neg_def"], "min_eig_unit": st.C["min_eig"],
-                        "n_parameters": p_main, "clusters_per_parameter": G / max(p_main, 1)},
+                        "n_parameters": p_main, "clusters_per_parameter": G / max(p_main, 1),
+                        "v_rank": st.v_rank, "adjustable": st.adjustable, "floored_at_naive": st.floor_naive,
+                        "not_adjustable_reason": st.not_adjustable_reason},
                parameters=[_public(r) for r in rows], linear=linear, derived=_derived(linear, units, context))
     st.timings["total_s"] = round(time.perf_counter() - t_all, 2)
     return out
@@ -1344,9 +1371,28 @@ def _at_optimum(st: _Study, dat_model, pen: dict, keys: list[str], fold_params):
         st.C = st.Cs[st.primary]
     st.timings["curvature_s"] = round(st.timings.get("curvature_s", 0.0) + time.perf_counter() - t0, 2)
     p_main = st.main.p
-    if G < 2 * p_main:
+    # the centred V has rank ≤ G − 1: with fewer clusters than parameters it is singular, every [Σ_rob]_jj comes from
+    # a projection onto a (G − 1)-dimensional subspace and is too small, so c > 1 and the "adjustment" narrows the
+    # intervals it exists to widen.  Then no adjustment is computable; with fewer than two clusters per parameter V
+    # is poorly estimated, and an adjusted profile is floored at the naive one (never a narrower interval)
+    st.v_rank = _unit_rank(st.Cs["blocks"]["V"])
+    st.adjustable = bool(G - 1 >= p_main and st.v_rank >= p_main)
+    st.floor_naive = bool(st.adjustable and G < 2 * p_main)
+    st.not_adjustable_reason = None
+    if not st.adjustable:
+        st.not_adjustable_reason = (f"the run has {G} CV blocks for {p_main} parameters, so the cluster-score "
+                                    f"covariance V (rank {st.v_rank}, at most G − 1 = {G - 1}) is singular and no "
+                                    "adjustment for spatial dependence is computable")
+        st.warn(f"{G} clusters for {p_main} parameters: the centred cluster-score covariance V has rank {st.v_rank} "
+                f"(at most G − 1 = {G - 1}) < {p_main}, so the Chandler & Bate (2007) adjustment is not computable "
+                "(it would narrow the intervals): no adjusted interval, sandwich SE or calibrated posterior is "
+                "reported, the naive intervals are labelled unadjusted (too narrow under spatial dependence), and "
+                "every profiled parameter is not assessable")
+    elif st.floor_naive:
         st.warn(f"{G} clusters for {p_main} parameters (fewer than two per parameter): the cluster-score "
-                "covariance V is poorly estimated, so the sandwich SEs and adjusted profiles are approximate")
+                "covariance V is poorly estimated, so the sandwich SEs and adjusted profiles are approximate; an "
+                "adjusted profile is floored at the naive one (Λ_A ≤ Λ_I), so no adjusted interval is narrower than "
+                "the naive one")
     if not st.C["neg_def"]:
         st.warn("H_I is not negative definite at the data-only optimum (smallest eigenvalue of the unit-diagonal "
                 f"−H_I {st.C['min_eig']:.3g}): a flat or non-converged direction; its eigenvalues were floored")
@@ -1452,7 +1498,7 @@ def _row_base(st: _Study, key: str, dat: dict, pen: dict, prior_spec: dict, fold
            "adjust_factor_neighbours": None, "profile": None, "ci95": None, "ci95_neighbours": None,
            "ci95_naive": None, "ci95_naive_label": None, "threshold": None, "boundary_adjustment": None,
            "ci95_conservative": None, "identifiability": None, "class_by_covariance": None, "summary": None,
-           "open_sides": [], "open_reasons": {}, "sides_at_limit": [],
+           "open_sides": [], "open_reasons": {}, "sides_at_limit": [], "not_assessable_reason": None,
            "pull": None,
            "prior": None, "prior_share_run": None, "posterior": None, "psens": None, "conflict": None,
            "notes": []}
@@ -1521,6 +1567,8 @@ def _ext(st: _Study, nat: str, dat: dict, cache: dict) -> dict:
     if min_eig > 0:
         vif = float(np.linalg.inv(Cu)[j, j])
     well = bool(not flat and not convex and min_eig >= BOUND_MIN_EIG and vif is not None and vif <= BOUND_MAX_VIF)
+    few = len(st.cl_idx) - 1 < sp.p                 # V of rank ≤ G − 1 < p: singular, c would come out > 1
+    well = well and not few
     Cs, c = None, None
     if not flat:
         U = st.scores(sp, th)
@@ -1537,6 +1585,8 @@ def _ext(st: _Study, nat: str, dat: dict, cache: dict) -> dict:
     why = None
     if not well:
         why = ("the data carry no information on it at the bound" if flat else
+               f"the run has {len(st.cl_idx)} CV blocks for the {sp.p} parameters of the curvature at the bound, so the "
+               "cluster-score covariance is singular" if few else
                "l_I is not concave along it at the bound (a positive second derivative)" if convex else
                f"the curvature at the bound is not positive definite (smallest eigenvalue of the unit-diagonal −H_I "
                f"{min_eig:.3g})" if min_eig <= 0 else
@@ -1584,6 +1634,9 @@ def _row_se(st: _Study, r: dict, dat: dict, cache: dict) -> None:
         var = {mode: (float(C["Sn"][j, j]) * d ** 2, float(C["Sr"][j, j]) * d ** 2) for mode, C in Cs.items()}
     vn = var["blocks"][0]
     r["se_naive"] = math.sqrt(max(vn, 0.0))
+    if not getattr(st, "adjustable", True):
+        r["notes"].append(f"no sandwich SE: {st.not_adjustable_reason}")
+        return
     for mode, (_, vr) in var.items():
         r["se_robust" + _SUFFIX[mode]] = math.sqrt(max(vr, 0.0))
         r["adjust_factor" + _SUFFIX[mode]] = vn / vr if vr > 0 else None
@@ -1779,6 +1832,8 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
                "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
         for mode in st.modes:
             cm = e["c"][mode] if e["c"] else None
+            if cm is not None and getattr(st, "floor_naive", False):
+                cm = min(cm, 1.0)                      # few clusters: never narrower than the naive profile
             out["R"][mode] = out["R_ipath"][mode] = cm
             out["lam_a"][mode] = out["lam_a_ipath"][mode] = lam_i * cm if cm is not None else lam_i
         return out
@@ -1791,9 +1846,10 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
     out = {"value": float(value), "l": lval, "loss": float(loss), "leaves": leaves, "lam_i": lam_i,
            "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
     leaves["_adj"] = {}
+    adjustable = getattr(st, "adjustable", True)
     for mode in st.modes:                              # one profile of l_I, one adjustment per score covariance
-        C = None if flat else Cs[mode]
-        R = None if flat else st.ratio(C, th - th_hat)
+        C = None if flat or not adjustable else Cs[mode]
+        R = None if C is None else st.ratio(C, th - th_hat)
         lam_ipath = lam_i * R if R is not None else None
         if R is None:
             lam_a, R_eff = lam_i, None                 # no curvature to adjust with: Λ_A = Λ_I (noted)
@@ -1808,6 +1864,8 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
             lA, adj, _ = st.max_adj(sp, C, th_hat, "v" if drift else nat, value, starts,
                                     vspec=(float(value), float(alpha.detach())) if drift else None)
             lam_a = max(2.0 * (st.l_hat - lA), 0.0)
+            if getattr(st, "floor_naive", False):
+                lam_a = min(lam_a, lam_i)              # few clusters: never narrower than the naive profile
             R_eff = lam_a / lam_i if lam_i > 0 else R
             leaves["_adj"][mode] = adj
         out["R"][mode], out["R_ipath"][mode] = R_eff, R
@@ -2019,9 +2077,11 @@ def _profile(st: _Study, r: dict, dat: dict, cache: dict) -> None:
     # AT_BOUND_FRAC inside it, which would put the first crossing too far in when the profile is steep)
     x_hat = _to_walk(r, est)
     se_w = None
-    if r.get("se_robust"):
-        se_w = r["se_robust"] / max(abs(r["estimate_data"]), 1e-300) if PARAMS[r["key"]][3] == "log" \
-            else r["se_robust"]
+    # the step scale: the block-adjusted SE, or the naive one when no adjustment is computable (only the naive
+    # profile is then walked)
+    se = r.get("se_robust") or (r.get("se_naive") if not getattr(st, "adjustable", True) else None)
+    if se:
+        se_w = se / max(abs(r["estimate_data"]), 1e-300) if PARAMS[r["key"]][3] == "log" else se
     rng = (hi_w - lo_w) if lo_w is not None and hi_w is not None else None
     if se_w and se_w > 0:
         h0 = 0.8 * se_w
@@ -2128,7 +2188,12 @@ def _summary(r: dict, cls: str, sides: dict) -> str:
         return f"{sym}: flat profile (no information)"
     if cls == "not_assessable":
         nv = r.get("ci95_naive") or [None, None]
-        b = (f"{sym} ≤ {_g(nv[1])}{u}" if r["at_bound"]["side"] == "lower" else f"{sym} ≥ {_g(nv[0])}{u}")
+        if r["at_bound"]:
+            b = f"{sym} ≤ {_g(nv[1])}{u}" if r["at_bound"]["side"] == "lower" else f"{sym} ≥ {_g(nv[0])}{u}"
+        else:                    # no adjustment computable at all (too few clusters): the naive two-sided interval
+            b = (f"{_g(nv[0])} ≤ {sym} ≤ {_g(nv[1])}{u}" if nv[0] is not None and nv[1] is not None else
+                 f"{sym} ≥ {_g(nv[0])}{u}" if nv[0] is not None else f"{sym} ≤ {_g(nv[1])}{u}" if nv[1] is not None
+                 else f"{sym} open on both sides")
         return f"unadjusted {b} (too narrow under spatial dependence){tail}"
     if cls == "identified":
         return f"{_g(lo[1])} ≤ {sym} ≤ {_g(hi[1])}{u}"
@@ -2189,7 +2254,11 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
         r["ci95" + _SUFFIX[mode]] = ci(status[mode])
     r["ci95_naive"] = ci(status_naive)
     ba = r.get("boundary_adjustment") or {}
-    not_assessable = bool(r["at_bound"] and not ba.get("computable"))
+    adjustable = getattr(st, "adjustable", True)
+    not_assessable = bool(r["at_bound"] and not ba.get("computable")) or not adjustable
+    na_reason = (st.not_adjustable_reason if not adjustable else
+                 "its data-only estimate sits on a fit bound, where its block adjustment is not computable "
+                 f"({ba.get('reason')})")
     if r["at_bound"]:
         r["notes"].append(f"its data-only estimate is on its {r['at_bound']['side']} fit bound: a boundary maximum, so "
                           "its profile is one-sided and its 95% bound is where Λ reaches χ²₁(0.90) = 2.706 (Self & "
@@ -2213,8 +2282,14 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
             r["ci95" + _SUFFIX[mode]] = None
         r["ci95_conservative"] = None
         r["ci95_naive_label"] = "unadjusted (too narrow under spatial dependence)"
-        r["notes"].append(f"not assessable: its block adjustment is not computable ({ba.get('reason')}); the naive "
-                          "one-sided bound is unadjusted (too narrow under spatial dependence)")
+        r["not_assessable_reason"] = na_reason
+        r["notes"].append(f"not assessable: {na_reason}; the naive "
+                          + ("one-sided bound" if r["at_bound"] else "interval")
+                          + " is unadjusted (too narrow under spatial dependence)")
+    elif getattr(st, "floor_naive", False) and any((r.get("adjust_factor" + _SUFFIX[m_]) or 0.0) > 1.0
+                                                   for m_ in st.modes):
+        r["notes"].append("c > 1 with fewer than two CV blocks per parameter: the adjusted profile is floored at the "
+                          "naive one, so its interval is the wider of the two (never narrower than the naive one)")
     r["identifiability"] = cls
     r["class_by_covariance"] = by_mode
     r["open_sides"], r["sides_at_limit"] = open_sides, at_limit
@@ -2228,7 +2303,7 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
         r["notes"].append(f"open on the {' and '.join(at_limit)} side at its physical limit: the data do not "
                           "exclude it")
     unadj = [p for p in pts if any(R is None for R in p["R"].values()) and p["lam_i"] > 0]
-    if unadj:
+    if unadj and adjustable:
         r["notes"].append(f"{len(unadj)} profile point(s) without curvature in the adjustment coordinates: Λ_A = Λ_I "
                           "there (unadjusted)")
     if flat:
@@ -2316,11 +2391,14 @@ def _linear_rows(st: _Study, dat: dict, pen: dict, pen_info: dict) -> list[dict]
         sr_nb = (math.sqrt(max(st.Cs["neighbours"]["Sr"][i_d, i_d], 0.0)) / c if "neighbours" in st.Cs else None)
         sn_p = math.sqrt(max(pen_info["Sn"][i_p, i_p], 0.0)) / c
         sr_p = math.sqrt(max(pen_info["Sr"][i_p, i_p], 0.0)) / c
+        adj = getattr(st, "adjustable", True)          # a singular V (too few clusters): no sandwich SE
         rows.append({"key": nm, "label": label, "unit": unit,
-                     "estimate_data": float(dat["coef"][j]), "se_naive_data": float(sn_d), "se_robust_data": float(sr_d),
-                     "se_robust_data_neighbours": sr_nb,
-                     "estimate_run": float(pen["coef"][j]), "se_naive_run": float(sn_p), "se_robust_run": float(sr_p),
-                     "adjust_factor": float((sn_d / sr_d) ** 2) if sr_d > 0 else None})
+                     "estimate_data": float(dat["coef"][j]), "se_naive_data": float(sn_d),
+                     "se_robust_data": float(sr_d) if adj else None,
+                     "se_robust_data_neighbours": sr_nb if adj else None,
+                     "estimate_run": float(pen["coef"][j]), "se_naive_run": float(sn_p),
+                     "se_robust_run": float(sr_p) if adj else None,
+                     "adjust_factor": float((sn_d / sr_d) ** 2) if adj and sr_d > 0 else None})
     return rows
 
 
@@ -2342,10 +2420,13 @@ def _derived(linear: list[dict], units, context: dict) -> dict:
            "window": window}
 
     def conv(r, f):
-        return {"data_only": {"value": r["estimate_data"] * f, "se_naive": r["se_naive_data"] * abs(f),
-                              "se_robust": r["se_robust_data"] * abs(f)},
-                "run": {"value": r["estimate_run"] * f, "se_naive": r["se_naive_run"] * abs(f),
-                        "se_robust": r["se_robust_run"] * abs(f)}}
+        def sc(v):
+            return None if v is None else v * abs(f)
+
+        return {"data_only": {"value": r["estimate_data"] * f, "se_naive": sc(r["se_naive_data"]),
+                              "se_robust": sc(r["se_robust_data"])},
+                "run": {"value": r["estimate_run"] * f, "se_naive": sc(r["se_naive_run"]),
+                        "se_robust": sc(r["se_robust_run"])}}
 
     if "a" in by:
         out["r_a"] = {"unit": "s/m", **conv(by["a"], fK * rcp / norm),
@@ -2394,6 +2475,24 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
     from sparc.core.physics import _lbfgs
 
     m, main, C = st.model, st.main, st.C
+    if not getattr(st, "adjustable", True):
+        # no H_A without a computable adjustment: no calibrated posterior (a held-flat parameter's is its prior)
+        rng = np.random.default_rng(int(st.S["seed"]))
+        for r in rows:
+            if not r["_in_model"]:
+                continue
+            if r["held"] == "flat" and r["prior"]:
+                _prior_posterior(st, r, prior_spec[r["_nat"]], rng)
+            else:
+                r["posterior"] = {"mean": None, "sd": None, "method": None,
+                                  "note": f"no calibrated posterior: {st.not_adjustable_reason}"}
+                r["psens"] = None
+        st.posterior_info = {"method": None, "computed": False, "reason": st.not_adjustable_reason,
+                             "laplace_adequate": None, "reliable": None, "conditional_on": [],
+                             "laplace_parameters": [], "profile_parameters": [],
+                             "prior_parameters": [r["key"] for r in rows
+                                                  if (r.get("posterior") or {}).get("method") == "prior"]}
+        return
     # a held-flat parameter is not in the Laplace step: it is flat only along a direction it shares with other
     # parameters (e₀ with the gain a: a·(1 − σ(e₀)) = const), not at their fixed values, so drawing it from its prior
     # at fixed values of the others collapses l_A at the draws (an importance-sampling ESS of ~1); the data carry no

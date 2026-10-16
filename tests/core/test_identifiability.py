@@ -663,8 +663,55 @@ def test_indefinite_or_singular_curvature_does_not_crash(case):
     assert all(f"for {p_main} parameters" in w for w in rep["warnings"] if " clusters for " in w)
     if case == "four_clusters":
         assert rep["n_clusters"] == 4 and any("clusters for" in w for w in rep["warnings"])
+        # V has rank ≤ G − 1 = 3 < p: no adjustment is computable (it used to come out with c up to 12, *narrowing*
+        # the intervals, and called 7 of 9 parameters identified, L's interval excluding the planted 90 m)
+        h = rep["hessian"]
+        assert h["adjustable"] is False and h["v_rank"] <= 3 and "singular" in h["not_adjustable_reason"]
+        for r in rep["parameters"]:
+            assert not (r["identifiability"] == "identified" and (r["adjust_factor"] or 0) > 1), r["key"]
+            if r["identifiability"] == "structurally_non_identifiable":
+                continue
+            assert r["identifiability"] == "not_assessable", (r["key"], r["identifiability"])
+            assert r["ci95"] is None and r["ci95_neighbours"] is None and r["se_robust"] is None
+            assert r["ci95_naive_label"].startswith("unadjusted") and "CV blocks" in r["not_assessable_reason"]
+            assert r["posterior"]["mean"] is None or r["posterior"]["method"] == "prior"
+        assert rep["posterior"]["computed"] is False
+        assert all(x["se_robust_data"] is None and x["se_robust_run"] is None for x in rep["linear"])
     for r in rep["parameters"]:
         assert r["identifiability"] is not None, r["key"]
+
+
+def test_one_cluster_is_rejected_before_any_fit(monkeypatch):
+    """With one cluster the block sandwich is not defined (V = 0): a clear error before any fitting (it used to fit,
+    then overflow to a NaN H_A and raise 'no finite start for the adjusted profile')."""
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.5, seed=0, block_m=5000.0)
+    assert np.unique(cl).size == 1
+    monkeypatch.setattr(ID._Study, "reference", lambda *a, **k: pytest.fail("fitted before checking the clusters"))
+    with pytest.raises(ValueError, match="at least two independent clusters"):
+        ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L"], posterior=False,
+                   settings={**QUICK, "block_m": 5000.0})
+
+
+def test_few_clusters_never_give_an_adjusted_interval_narrower_than_the_naive_one():
+    """Nine clusters for five parameters (fewer than two per parameter, but V of full rank): V is poorly estimated
+    and c can exceed 1, which would make the "adjusted" interval narrower than the naive one.  The adjusted profile
+    is floored at the naive one (Λ_A ≤ Λ_I), so every adjusted interval contains the naive one, and the study says
+    so."""
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.5, seed=0, block_m=600.0)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L"], posterior=False,
+                     settings={**QUICK, "max_points": 4, "block_m": 600.0})
+    h = rep["hessian"]
+    assert rep["n_clusters"] == 9 and h["n_parameters"] == 5
+    assert h["adjustable"] is True and h["floored_at_naive"] is True
+    assert any("floored at the naive one" in w for w in rep["warnings"])
+    L = _row(rep, "L")
+    prof = L["profile"]
+    for key in ("lambda_adj", "lambda_adj_neighbours"):
+        assert all(a <= n + 1e-9 for a, n in zip(prof[key], prof["lambda_naive"])), key
+    for key in ("ci95", "ci95_neighbours"):
+        lo, hi = L[key]
+        nlo, nhi = L["ci95_naive"]
+        assert (lo is None or nlo is None or lo <= nlo + 1e-9) and (hi is None or nhi is None or hi >= nhi - 1e-9)
 
 
 def test_a_held_flat_parameter_does_not_report_the_main_curvature_as_degenerate():
