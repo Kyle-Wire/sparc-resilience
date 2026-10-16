@@ -200,8 +200,17 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   over every other parameter, held ones included** (within their bounds).  Their leaves cannot move from the
   bound (the softplus or sigmoid slope there is ~10⁻¹¹), so each profile point is also started with them
   released inside their bounds (:data:`RELEASE_LEAF`) and the better optimum is kept.  They enter l_I there,
-  not δ: the adjustment is that of the profile of l_I over the bound-held ones, whose curvature and scores at θ̂
-  are those in the main coordinates (the bound stays active near θ̂), and the l_A maximisation moves them too.
+  not δ: the adjustment uses the curvature and cluster scores at θ̂ in the main coordinates, which is that of the
+  profile of l_I over the bound-held ones only while their bound stays active, and the l_A maximisation moves
+  them too.  **That assumption can fail inside the interval itself**, and then H_I, V and δ leave out exactly
+  the directions that move along the profile: on the shade world of the tests (seed 1) e₂ is on its bound 0
+  and e₀ flat at θ̂, yet at s = 0.44, inside even the naive interval (Λ_I = 2.1), the profile point's maximiser
+  has e₂ = 0.07 and e₀ = 13.3 (independent fits with s fixed agree).  So each profile point records the held
+  parameters that left their bound or flat value there (``profile.held_moved``; a flat one by more than
+  :data:`HELD_MOVE_TOL` in its coordinate), and when that happens inside the widest adjusted 95% region the
+  row records it (``held_moved_inside``, by side), and a note and a warning say that the adjusted interval on
+  that side is approximate (likely too narrow).  The shade-world validation reports its coverage separately
+  for the replicates that hold a parameter (below).
   A flat one is maximised in l_I but keeps the l_I-profile point's value in the l_A maximisation: it lies in a
   direction of H_I without curvature (e₀ confounded with a), so moving it would move δ along that direction at
   no cost in l_I and defeat the adjustment (on a test world it narrowed L's adjusted interval by a third).
@@ -1358,6 +1367,7 @@ def _at_optimum(st: _Study, dat_model, pen: dict, keys: list[str], fold_params):
     with progress.task("curvature", key="data_only"):
         held_bound = set(dat["at_bound"])
         st.held_bound = dict(dat["at_bound"])
+        st.held_flat_keys = set()
         keys0 = [LEAF_NATURAL[n] for n in st.active if LEAF_NATURAL[n] not in held_bound]
         sp0 = _Space(st, dat["leaves"], keys0)
         th0 = sp0.pack(dat["natural"], dat["coef"])
@@ -1397,6 +1407,7 @@ def _at_optimum(st: _Study, dat_model, pen: dict, keys: list[str], fold_params):
         st.warn("H_I is not negative definite at the data-only optimum (smallest eigenvalue of the unit-diagonal "
                 f"−H_I {st.C['min_eig']:.3g}): a flat or non-converged direction; its eigenvalues were floored")
     held_flat = set(flat)
+    st.held_flat_keys = set(flat)
     prior_spec = {k: (sc, mu, sd) for k, sc, mu, sd in m.prior_terms(st.terms.tf)}
     cache: dict = {}
     rows = [_row_base(st, key, dat, pen, prior_spec, fold_params, held_bound, held_flat, partners) for key in keys]
@@ -1499,6 +1510,7 @@ def _row_base(st: _Study, key: str, dat: dict, pen: dict, prior_spec: dict, fold
            "ci95_naive": None, "ci95_naive_label": None, "threshold": None, "boundary_adjustment": None,
            "ci95_conservative": None, "identifiability": None, "class_by_covariance": None, "summary": None,
            "open_sides": [], "open_reasons": {}, "sides_at_limit": [], "not_assessable_reason": None,
+           "held_moved_inside": {},
            "pull": None,
            "prior": None, "prior_share_run": None, "posterior": None, "psens": None, "conflict": None,
            "notes": []}
@@ -1824,12 +1836,13 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
     with torch.no_grad():
         lval = -0.5 * st.n * math.log(float(mse)) - float(st.drift_l(P))
     lam_i = max(2.0 * (st.l_hat - lval), 0.0)
+    moved = _held_moved(st, r, {k: float(v.detach()) for k, v in T.items()}, dat)
     if r["held"] == "bound":
         # a boundary maximum (Self & Liang 1987): the scalar adjustment Λ_A = c·Λ_I with c = Σ_naive,ψψ/Σ_rob,ψψ
         # from the well-conditioned curvature at the bound, or none (Λ_A = Λ_I, the row is not assessable)
         e = _ext(st, nat, dat, cache)
         out = {"value": float(value), "l": lval, "loss": float(loss), "leaves": leaves, "lam_i": lam_i,
-               "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
+               "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}, "held_moved": moved}
         for mode in st.modes:
             cm = e["c"][mode] if e["c"] else None
             if cm is not None and getattr(st, "floor_naive", False):
@@ -1844,7 +1857,7 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
         sp, th_hat, Cs, flat = st.main, st.th_main, st.Cs, False
     th = sp.pack({k: float(T[k].detach()) for k in sp.keys}, coef.numpy())
     out = {"value": float(value), "l": lval, "loss": float(loss), "leaves": leaves, "lam_i": lam_i,
-           "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
+           "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}, "held_moved": moved}
     leaves["_adj"] = {}
     adjustable = getattr(st, "adjustable", True)
     for mode in st.modes:                              # one profile of l_I, one adjustment per score covariance
@@ -1903,6 +1916,28 @@ def _distinct(starts: list[dict], keys: list[str]) -> list[dict]:
 #: Λ (naive or adjusted) of a profile point above the next point outward by more than this: the profile is not
 #: monotone, so a maximisation failed (operational tolerance; 0.1 = the restart threshold in Λ)
 MONO_TOL = 0.1
+
+
+#: A parameter held flat at θ̂ whose value at an l_I-profile point differs from θ̂'s by more than this (in its walk
+#: coordinate: logit for e₀, log for κ and the width, natural ÷ unit scale otherwise) has left its flat value there
+#: (operational).
+HELD_MOVE_TOL = 0.01
+
+
+def _held_moved(st: _Study, r: dict, T: dict, dat: dict) -> list[str]:
+    """Report keys of the parameters held at θ̂ (on a fit bound, or flat) that are no longer there at a profile point
+    with natural values ``T``: a bound-held one off its bound (the panel's tolerance), a flat one moved by more
+    than :data:`HELD_MOVE_TOL`.  The adjustment's curvature and cluster scores at θ̂ leave them out."""
+    psi = r.get("_nat")
+    out = []
+    for k, side in (getattr(st, "held_bound", None) or {}).items():
+        if k != psi and k in T and st.bound_side(k, float(T[k])) != side:
+            out.append(k)
+    for k in sorted(getattr(st, "held_flat_keys", None) or ()):
+        if k != psi and k in T and k in dat["natural"]:
+            if abs(st.main.coord(k, float(T[k])) - st.main.coord(k, float(dat["natural"][k]))) > HELD_MOVE_TOL:
+                out.append(k)
+    return [_NAT_KEY.get(k, k) for k in out]
 
 
 #: Leaf value a parameter held on a fit bound is released to (inside the bound: σ(±3) = 0.047 of a sigmoid's range
@@ -2031,7 +2066,7 @@ def _merge_point(st: _Study, p: dict, q: dict) -> None:
     ``q`` (two maximisations at the same ψ)."""
     if q["l"] > p["l"]:
         adj = p["leaves"].get("_adj") or {}
-        p.update(l=q["l"], lam_i=q["lam_i"], loss=q["loss"])
+        p.update(l=q["l"], lam_i=q["lam_i"], loss=q["loss"], held_moved=q.get("held_moved", p.get("held_moved")))
         p["leaves"] = {**q["leaves"], "_adj": dict(adj)}
     for mode in st.modes:
         if q["lam_a"][mode] < p["lam_a"][mode]:
@@ -2314,13 +2349,31 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
         r["notes"].append("no local curvature at the optimum but a profile that is not flat: the likelihood is not "
                           "smooth there (e.g. a saturated evaporative fraction), so its interval is not reliable")
     x0 = r["estimate_data"] if not r["at_bound"] else float(bound)
-    grid = sorted([(x0, {m: 0.0 for m in st.modes}, lam0, {m: None for m in st.modes}, {m: 0.0 for m in st.modes})]
-                  + [(p["value"], p["lam_a"], p["lam_i"], p["R"], p.get("lam_a_ipath") or {}) for p in pts],
-                  key=lambda t: t[0])
+    grid = sorted([(x0, {m: 0.0 for m in st.modes}, lam0, {m: None for m in st.modes}, {m: 0.0 for m in st.modes}, [])]
+                  + [(p["value"], p["lam_a"], p["lam_i"], p["R"], p.get("lam_a_ipath") or {}, p.get("held_moved") or [])
+                     for p in pts], key=lambda t: t[0])
+    # parameters held at θ̂ (on a bound, or flat) that move inside the 95% region: the adjustment's curvature and
+    # cluster scores at θ̂ (main coordinates) leave exactly those directions out, so the adjusted interval on that
+    # side is approximate (module docstring, *Held parameters*)
+    inside: dict = {}
+    for p in pts:
+        if p.get("held_moved") and min(p["lam_a"].values()) <= r["_thr"]:
+            inside.setdefault("upper" if p["x"] > x_hat else "lower", set()).update(p["held_moved"])
+    r["held_moved_inside"] = {n: sorted(v, key=list(PARAMS).index) for n, v in inside.items()}
+    for n, ks in r["held_moved_inside"].items():
+        names = ", ".join(_SYMBOL.get(k, k) for k in ks)
+        msg = (f"along the profile of {r['key']}, {names} {'leaves' if len(ks) == 1 else 'leave'} the fit bound or "
+               f"flat value held at the data-only optimum inside the 95% region ({n} side): the adjustment uses the "
+               "curvature and cluster scores at that optimum in the main coordinates, which leave "
+               f"{'it' if len(ks) == 1 else 'them'} out, so the adjusted interval on that side is approximate "
+               "(likely too narrow)")
+        r["notes"].append(msg)
+        st.warn(msg)
     nonmono = [v for res in r["_sides"].values() for v in (res.get("non_monotone") or [])]
     prof = {"grid": [g[0] for g in grid], "lambda_naive": [g[2] for g in grid],
             "sides_explored": explored, "stopped_at_bound": [n for n, res in r["_sides"].items() if res["edge"]],
-            "monotone": not nonmono, "non_monotone": nonmono, "fell_back": fell_back}
+            "monotone": not nonmono, "non_monotone": nonmono, "fell_back": fell_back,
+            "held_moved": [g[5] for g in grid]}
     for v in fell_back:
         msg = (f"the {v['profile']} profile of {r['key']} crosses the 95% threshold on the {v['side']} side at "
                f"{_g(v['first'])} and falls back below it further out (a multimodal profile likelihood or a failed "

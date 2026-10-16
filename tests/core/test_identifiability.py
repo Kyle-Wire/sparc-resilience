@@ -586,16 +586,67 @@ def shade_world(n=36, dx=30.0, noise=0.3, noise_range=SHADE_BLOCK_M / 30.0 / 1.7
     return grid, frame, phi / phi.std() + noise * eps, coords, block_ids(coords, SHADE_BLOCK_M), cfg
 
 
-def _shade_replicate(seed: int) -> dict:
-    grid, frame, y, coords, cl, cfg = shade_world(seed=seed)
-    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "s"], posterior=False,
+_SHADE_KEEP = ("estimate_data", "se_naive", "se_robust", "se_robust_neighbours", "ci95", "ci95_neighbours",
+               "ci95_naive", "held_moved_inside")
+
+
+def _shade_replicate(seed: int, truth: dict | None = None, params=("L", "s")) -> dict:
+    """One study of :func:`shade_world` (``truth`` default :data:`SHADE_TRUE`): per profiled parameter, whether each
+    95% interval covers the planted value, the class, c, the estimate, SEs and intervals, and the parameters held at
+    θ̂ (on a bound or flat) and those that leave their bound or flat value inside the 95% region."""
+    truth = truth or SHADE_TRUE
+    grid, frame, y, coords, cl, cfg = shade_world(seed=seed, truth=truth)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=list(params), posterior=False,
                      settings={**FAST, "max_points": 6, "block_m": SHADE_BLOCK_M})
-    out = {}
-    for key, nat in (("L", "L"), ("s", "s")):
+    out = {"seed": seed, "held_bound": rep["hessian"]["held_at_bound"], "held_flat": rep["hessian"]["held_flat"]}
+    for key in params:
+        nat = PARAMS_NAT[key]
         r = _row(rep, key)
-        out[key] = {k: bool(r[c] is not None and _covers(r[c], SHADE_TRUE[nat]))     # no interval: not covered
+        out[key] = {k: bool(r[c] is not None and _covers(r[c], truth[nat]))     # no interval: not covered
                     for k, c in (("blocks", "ci95"), ("neighbours", "ci95_neighbours"), ("naive", "ci95_naive"))}
-        out[key].update(cls=r["identifiability"], c=r["adjust_factor"])
+        out[key].update(cls=r["identifiability"], c=r["adjust_factor"], at_bound=r["at_bound"],
+                        **{k: r.get(k) for k in _SHADE_KEEP})
+    return out
+
+
+#: report key → natural key of the planted parameters
+PARAMS_NAT = {"L": "L", "s": "s"}
+
+
+def _shift(ci, d):
+    return None if ci is None else [None if ci[0] is None else ci[0] - d, None if ci[1] is None else ci[1] - d]
+
+
+def shade_summary(res: list[dict], truth: dict | None = None, keys=("L", "s")) -> dict:
+    """Coverage of the planted values by the blocks, neighbours and naive 95% intervals, and its decomposition
+    (PHYSICS_PLAN W3 review F1/F2): the coverage of the intervals shifted by the mean bias of the estimates
+    (bias removed), the coverage of intervals of the right width, ŝ ± 1.96·sd of the estimates (same bias), the sd
+    of the z-scores (θ̂ − θ)/SE_robust (about 1 for a well-calibrated SE), and the coverage split by whether the
+    replicate held an EF or shade parameter at θ̂ (on a bound or flat)."""
+    truth = truth or SHADE_TRUE
+    out = {"n": len(res)}
+    for key in keys:
+        th = truth[PARAMS_NAT[key]]
+        rr = [r[key] for r in res]
+        est = np.array([q["estimate_data"] for q in rr], float)
+        bias, sd = float(np.mean(est) - th), float(np.std(est, ddof=1))
+        o = {m: float(np.mean([q[m] for q in rr])) for m in ("blocks", "neighbours", "naive")}
+        o.update(mean=float(np.mean(est)), bias=bias, sd=sd)
+        for m, c in (("blocks", "ci95"), ("neighbours", "ci95_neighbours"), ("naive", "ci95_naive")):
+            o[f"{m}_bias_removed"] = float(np.mean([q[c] is not None and _covers(_shift(q[c], bias), th) for q in rr]))
+        o["right_width"] = float(np.mean(np.abs(est - th) <= 1.96 * sd))
+        for m, se in (("blocks", "se_robust"), ("neighbours", "se_robust_neighbours")):
+            z = [(q["estimate_data"] - th) / q[se] for q in rr if q.get(se)]
+            o[f"z_sd_{m}"] = float(np.std(z, ddof=1)) if len(z) > 2 else None
+        held = [bool(r["held_bound"] or r["held_flat"]) for r in res]
+        for name, sel in (("held", True), ("none_held", False)):
+            sub = [q for q, h in zip(rr, held) if h == sel]
+            o[name] = {"n": len(sub), **{m: (float(np.mean([q[m] for q in sub])) if sub else None)
+                                         for m in ("blocks", "neighbours", "naive")}}
+        o["held_moved_inside"] = int(sum(bool(q.get("held_moved_inside")) for q in rr))
+        o["not_assessable"] = int(sum(q["cls"] == "not_assessable" for q in rr))
+        o["at_bound"] = int(sum(bool(q.get("at_bound")) for q in rr))
+        out[key] = o
     return out
 
 
@@ -623,10 +674,8 @@ def test_coverage_in_a_multi_parameter_shade_world_summary(tmp_path_factory):
     if len(files) < SHADE_CHUNKS:
         pytest.skip("run every chunk of test_coverage_in_a_multi_parameter_shade_world in this session first")
     res = [r for f in files for r in json.loads(f.read_text())]
-    cov = {key: {m: float(np.mean([r[key][m] for r in res])) for m in ("blocks", "neighbours", "naive")}
-           for key in ("L", "s")}
-    print(f"\nshade world, {len(res)} replicates: " + "; ".join(
-        f"{key}: " + ", ".join(f"{m} {v:.3f}" for m, v in c.items()) for key, c in cov.items()))
+    cov = shade_summary(res)
+    print(f"\nshade world, {len(res)} replicates: " + json.dumps(cov, indent=1))
     assert cov["L"]["neighbours"] >= SHADE_MIN["L"] and cov["s"]["neighbours"] >= SHADE_MIN["s"]
     assert cov["L"]["naive"] <= cov["L"]["blocks"] - 0.3 and cov["s"]["naive"] <= cov["s"]["blocks"] - 0.3
 
@@ -836,6 +885,14 @@ def test_a_profile_maximises_over_parameters_held_on_a_bound_or_flat():
             assert prof["lambda_naive"][i] <= lam_free + 0.02, (key, v, prof["lambda_naive"][i], lam_free)
             moved += key == "L" and free.params["w"] > 0.5
     assert moved                                    # the case under test: w leaves its bound along L's profile
+    # the adjustment's curvature and scores at θ̂ leave w out: every profile point records whether a held parameter
+    # left its bound or flat value there, and a move inside the 95% region is noted and warned about (F2)
+    Lr = _row(rep, "L")
+    hm = Lr["profile"]["held_moved"]
+    assert len(hm) == len(Lr["profile"]["grid"]) and hm[Lr["profile"]["grid"].index(Lr["estimate_data"])] == []
+    assert any("w" in h for h in hm)
+    for side, ks in Lr["held_moved_inside"].items():
+        assert ks and any(f"along the profile of L" in w_ and f"({side} side)" in w_ for w_ in rep["warnings"])
 
 
 def _outward(prof, x0, key):
