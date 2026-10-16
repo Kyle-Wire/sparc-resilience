@@ -54,9 +54,10 @@ Method
    not enter the model (a missing role); *not assessable* when its adjustment is not computable (a parameter on
    its fit bound without a well-conditioned curvature, below).  The class rests on the wider of the two
    adjusted intervals per side (``ci95_conservative``).  The interval keeps its informative part: ``ci95``
-   ends at a physical limit or the bound an estimate sits on (finite, with that side reported open), and
-   ``summary`` says it in words, e.g. "s ≤ 0.49; lower side open at the physical limit 0 (the estimate is on
-   it); one-sided 95% bound at Λ = 2.706 (Self & Liang 1987)".  The scalar
+   ends at a physical limit, also when the estimate sits on it (finite, with that side reported open); a side
+   open at a search range, or at a fit bound that is not a physical limit (κ on its upper bound), has no finite
+   end (None).  ``summary`` says it in words, e.g. "s ≤ 0.49; lower side open at the physical limit 0 (the
+   estimate is on it); one-sided 95% bound at Λ = 2.706 (Self & Liang 1987)".  The scalar
    c_j = [Σ_naive]_jj / [Σ_rob]_jj (natural units, delta method) summarises how much the residual dependence
    shrinks the information on θ_j.
 4. **Linear coefficients and derived quantities**: naive and sandwich SEs of a, γ, b, βx, βy at both optima,
@@ -2153,10 +2154,13 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
                 fell_back.append({"side": name, "profile": which, "first": _from_walk(r, first),
                                   "end": None if hull is None else _from_walk(r, hull)})
     bound = r["at_bound"]["bound"] if r["at_bound"] else None
+    # the side an estimate on its bound cannot walk ends at that bound only when it is a physical limit (s's 0); a
+    # search range (L's, κ's) leaves it open, with no finite end (PHYSICAL_LIMITS)
+    bound_end = bound if r["at_bound"] and r["at_bound"]["side"] in PHYSICAL_LIMITS.get(r["key"], ()) else None
 
     def ci(stat):
-        lo = stat["lower"][1] if "lower" in stat else bound
-        hi = stat["upper"][1] if "upper" in stat else bound
+        lo = stat["lower"][1] if "lower" in stat else bound_end
+        hi = stat["upper"][1] if "upper" in stat else bound_end
         return [lo, hi]
 
     for mode in st.modes:

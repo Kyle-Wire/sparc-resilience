@@ -826,6 +826,29 @@ def test_a_side_open_at_a_physical_limit_ends_at_the_limit_not_at_the_walk_end()
     assert r["ci95"][1] is None and r["sides_at_limit"] == [] and "end of the search range" in r["summary"]
 
 
+def test_a_parameter_on_a_search_range_bound_has_no_finite_end_on_that_side():
+    """κ on its search-range upper bound (Providence): the side it cannot walk is open with no finite end in every
+    interval (it used to be reported as ci95 = [None, 20], i.e. κ ≤ 20); s on its physical limit 0 keeps that end."""
+    for key, side, bound, xs, cut in (("kappa_canopy", "upper", 20.0, [10.0, 5.0], None),
+                                      ("s", "lower", 0.0, [0.1, 0.2], 0.0)):
+        st = _stub_study(("blocks", "neighbours"))
+        name = "lower" if side == "upper" else "upper"
+        x0 = ID._to_walk({"key": key}, bound)
+        pts = [{"value": v, "x": ID._to_walk({"key": key}, v), "l": -lam / 2, "lam_i": lam,
+                "lam_a": {"blocks": lam, "neighbours": lam}, "lam_a_ipath": {"blocks": lam, "neighbours": lam},
+                "R": {"blocks": 1.0, "neighbours": 1.0}, "leaves": {}} for v, lam in zip(xs, (1.0, 5.0))]
+        r = {"key": key, "label": key, "unit": "canopy fraction", "_nat": key, "_points": pts, "_x_hat": x0,
+             "_sides": {name: {"points": list(pts), "edge": False}}, "_thr": ID.CHI2_90,
+             "at_bound": {"side": side, "bound": bound}, "held": "bound", "estimate_data": bound,
+             "boundary_adjustment": {"computable": True, "c": {"blocks": 1.0, "neighbours": 1.0}}, "notes": []}
+        ID._finish_profile(st, r, 0.0)
+        i = 1 if side == "upper" else 0
+        for k in ("ci95", "ci95_neighbours", "ci95_naive", "ci95_conservative"):
+            assert r[k][i] == cut, (key, k, r[k])
+            assert r[k][1 - i] is not None
+        assert side in r["open_sides"] and r["identifiability"] == "one_sided"
+
+
 def test_an_interval_ends_at_the_outermost_crossing_of_a_profile_that_falls_back():
     """A profile likelihood can be multimodal: a side that crosses 3.841 and falls back below it further out does
     not end at its first crossing.  It ends at the outermost crossing (the hull of {ψ : Λ ≤ 3.841}), or is open when
