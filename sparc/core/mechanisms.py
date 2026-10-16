@@ -1062,6 +1062,44 @@ _COV_SE = {"blocks": ("block sandwich", "block-sandwich", "clusters = the CV blo
                           "Conley 1999")}
 
 
+#: How a non-Laplace posterior is tagged wherever its numbers are shown (review F14)
+POST_TAGS = {"profile": "1-D profile posterior", "prior": "prior (no information in the data)"}
+
+
+def post_tag(method) -> str:
+    """" (1-D profile posterior)" / " (prior (…))" for a non-Laplace posterior method, else ""."""
+    return f" ({POST_TAGS[method]})" if method in POST_TAGS else ""
+
+
+def posterior_text(block: dict, short: bool = False) -> str:
+    """Which posterior the summaries and power-scaling describe, by kind of parameter (the register, the writeups
+    and the results page say the same): the Laplace approximation of the block-adjusted likelihood with the nominal
+    priors (Ribatet, Cooley & Davison 2012) for the Laplace rows only, conditional on the parameters it holds fixed;
+    the 1-D profile posterior of a parameter on its fit bound; the prior of a parameter without information."""
+    def names(keys):
+        return ", ".join(_SYM.get(k, k) for k in keys)
+
+    lap, prof, pri = (list(block.get(k) or []) for k in ("posterior_laplace", "posterior_profile", "posterior_prior"))
+    cond = list(block.get("posterior_conditional_on") or [])
+    poor = block.get("laplace_adequate") is False
+    parts = []
+    if lap or not (prof or pri):
+        parts.append((f"for {names(lap)}, " if lap and (prof or pri) else "")
+                     + "a Laplace approximation of the block-adjusted likelihood with the nominal priors (Ribatet, "
+                       "Cooley & Davison 2012)"
+                     + (f", conditional on {names(cond)} held fixed" if cond else "")
+                     + (", poor for this run, so its summaries and power-scaling are not reported (the profile "
+                        "intervals do not rely on it)" if poor else ""))
+    if prof:
+        parts.append(f"for {names(prof)} (on {'its' if len(prof) == 1 else 'their'} fit bound), a 1-D profile "
+                     "posterior" + ("" if short else ", exp(−Λ_A/2) × prior along its own adjusted profile (the other "
+                                    "parameters maximised, not integrated), marked \"1-D profile posterior\""))
+    if pri:
+        parts.append(f"for {names(pri)} (no information in the data), the nominal prior itself"
+                     + ("" if short else ", marked \"prior\""))
+    return "; ".join(parts)
+
+
 def covariance_text(block: dict, short: bool = False) -> str:
     """How the identifiability study adjusts the likelihood for spatial dependence, in words (the register, the
     writeups and the results page say the same): Chandler & Bate (2007)'s block sandwich with the run's CV blocks as
@@ -1161,10 +1199,13 @@ def _ident_param(p: dict, laplace_ok, run_value: float | None = None) -> dict:
            "se_robust": p.get("se_robust"), "adjust_factor": p.get("adjust_factor"), "prior": p.get("prior"),
            "prior_share_run": p.get("prior_share_run"), "pull": p.get("pull"),
            # unreliable posterior summaries and power-scaling are not presented (the study's JSON keeps them, flagged)
-           "posterior": ({k: post.get(k) for k in ("mean", "sd", "q025", "q975", "method")}
+           # the method (laplace, a 1-D profile posterior, or the prior of a parameter without information), its
+           # description and what a Laplace posterior is conditional on travel with the numbers (review F14)
+           "posterior": ({k: post.get(k) for k in ("mean", "sd", "q025", "q975", "method", "description",
+                                                   "conditional_on")}
                          if post.get("mean") is not None and not post_bad else None),
-           "psens": ({k: ps.get(k) for k in ("prior", "likelihood", "diagnosis", "method")} if ps and not ps_bad
-                     else None),
+           "psens": ({k: ps.get(k) for k in ("prior", "likelihood", "diagnosis", "method", "description")}
+                     if ps and not ps_bad else None),
            "posterior_unreliable": post_bad or ps_bad,
            "conflict": ({k: cf.get(k) for k in ("p", "z", "flag", "reason")} if cf else None)}
     if out["psens"] is not None:
@@ -1244,7 +1285,10 @@ def _ident_sentence(p: dict) -> str:
                      f"share {float(sh):.2f}{run})" if float(sh) > 0.5 else f"prior share {float(sh):.2f}")
     ps = p.get("psens") or {}
     if ps.get("reading") in _PSENS_TEXT:
-        parts.append(_PSENS_TEXT[ps["reading"]])
+        txt = _PSENS_TEXT[ps["reading"]]
+        if ps.get("method") in POST_TAGS:          # not the Laplace posterior: say which posterior it scales
+            txt = txt.replace("power-scaling flags", f"power-scaling of its {POST_TAGS[ps['method']]} flags", 1)
+        parts.append(txt)
     elif p.get("posterior_unreliable"):
         parts.append("its posterior summaries and power-scaling are not reliable, so they are not reported (they rest "
                      "on a Laplace approximation that is poor for this run)")
@@ -1293,9 +1337,18 @@ def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict
                                  or (ident.get("settings") or {}).get("score_covariance") or "blocks"),
             "laplace_adequate": laplace_ok, "study_status": ident.get("status"),
             "warnings": [str(w) for w in ident.get("warnings") or []]}
+    by_method = {mm: [k for k, p in params.items() if ((p.get("posterior") or {}).get("method")
+                                                        or (p.get("psens") or {}).get("method")) == mm]
+                 for mm in ("laplace", "profile", "prior")}
     block.update(status="used", study_status=ident.get("status"), n=info["n"], n_clusters=info["n_clusters"],
                  block_m=info["block_m"], coarse_m=info["coarse_m"], score_covariance=info["score_covariance"],
                  laplace_adequate=laplace_ok, warnings=info["warnings"], parameters=params, linear=linear,
+                 # which posterior each parameter's summary and power-scaling come from (the study's lists; from the
+                 # rows for an older study), and what the Laplace posterior is conditional on
+                 posterior_conditional_on=list(post.get("conditional_on") or []),
+                 posterior_laplace=list(post.get("laplace_parameters") or by_method["laplace"]),
+                 posterior_profile=list(post.get("profile_parameters") or by_method["profile"]),
+                 posterior_prior=list(post.get("prior_parameters") or by_method["prior"]),
                  not_identified=[k for k, p in params.items() if p["in_model"] and p["class"] in NOT_IDENTIFIED],
                  refs=list(_IDENT_REFS))
     return info, block
@@ -1709,9 +1762,7 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
          "refit: the study's refit of the run's objective (penalty on) on all labelled cells, the value the prior "
          "share and the pull describe. Prior share: the penalty's share of the run objective's curvature in the "
          "parameter. Pull: (full-data refit − data-only estimate) / block-sandwich SE. Posterior: "
-         "a Laplace approximation of the block-adjusted likelihood with the nominal priors (Ribatet, Cooley & "
-         "Davison 2012)" + ("" if block.get("laplace_adequate") is not False else
-                            ", poor for this run (the profile intervals do not rely on it)")
+         + posterior_text(block)
          + ". Power-scaling: " + PSENS_READING + "; \"not reliable\" where it rests on a poor Laplace "
          "approximation. Conflict: Evans & Moshonov (2006) tail probability.", "",
          "| parameter | run (fold mean) | full-data refit | data-only 95% CI (block sandwich) | with adjacent blocks | "
@@ -1734,10 +1785,12 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
             cls += "; does not exclude 0"
         post = p.get("posterior") or {}
         bad = "not reliable (Laplace poor)" if p.get("posterior_unreliable") else "—"
-        pm = f"{_sig(post.get('mean'))} ± {_sig(post.get('sd'))}" if post.get("mean") is not None else bad
+        pm = (f"{_sig(post.get('mean'))} ± {_sig(post.get('sd'))}{post_tag(post.get('method'))}"
+              if post.get("mean") is not None else bad)
         ps = p.get("psens") or {}
         pss = (f"{_fmt(ps.get('prior'), 3)} / {_fmt(ps.get('likelihood'), 3)}"
-               + (f": {_PSENS_SHORT[ps['reading']]}" if ps.get("reading") in _PSENS_SHORT else "")) if ps else bad
+               + (f": {_PSENS_SHORT[ps['reading']]}" if ps.get("reading") in _PSENS_SHORT else "")
+               + post_tag(ps.get("method"))) if ps else bad
         cf = p.get("conflict") or {}
         cfs = (f"{float(cf['p']):.2g}" + (" (conflict)" if cf.get("flag") else "") if _num(cf.get("p")) else
                "not testable" if cf else "—")

@@ -500,8 +500,12 @@ def _identifiability_section(m: dict, run: Path, mech: dict | None) -> dict | No
                  "kind": r["sandwich"].get("kind") or "block sandwich", "note": r["sandwich"].get("note")}
                 for r in ((mech or {}).get("panel") or {}).get("rows") or [] if r.get("sandwich")]
     settings = (rep or {}).get("settings") or {}
+    from sparc.core.mechanisms import posterior_text
+
     return {"status": "used", "n": ib.get("n"), "n_clusters": ib.get("n_clusters"), "block_m": ib.get("block_m"),
             "coarse_m": ib.get("coarse_m"), "laplace_adequate": ib.get("laplace_adequate"),
+            # which posterior each row's summary and power-scaling describe, and what the Laplace one holds fixed
+            "posterior_text": posterior_text(ib), "posterior_conditional_on": ib.get("posterior_conditional_on") or [],
             "score_covariance": ib.get("score_covariance") or "blocks",
             "chi2_95": settings.get("chi2_95", 3.841458820694124), "psens_threshold": settings.get("psens_threshold", 0.05),
             "rows": rows, "sandwich": sandwich, "warnings": ib.get("warnings") or [],

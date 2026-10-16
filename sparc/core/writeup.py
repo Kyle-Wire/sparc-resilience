@@ -130,7 +130,7 @@ def _identifiability_facts(m: dict) -> dict | None:
     if ib.get("status") != "used":
         return {"status": ib.get("status"), "note": ib.get("note"),
                 "warnings": [str(w) for w in ib.get("warnings") or []] if ib.get("status") == "disabled" else []}
-    from sparc.core.mechanisms import _SYM
+    from sparc.core.mechanisms import _SYM, post_tag
 
     ps = [p for p in (ib.get("parameters") or {}).values() if p.get("in_model")]
 
@@ -159,8 +159,9 @@ def _identifiability_facts(m: dict) -> dict | None:
            "conflict": [f"{sym(p)} (p = {float(p['conflict']['p']):.2g})" for p in ps
                         if (p.get("conflict") or {}).get("flag") and p["conflict"].get("p") is not None],
            # Kallioinen et al. (2024)'s reading (mechanisms._psens_reading); unreliable ones are not findings
-           "psens": {d: [sym(p) for p in ps if ((p.get("psens") or {}).get("reading")
-                                                 or (p.get("psens") or {}).get("diagnosis")) == d]
+           # a non-Laplace posterior (1-D profile, or the prior of a parameter without information) is tagged
+           "psens": {d: [sym(p) + post_tag((p.get("psens") or {}).get("method")) for p in ps
+                         if ((p.get("psens") or {}).get("reading") or (p.get("psens") or {}).get("diagnosis")) == d]
                      for d in ("prior_data_conflict", "weak_likelihood", "likelihood_only_weak")},
            "psens_unreliable": [sym(p) for p in ps if p.get("posterior_unreliable")],
            "laplace_poor": ib.get("laplace_adequate") is False,
@@ -194,7 +195,7 @@ def _lc(label: str) -> str:
 
 def _identifiability_text(f: dict) -> list[str]:
     """Sentences of the methods section (also the model card's bullets)."""
-    from sparc.core.mechanisms import covariance_text
+    from sparc.core.mechanisms import covariance_text, posterior_text
 
     ib = f["block"]
     out = {"method": (f"Which physics parameters this map pins down was tested by profile likelihood (Raue et al. 2009) "
@@ -204,8 +205,8 @@ def _identifiability_text(f: dict) -> list[str]:
            + " with every prior off, " + covariance_text(ib) + "; 95% intervals are where the adjusted profile "
              "statistic stays below 3.84 (2.71 for a one-sided bound from an estimate on its fit bound, Self & Liang "
              "1987). The priors' influence on the run is the penalty's share of the run "
-             "objective's curvature in each parameter (prior share), power-scaling sensitivity of a Laplace "
-             "approximation of the calibrated posterior (Ribatet, Cooley & Davison 2012), read as Kallioinen et al. "
+             "objective's curvature in each parameter (prior share), power-scaling sensitivity of the calibrated "
+             "posterior (" + posterior_text(ib, short=True) + "), read as Kallioinen et al. "
              "(2024) do (a prior sensitivity of 0.05 or more marks an informative prior, a likelihood sensitivity "
              "below 0.05 a weak likelihood, both at 0.05 or more a potential prior–data conflict), and the Evans & "
              "Moshonov (2006) prior–data conflict check."}

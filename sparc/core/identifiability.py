@@ -3004,7 +3004,9 @@ def identifiability_markdown(rep: dict | None) -> str:
          "c = naive / block-adjusted variance. Run (fold mean): the run's own value, the mean over its folds "
          "(physics.json). Full-data refit: this study's refit of the run's objective (penalty on) on every labelled "
          "cell, the value the prior share and the pull describe. Prior share: the penalty's share of the run "
-         "objective's profile curvature. Posterior: Laplace approximation of l_A + nominal priors (Ribatet et al. 2012), not MCMC. "
+         "objective's profile curvature. Posterior: Laplace approximation of l_A + nominal priors (Ribatet et al. "
+         "2012), not MCMC, for the untagged rows; (1-D profile): exp(−Λ_A/2) × prior along the parameter's adjusted "
+         "profile (on its fit bound); (prior): no information in the data, the nominal prior. "
          "Power-scaling (Kallioinen et al. 2024): a prior sensitivity ≥ 0.05 marks an informative prior, a likelihood "
          "sensitivity < 0.05 a weak likelihood, both ≥ 0.05 a potential prior–data conflict; 'not reliable' where "
          "it rests on a poor Laplace approximation. Conflict: Evans & Moshonov (2006) tail probability.", "",
@@ -3018,7 +3020,8 @@ def identifiability_markdown(rep: dict | None) -> str:
         if r.get("at_bound"):
             cls += f"; at {r['at_bound']['side']} bound"
         post = r.get("posterior") or {}
-        tag = " (1-D profile)" if post.get("method") == "profile" else ""
+        tag = {"profile": " (1-D profile)", "prior": " (prior)"}.get(post.get("method") or (r.get("psens") or {}).get(
+            "method"), "")
         if post.get("mean") is None:
             pm = "—"
         elif post.get("reliable") is False:

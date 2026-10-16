@@ -489,6 +489,80 @@ def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_
     assert "both at 0.05 or more is a potential prior–data conflict" in cap and '"not assessable" means' in cap
 
 
+def test_a_profile_posterior_is_tagged_and_the_laplace_conditioning_is_stated(demo, tmp_path):
+    """PHYSICS_PLAN W3 review F14: with an adequate Laplace approximation, a parameter on its fit bound has a 1-D
+    profile posterior and the Laplace posterior is conditional on the parameters it holds fixed.  The register keeps
+    each posterior's method and description, its markdown table, methods.md and the card tag the profile row and
+    state the conditioning, and the Laplace description is applied to the Laplace rows only."""
+    from sparc.core import mechanisms as M
+    from sparc.core.results_page import collect, render_page
+    from sparc.core.writeup import methods_markdown
+
+    _, cfg = demo
+    run = tmp_path / "synth_run"
+    shutil.copytree(SYNTH, run)
+    rep = _study_for(run)
+    L, s = rep["parameters"]
+    cond = ["a1", "kappa_canopy", "s", "w"]
+    L.update(posterior={"method": "laplace", "mean": 300.0, "sd": 39.7, "reliable": True, "conditional_on": cond,
+                        "description": "Laplace (Gaussian) approximation of l_A + log nominal prior at its mode, "
+                                       "conditional on a1, kappa_canopy, s, w held fixed"},
+             psens={"prior": 0.01, "likelihood": 0.2, "diagnosis": "none", "method": "laplace", "reliable": True})
+    s.update(posterior={"method": "profile", "mean": 0.265, "sd": 0.143, "reliable": True,
+                        "description": "1-D profile posterior exp(−Λ_A/2) × nominal prior along this parameter's "
+                                       "adjusted profile"},
+             psens={"prior": 0.099, "likelihood": 0.199, "diagnosis": "prior_data_conflict", "method": "profile",
+                    "reliable": True, "description": "power-scaling of the draws of the 1-D profile posterior"})
+    rep["posterior"] = {"laplace_adequate": True, "conditional_on": cond, "laplace_parameters": ["L"],
+                        "profile_parameters": ["s"], "prior_parameters": []}
+    (run / "identifiability.json").write_text(json.dumps(rep))
+    blob = collect(run, cfg)
+    ib = blob["mechanisms"]["identifiability"]
+    assert ib["posterior_conditional_on"] == cond and ib["posterior_profile"] == ["s"]
+    ps, pL = ib["parameters"]["s"], ib["parameters"]["L"]
+    assert ps["posterior"]["method"] == "profile" and "1-D profile" in ps["posterior"]["description"]
+    assert ps["psens"]["method"] == "profile" and pL["posterior"]["conditional_on"] == cond
+    assert "power-scaling of its 1-D profile posterior flags a potential prior–data conflict" in ps["text"]
+    # the register's markdown table: Laplace for L only, conditional on the held parameters; s tagged
+    md = M.identifiability_markdown_table(ib, blob["mechanisms"])
+    head = md.split("\n")[0]
+    assert "for L, a Laplace approximation" in head and "conditional on a₁, κ, s, w held fixed" in head
+    assert "for s (on its fit bound), a 1-D profile posterior" in head
+    row_s = next(ln for ln in md.splitlines() if ln.startswith("| Canopy shading strength s"))
+    assert row_s.count("(1-D profile posterior)") == 2 and "0.265 ± 0.143" in row_s
+    row_L = next(ln for ln in md.splitlines() if ln.startswith("| Mixing length L"))
+    assert "1-D profile" not in row_L
+    # methods.md: the power-scaling sentence names the posterior and its conditioning; s's flag is tagged
+    m = json.loads((run / "manifest.json").read_text())
+    m["mechanisms"] = blob["mechanisms"]
+    methods = methods_markdown(m)
+    assert "conditional on a₁, κ, s, w held fixed" in methods and "a 1-D profile posterior" in methods
+    assert "potential prior–data conflict for s (1-D profile posterior)" in methods
+    assert "of a Laplace approximation of the calibrated posterior" not in methods
+    # the card: the caption states it, the cells are tagged
+    card = blob["identifiability"]
+    assert "conditional on a₁, κ, s, w held fixed" in card["posterior_text"] and card["posterior_conditional_on"] == cond
+    html = render_page(blob, cfg)
+    if not Path(CHROMIUM).exists():
+        pytest.skip(f"no Chromium at {CHROMIUM}")
+    page = tmp_path / "page.html"
+    page.write_text(html, encoding="utf-8")
+    res = subprocess.run([CHROMIUM, "--headless=new", "--no-sandbox", "--disable-gpu", "--enable-logging=stderr",
+                          "--v=0", "--virtual-time-budget=5000", "--dump-dom", page.as_uri()],
+                         capture_output=True, text=True, timeout=180)
+    assert res.returncode == 0 and "Uncaught" not in res.stderr, res.stderr[-2000:]
+    dom = res.stdout
+    tbl = dom[dom.index('id="tbl-ident"'):]
+    tbl = tbl[:tbl.index("</table>")]
+    trs = tbl.split("<tr>")[2:]
+    tr_s = next(t for t in trs if "Canopy shading strength s" in t)
+    tr_L = next(t for t in trs if "Mixing length L" in t)
+    assert tr_s.count("(1-D profile posterior)") == 2 and "(1-D profile posterior)" not in tr_L
+    cap = dom[dom.index('id="identCap"'):]
+    cap = cap[:cap.index("</p>")]
+    assert "conditional on a₁, κ, s, w held fixed" in cap and "for s (on its fit bound), a 1-D profile posterior" in cap
+
+
 def test_a_stored_register_from_before_the_reporting_fixes_is_recomputed(demo, tmp_path):
     """A run whose manifest holds a register written by earlier code (no run_value / class_short; a study that
     profiled nothing marked "used") gets its register recomputed on the page, so the card shows the run's fold mean
