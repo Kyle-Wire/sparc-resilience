@@ -1372,7 +1372,10 @@ function profileChart(r, thr) {
   // shade width are profiled on the log scale, so their x axis is logarithmic when it spans more than a decade
   const pr = r.profile; const W = 260, H = 182, ml = 38, mr = 12, mt = 8, mb = 40; const iw = W - ml - mr, ih = H - mt - mb;
   const thr1 = r.threshold || thr;   // 2.706 for a one-sided bound from an estimate on its fit bound (Self & Liang 1987)
-  const xs = pr.grid, ya = pr.lambda_adj, yn = pr.lambda_naive, yb = pr.lambda_adj_neighbours || null;
+  // a parameter that is not assessable has no adjusted profile (no adjustment is computable): only its naive curve,
+  // labelled unadjusted, is drawn (its Λ_A would just repeat Λ_I and read as the adjusted result)
+  const na = r.class === "not_assessable";
+  const xs = pr.grid, ya = na ? null : pr.lambda_adj, yn = pr.lambda_naive, yb = na ? null : (pr.lambda_adj_neighbours || null);
   const rv = r.run_value;   // the run's own value (its fold mean, as the parameter panel shows), not the full-data refit
   const cand = [...xs, ...(rv != null ? [rv] : [])].filter((v) => v != null && isFinite(v));
   let lo = Math.min(...cand), hi = Math.max(...cand);
@@ -1382,7 +1385,7 @@ function profileChart(r, thr) {
   const ymax = 2.5 * thr;
   const x = (v) => ml + iw * (tf(v) - x0 + pad) / (x1 - x0 + 2 * pad), y = (v) => mt + ih * (1 - Math.min(v, 2 * ymax) / ymax);
   const u = (r.unit === "m" || r.unit === "W/m²") ? r.unit : ""; const sym = r.label.split(" ").slice(-1)[0];
-  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `Profile of ${r.label}: block-adjusted 95% interval ${ciText(r.ci95, u)}` + (r.ci95_neighbours ? `; with adjacent blocks ${ciText(r.ci95_neighbours, u)}` : "") + `; naive ${ciText(r.ci95_naive, u)}` });
+  const svg = sv("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": na ? `Profile of ${r.label}: not assessable (no adjustment for spatial dependence is computable); unadjusted naive interval ${ciText(r.ci95_naive, u)}, too narrow under spatial dependence` : `Profile of ${r.label}: block-adjusted 95% interval ${ciText(r.ci95, u)}` + (r.ci95_neighbours ? `; with adjacent blocks ${ciText(r.ci95_neighbours, u)}` : "") + `; naive ${ciText(r.ci95_naive, u)}` });
   const cid = `clip-${r.key}`; const defs = sv("defs"); const cp = sv("clipPath", { id: cid }); cp.append(sv("rect", { x: ml, y: mt - 2, width: iw, height: ih + 2 })); defs.append(cp); svg.append(defs);
   svg.append(sv("line", { x1: ml, x2: W - mr, y1: y(0), y2: y(0), stroke: V("--axis") }), sv("line", { x1: ml, x2: W - mr, y1: y(ymax), y2: y(ymax), stroke: V("--grid") }));
   svg.append(sv("text", { x: ml - 5, y: y(0) + 4, "text-anchor": "end", class: "t-axis" }, "0"), sv("text", { x: ml - 5, y: y(thr1) + 4, "text-anchor": "end", class: "t-axis" }, fmt(thr1, 2)));
@@ -1394,12 +1397,14 @@ function profileChart(r, thr) {
   if (rv != null && isFinite(rv)) g.append(sv("line", { x1: x(rv), x2: x(rv), y1: mt, y2: y(0), stroke: V("--s2"), "stroke-width": 1.5 }));
   g.append(sv("path", { d: path(yn), fill: "none", stroke: V("--gray-mark"), "stroke-width": 1.5, "stroke-dasharray": "5 4" }));
   if (yb && yb.some((v) => v != null)) g.append(sv("path", { d: path(yb), fill: "none", stroke: V("--accent"), "stroke-width": 1.5, "stroke-dasharray": "1.5 3", "stroke-linecap": "round" }));
-  g.append(sv("path", { d: path(ya), fill: "none", stroke: V("--accent"), "stroke-width": 2, "stroke-linejoin": "round" }));
-  xs.forEach((v, i) => { if (ya[i] == null) return; const c = sv("circle", { cx: x(v), cy: y(ya[i]), r: 3, fill: V("--accent"), stroke: V("--surface"), "stroke-width": 1.5 });
-    c.addEventListener("pointermove", (ev) => showTip(ev, (t) => { t.append(el("div", { class: "v" }, `Λ_A ${fmt(ya[i], 2)}`), el("div", {}, `${r.label} = ${sig3(v)}${u ? " " + u : ""}`), el("div", { class: "cap" }, (yb && yb[i] != null ? `with adjacent blocks ${fmt(yb[i], 2)} · ` : "") + `naive Λ ${fmt(yn[i], 1)}`)); }));
+  if (ya) g.append(sv("path", { d: path(ya), fill: "none", stroke: V("--accent"), "stroke-width": 2, "stroke-linejoin": "round" }));
+  const yh = ya || yn;   // the hover points sit on the adjusted curve, or on the naive one when there is none
+  xs.forEach((v, i) => { if (yh[i] == null) return; const c = sv("circle", { cx: x(v), cy: y(yh[i]), r: 3, fill: ya ? V("--accent") : V("--gray-mark"), stroke: V("--surface"), "stroke-width": 1.5 });
+    c.addEventListener("pointermove", (ev) => showTip(ev, (t) => { if (ya) t.append(el("div", { class: "v" }, `Λ_A ${fmt(ya[i], 2)}`), el("div", {}, `${r.label} = ${sig3(v)}${u ? " " + u : ""}`), el("div", { class: "cap" }, (yb && yb[i] != null ? `with adjacent blocks ${fmt(yb[i], 2)} · ` : "") + `naive Λ ${fmt(yn[i], 1)}`));
+      else t.append(el("div", { class: "v" }, `naive Λ ${fmt(yn[i], 2)} (unadjusted)`), el("div", {}, `${r.label} = ${sig3(v)}${u ? " " + u : ""}`), el("div", { class: "cap" }, "not assessable: no adjustment for spatial dependence is computable")); }));
     c.addEventListener("pointerleave", hideTip); g.append(c); });
   svg.append(g);
-  const fig = el("figure"); fig.append(el("figcaption", {}, `${r.label}: ${ciText(r.ci95, u)}`), svg); return fig;
+  const fig = el("figure"); fig.append(el("figcaption", {}, na ? `${r.label}: not assessable (unadjusted ${ciText(r.ci95_naive, u)}, too narrow)` : `${r.label}: ${ciText(r.ci95, u)}`), svg); return fig;
 }
 function identifiabilityCard() {
   const I = DATA.identifiability; if (!I) return;

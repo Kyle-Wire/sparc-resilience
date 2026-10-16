@@ -487,6 +487,17 @@ def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_
     cap = cap[:cap.index("</p>")]
     assert "a likelihood sensitivity below 0.05 marks a weak (non-informative) likelihood" in cap
     assert "both at 0.05 or more is a potential prior–data conflict" in cap and '"not assessable" means' in cap
+    # review F15: a not-assessable parameter's chart draws only its naive curve, labelled unadjusted — no solid
+    # (block-adjusted) or dotted (adjacent-block) curve, even when the report carries Λ_A values for it
+    figs = dom[dom.index('id="identProfiles"'):].split("<figure>")[1:]
+    fig_s = next(f for f in figs if "<figcaption>Canopy shading strength s" in f)
+    fig_L = next(f for f in figs if "<figcaption>Mixing length L" in f)
+    fig_s = fig_s[:fig_s.index("</figure>")]
+    assert "not assessable (unadjusted 0 to 0.18, too narrow)" in fig_s and 'aria-label="Profile of Canopy shading ' \
+        'strength s: not assessable' in fig_s
+    assert 'stroke-dasharray="5 4"' in fig_s and 'stroke-width="2"' not in fig_s and 'stroke-dasharray="1.5 3"' \
+        not in fig_s
+    assert 'stroke-width="2"' in fig_L                     # an assessable parameter keeps its adjusted curve
 
 
 def test_a_profile_posterior_is_tagged_and_the_laplace_conditioning_is_stated(demo, tmp_path):

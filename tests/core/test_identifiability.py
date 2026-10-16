@@ -1223,6 +1223,9 @@ def test_a_bound_parameter_without_a_well_conditioned_curvature_is_not_assessabl
     assert s["ci95"] is None and s["ci95_neighbours"] is None and s["se_robust"] is None
     assert s["ci95_naive"][0] == 0.0 and s["ci95_naive_label"] == "unadjusted (too narrow under spatial dependence)"
     assert s["ci95_naive"][1] == pytest.approx(_cross(s["profile"], "lambda_naive", ID.CHI2_90, 0.0), rel=1e-9)
+    # no adjusted profile either (Λ_A = Λ_I there would read as the adjusted result on a chart)
+    assert s["profile"]["adjusted"] is False and s["profile"]["lambda_adj"] is None
+    assert s["profile"]["lambda_adj_neighbours"] is None and s["profile"]["lambda_naive"]
     assert s["posterior"]["method"] is None and "not assessable" in s["posterior"]["note"] and s["psens"] is None
     assert "unadjusted (too narrow" in ID.identifiability_markdown(rep)
     reg = M._ident_param(s, True)

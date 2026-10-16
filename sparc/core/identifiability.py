@@ -2397,6 +2397,11 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
         prof["lambda_adj" + sfx] = [g[1][mode] for g in grid]
         prof["ratio" + sfx] = [g[3].get(mode) for g in grid]
         prof["lambda_adj_ipath" + sfx] = [g[4].get(mode) for g in grid]
+        if cls == "not_assessable":
+            # no adjustment is computable: Λ_A = Λ_I there is not an adjusted profile, so none is reported (a chart
+            # would otherwise draw the too-narrow naive curve as the adjusted result)
+            prof["lambda_adj" + sfx] = prof["ratio" + sfx] = prof["lambda_adj_ipath" + sfx] = None
+    prof["adjusted"] = cls != "not_assessable"
     r["profile"] = prof
 
 
