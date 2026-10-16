@@ -464,6 +464,9 @@ def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_
            "approximation's quadratic form, so the posterior mean/sd and power-scaling of L (the Laplace step) are "
            "flagged unreliable (reliable: false) and are not findings; the profile intervals do not rely on it")
     rep["warnings"] = [STUDY_WARNING, lap]
+    L["conflict"] = {"z": None, "p": None, "flag": None,
+                     "reason": "bounded by the data on one side only (one-sided profile): the Gaussian tail "
+                               "approximation does not apply"}
     (run / "identifiability.json").write_text(json.dumps(rep))
     blob = collect(run, cfg)
     rows = {r["key"]: r for r in blob["identifiability"]["rows"]}
@@ -490,6 +493,9 @@ def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_
     assert "one side only" in tr_L and "bounded by the data on one side only: L ≥ 100 m" in tr_L
     assert tr_L.count("<div>not reliable") == 2 and "weak likelihood" not in tr_L and "300" not in tr_L
     assert "not assessable" in tr_s and "is too narrow" in tr_s and "0 to 0.18" in tr_s
+    # review F18: a "not testable" conflict cell gives its own reason
+    assert "not testable" in tr_L and "Bounded by the data on one side only (one-sided profile)" in tr_L
+    assert "not testable" in tr_s and "On a fit bound" in tr_s
     cap = dom[dom.index('id="identCap"'):]
     cap = cap[:cap.index("</p>")]
     assert "a likelihood sensitivity below 0.05 marks a weak (non-informative) likelihood" in cap
@@ -561,6 +567,8 @@ def test_a_profile_posterior_is_tagged_and_the_laplace_conditioning_is_stated(de
     assert "conditional on a₁, κ, s, w held fixed" in methods and "a 1-D profile posterior" in methods
     assert "potential prior–data conflict for s (1-D profile posterior)" in methods
     assert "of a Laplace approximation of the calibrated posterior" not in methods
+    # review F18: both reasons a conflict check is not testable
+    assert "on a fit bound or not identified, or that they bound on one side only" in methods
     # the card: the caption states it, the cells are tagged
     card = blob["identifiability"]
     assert "conditional on a₁, κ, s, w held fixed" in card["posterior_text"] and card["posterior_conditional_on"] == cond

@@ -223,8 +223,9 @@ def _identifiability_text(f: dict) -> list[str]:
     if f["conflict"]:
         cf.append("the Evans–Moshonov check flags a prior–data conflict for " + ", ".join(f["conflict"]))
     else:
-        cf.append("the Evans–Moshonov check flags no prior–data conflict (it cannot test a parameter whose data-only "
-                  "estimate sits on a fit bound)")
+        cf.append("the Evans–Moshonov check flags no prior–data conflict (it cannot test a parameter for which the "
+                  "data give no interior estimate, on a fit bound or not identified, or that they bound on one side "
+                  "only)")
     if f["psens"]["prior_data_conflict"]:
         cf.append("power-scaling flags a potential prior–data conflict for " + ", ".join(f["psens"]["prior_data_conflict"]))
     if f["psens"]["weak_likelihood"]:
