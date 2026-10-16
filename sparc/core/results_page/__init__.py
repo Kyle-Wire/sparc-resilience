@@ -465,23 +465,25 @@ def _identifiability_section(m: dict, run: Path, mech: dict | None) -> dict | No
         return None
     rep, _ = run_identifiability(run, m)
     prof = {r["key"]: r.get("profile") or {} for r in (rep or {}).get("parameters") or [] if isinstance(r, dict)}
-    keep = ("key", "label", "unit", "class", "class_label", "estimate_run", "estimate_data", "ci95", "ci95_naive",
-            "open_sides", "sides_at_limit", "at_bound", "reaches_zero", "prior", "prior_share_run", "pull",
-            "posterior", "psens", "conflict", "text")
+    keep = ("key", "label", "unit", "class", "class_label", "estimate_run", "estimate_data", "ci95", "ci95_neighbours",
+            "ci95_conservative", "class_by_covariance", "threshold", "ci95_naive", "summary", "open_sides", "sides_at_limit",
+            "at_bound", "reaches_zero", "prior", "prior_share_run", "pull", "posterior", "psens", "conflict", "text")
     rows = []
     for key, p in (ib.get("parameters") or {}).items():
         if not p.get("in_model"):
             continue
         pr = prof.get(key) or {}
         rows.append({**{k: p.get(k) for k in keep},
-                     "profile": {k: pr.get(k) for k in ("grid", "lambda_adj", "lambda_naive")} if pr.get("grid") else None})
+                     "profile": ({k: pr.get(k) for k in ("grid", "lambda_adj", "lambda_adj_neighbours", "lambda_naive")}
+                                 if pr.get("grid") else None)})
     sandwich = [{"label": r["label"], "unit": r["unit"], "jackknife_value": r.get("value"), "jackknife_se": r.get("se"),
                  "sandwich_value": r["sandwich"].get("value"), "sandwich_se": r["sandwich"].get("se"),
-                 "note": r["sandwich"].get("note")}
+                 "kind": r["sandwich"].get("kind") or "block sandwich", "note": r["sandwich"].get("note")}
                 for r in ((mech or {}).get("panel") or {}).get("rows") or [] if r.get("sandwich")]
     settings = (rep or {}).get("settings") or {}
     return {"status": "used", "n": ib.get("n"), "n_clusters": ib.get("n_clusters"), "block_m": ib.get("block_m"),
             "coarse_m": ib.get("coarse_m"), "laplace_adequate": ib.get("laplace_adequate"),
+            "score_covariance": ib.get("score_covariance") or "blocks",
             "chi2_95": settings.get("chi2_95", 3.841458820694124), "psens_threshold": settings.get("psens_threshold", 0.05),
             "rows": rows, "sandwich": sandwich, "warnings": ib.get("warnings") or [],
             "gated": [r["id"] for r in (mech or {}).get("rows") or [] if r.get("identifiability_gate")]}

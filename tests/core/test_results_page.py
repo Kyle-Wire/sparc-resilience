@@ -295,12 +295,15 @@ def _study_for(run: Path, *, L_mean=None) -> dict:
         return {"key": key, "label": label, "unit": unit, "estimate_run": run_v, "estimate_data": data_v,
                 "at_bound": at_bound, "held": "bound" if at_bound else None, "se_robust": 0.1, "adjust_factor": 0.01,
                 "ci95": ci, "ci95_naive": [ci[0], ci[0] + 0.1 * (ci[1] - ci[0])], "identifiability": cls,
+                "ci95_neighbours": [ci[0], 1.1 * ci[1]], "ci95_conservative": [ci[0], 1.1 * ci[1]],
+                "threshold": 2.705543454095404 if at_bound else 3.841458820694124,
                 "open_sides": [], "sides_at_limit": [], "pull": 0.3, "prior": None, "prior_share_run": share,
                 "posterior": {"method": "laplace", "mean": run_v, "sd": 0.1},
                 "psens": {"prior": 0.1, "likelihood": 0.12, "diagnosis": "prior_data_conflict", "method": "profile"},
                 "conflict": {"z": None, "p": None, "flag": None, "reason": "on a fit bound"},
                 "profile": {"grid": [ci[0], 0.5 * (ci[0] + ci[1]), ci[1] * 1.2],
-                            "lambda_adj": [0.0, 1.0, 6.0], "lambda_naive": [0.0, 40.0, 300.0]}, "note": None}
+                            "lambda_adj": [0.0, 1.0, 6.0], "lambda_adj_neighbours": [0.0, 0.8, 4.5],
+                            "lambda_naive": [0.0, 40.0, 300.0]}, "note": None}
 
     L = mean("L_m")
     params = [row("L", "Mixing length L", "m", "identified", [0.7 * L, 1.5 * L], L, 1.05 * L, 0.05),
@@ -348,6 +351,10 @@ def test_identifiability_card_shows_the_study_and_its_profiles(studied):
     s = card["rows"][1]
     assert s["class"] == "identified" and s["reaches_zero"] and s["prior_share_run"] == 0.93
     assert s["profile"]["lambda_adj"] == [0.0, 1.0, 6.0] and s["ci95"] == [0.0, 0.49]
+    # both adjusted intervals and profiles (PHYSICS_PLAN W3 review X14), and the one-sided threshold at a bound
+    assert s["ci95_neighbours"] == [0.0, 1.1 * 0.49] and s["profile"]["lambda_adj_neighbours"] == [0.0, 0.8, 4.5]
+    assert s["threshold"] == pytest.approx(2.7055, abs=1e-4) and card["rows"][0]["threshold"] == pytest.approx(3.8415, abs=1e-4)
+    assert card["score_covariance"] == "blocks" and card["sandwich"][0]["kind"] == "block sandwich"
     assert "set mostly by the penalty (prior share 0.93)" in s["text"]
     assert card["sandwich"] and card["sandwich"][0]["label"] == "Aerodynamic resistance r_a"
     assert card["sandwich"][0]["jackknife_se"] != card["sandwich"][0]["sandwich_se"]
@@ -358,6 +365,10 @@ def test_identifiability_card_shows_the_study_and_its_profiles(studied):
     assert data["identifiability"]["rows"][0]["profile"]["grid"] == card["rows"][0]["profile"]["grid"]
     assert "Can the data pin down the physics?" in html and "function identifiabilityCard()" in html
     assert "identifiabilityCard();" in html and 'id="identProfiles"' in html
+    for phrase in ("the block sandwich of Chandler & Bate 2007: the default", "Conley 1999",
+                   "The class rests on the wider of the two intervals", "With adjacent blocks",
+                   "with adjacent blocks (sensitivity)", "Self & Liang 1987"):
+        assert phrase in html, phrase
 
 
 def test_identifiability_card_with_a_study_of_another_fit_says_so(demo, tmp_path):
@@ -391,4 +402,5 @@ def test_identifiability_card_renders_in_chromium(studied, tmp_path):
     assert 'id="identCard" hidden' not in dom
     assert card.count("<figure>") == 2 and card.count('role="img"') == 2
     assert "0 not excluded" in card and "identified" in card and "potential prior–data conflict" in card
+    assert "With adjacent blocks" in card and card.count('stroke-dasharray="1.5 3"') == 2   # one dotted curve each
     assert "Laplace (Gaussian) approximation" in card

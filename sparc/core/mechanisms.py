@@ -71,14 +71,18 @@ manifest's ``identifiability`` section; ``sparc core identifiability -r RUN_DIR`
   both record its SHA-256), target units and window, and the same physics fit — the fold means of the profiled
   parameters the study recorded equal this run's.  Otherwise it is ignored, with the reason in
   ``reg["identifiability"]["note"]`` (a re-run that refits the physics leaves an earlier study behind).
-* **Panel rows** of profiled parameters gain the data-only 95% profile interval (block-adjusted: Raue et al.
-  2009, Chandler & Bate 2007), the identifiability class, the prior's share of the run objective's curvature,
+* **Panel rows** of profiled parameters gain the data-only 95% profile intervals (Raue et al. 2009) adjusted for
+  spatial dependence two ways: Chandler & Bate (2007)'s block sandwich with the CV blocks as independent clusters
+  (the default, ``ci95``), and, as a sensitivity, the same with the score cross-products of adjacent blocks
+  added (a block-level spatial HAC in the manner of Conley 1999, ``ci95_neighbours``).  The identifiability
+  class rests on the wider of the two per side.  They also gain the prior's share of the run objective's curvature,
   the pull, the calibrated posterior (Ribatet, Cooley & Davison 2012), power-scaling sensitivity with its
   diagnosis (Kallioinen et al. 2024) and the prior–data conflict p (Evans & Moshonov 2006).
 * **Verdict rule** (plan W3): a signature cannot be Supported when a key parameter of its mechanism
   (:data:`KEY_PARAMS`) is practically or structurally non-identifiable from the data alone, whatever its point
   estimate; it becomes Not testable, with the reason.  The rule never makes a signature Contradicted.
-* **r_a and γ** show the block-sandwich SE of the full-data reference fit beside the fold jackknife.  The verdict
+* **r_a and γ** show the sandwich SE of the full-data reference fit (the block sandwich unless the study was run
+  with ``score_covariance: neighbours``) beside the fold jackknife.  The verdict
   stays on the jackknife; a note is added when the two SEs differ by more than :data:`SANDWICH_FACTOR` (an
   operational threshold of the W3 task, not a published one).
 * **Lever statements** cite, in plain words, the identifiability of the parameters their role acts through
@@ -1031,6 +1035,32 @@ def _fold_mean(F: "_Folds", key: str) -> float | None:
     return None
 
 
+#: The sandwich behind the r_a / γ SEs of the full-data fit, by the study's ``score_covariance``
+_COV_SE = {"blocks": ("block sandwich", "block-sandwich", "clusters = the CV blocks; Chandler & Bate 2007"),
+           "neighbours": ("adjacent-block sandwich", "adjacent-block sandwich",
+                          "the CV blocks' scores with adjacent blocks' cross-products added; Chandler & Bate 2007, "
+                          "Conley 1999")}
+
+
+def covariance_text(block: dict, short: bool = False) -> str:
+    """How the identifiability study adjusts the likelihood for spatial dependence, in words (the register, the
+    writeups and the results page say the same): Chandler & Bate (2007)'s block sandwich with the run's CV blocks as
+    independent clusters by default, the Conley (1999)-type adjacent-block variant as a sensitivity, and the class
+    from the wider of the two intervals.  ``block``: the register's ``identifiability`` block (``n_clusters``,
+    ``block_m``)."""
+    bm = f" of {_sig(block['block_m'])} m" if _num(block.get("block_m")) else ""
+    n = block.get("n_clusters")
+    if short:
+        return (f"adjusted for spatial dependence with the run's {n} CV blocks{bm} as independent clusters (Chandler & "
+                "Bate 2007's block sandwich) and, as a sensitivity, with adjacent blocks' score cross-products added "
+                "(Conley 1999); the class rests on the wider of the two intervals")
+    return (f"its curvature adjusted for spatial dependence with the run's {n} cross-validation blocks{bm} as "
+            "independent clusters (the block sandwich of Chandler & Bate 2007, the default) and, as a sensitivity, "
+            "with the score cross-products of adjacent blocks added (a block-level spatial HAC in the manner of "
+            "Conley 1999, which allows for dependence across block edges); the identifiability class rests on the "
+            "wider of the two 95% intervals on each side")
+
+
 def _ident_mismatch(ident: dict, ctx: dict) -> str | None:
     """Why an identifiability report does not belong to this run (None when it does): not a report, no active
     physics term here, or a different number of cells, CV design, input data, target units, window or physics fit
@@ -1095,6 +1125,8 @@ def _ident_param(p: dict, laplace_ok) -> dict:
            "in_model": p.get("estimate_data") is not None,
            "estimate_run": p.get("estimate_run"), "estimate_data": p.get("estimate_data"),
            "ci95": list(ci) if ci else None, "ci95_neighbours": p.get("ci95_neighbours"),
+           "ci95_conservative": p.get("ci95_conservative"), "class_by_covariance": p.get("class_by_covariance"),
+           "threshold": p.get("threshold"),
            "ci95_naive": p.get("ci95_naive"),
            "open_sides": list(p.get("open_sides") or []), "sides_at_limit": list(p.get("sides_at_limit") or []),
            "summary": p.get("summary"),
@@ -1121,6 +1153,11 @@ def _ident_sentence(p: dict) -> str:
     u = f" {p['unit']}" if p["unit"] in ("m", "W/m²") else ""
     ci = p.get("ci95") or [None, None]
     span = f"{_sig(ci[0]) if ci[0] is not None else 'open'} to {_sig(ci[1]) if ci[1] is not None else 'open'}{u}"
+    nb = p.get("ci95_neighbours")
+    if isinstance(nb, (list, tuple)) and len(nb) == 2 and list(nb) != list(ci):
+        # the class rests on the wider of the two adjusted intervals: quote both (block sandwich first)
+        span += (f" with the block sandwich, {_sig(nb[0]) if nb[0] is not None else 'open'} to "
+                 f"{_sig(nb[1]) if nb[1] is not None else 'open'}{u} with adjacent blocks")
     cls = p["class"]
     if cls == "not_fitted":
         return f"{p['label']}: not fitted in this run."
@@ -1196,7 +1233,8 @@ def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict
     cl = ident.get("cluster") or {}
     info = {"params": params, "linear": linear, "n": ident.get("n"), "n_clusters": ident.get("n_clusters"),
             "block_m": cl.get("block_m"), "coarse_m": ident.get("coarse_m"),
-            "score_covariance": (ident.get("settings") or {}).get("score_covariance"),
+            "score_covariance": ((ident.get("covariance") or {}).get("used")
+                                 or (ident.get("settings") or {}).get("score_covariance") or "blocks"),
             "laplace_adequate": laplace_ok, "study_status": ident.get("status"),
             "warnings": [str(w) for w in ident.get("warnings") or []]}
     block.update(status="used", study_status=ident.get("status"), n=info["n"], n_clusters=info["n_clusters"],
@@ -1210,9 +1248,12 @@ def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict
     return info, block
 
 
-def _sandwich(row: dict, lin: dict | None, scale: float, sym: str, unit: str, nd: int = 1) -> None:
-    """r_a / γ: the block-sandwich SE of the full-data reference fit (the run's objective) beside the fold
-    jackknife; a note when the two SEs differ by more than :data:`SANDWICH_FACTOR`.  The verdict is not changed."""
+def _sandwich(row: dict, lin: dict | None, scale: float, sym: str, unit: str, nd: int = 1,
+              cov: str | None = "blocks") -> None:
+    """r_a / γ: the sandwich SE of the full-data reference fit (the run's objective; the block sandwich unless the
+    study used ``score_covariance: neighbours``, ``cov``) beside the fold jackknife; a note when the two SEs differ
+    by more than :data:`SANDWICH_FACTOR`.  The verdict is not changed."""
+    name, adj, how = _COV_SE.get(cov or "blocks", _COV_SE["blocks"])
     if not lin or row.get("value") is None or not (_num(lin.get("estimate_run")) and _num(lin.get("se_robust_run"))):
         return
     s = abs(scale)
@@ -1220,15 +1261,15 @@ def _sandwich(row: dict, lin: dict | None, scale: float, sym: str, unit: str, nd
           "se_naive": float(lin["se_naive_run"]) * s if _num(lin.get("se_naive_run")) else None,
           "data_only": ({"value": float(lin["estimate_data"]) * scale, "se": float(lin["se_robust_data"]) * s}
                         if _num(lin.get("estimate_data")) and _num(lin.get("se_robust_data")) else None),
-          "jackknife_se": row.get("se"), "ratio": None, "note": None}
-    sw["text"] = (f"full-data reference fit: {sym} = {_fmt(sw['value'], nd)} ± {_fmt(sw['se'], nd)} {unit} (block "
-                  "sandwich, clusters = the CV blocks; Chandler & Bate 2007"
+          "jackknife_se": row.get("se"), "ratio": None, "note": None, "covariance": cov or "blocks", "kind": name}
+    sw["text"] = (f"full-data reference fit: {sym} = {_fmt(sw['value'], nd)} ± {_fmt(sw['se'], nd)} {unit} ({name}, "
+                  f"{how}"
                   + (f"; naive ± {_fmt(sw['se_naive'], nd + 1)}" if sw["se_naive"] is not None else "") + ")")
     jk = row.get("se")
     if _num(jk) and float(jk) > 0 and sw["se"] > 0:
         sw["ratio"] = sw["se"] / float(jk)
         if not (1.0 / SANDWICH_FACTOR <= sw["ratio"] <= SANDWICH_FACTOR):
-            sw["note"] = (f"the block-sandwich SE of the full-data fit ({_fmt(sw['se'], nd)} {unit}) and the fold "
+            sw["note"] = (f"the {adj} SE of the full-data fit ({_fmt(sw['se'], nd)} {unit}) and the fold "
                           f"jackknife SE ({_fmt(jk, nd)} {unit}) differ by more than a factor of {SANDWICH_FACTOR:g}: "
                           "the verdict uses the jackknife, whose ±2 SE interval is then itself uncertain")
     row["sandwich"] = sw
@@ -1238,11 +1279,9 @@ def _sandwich(row: dict, lin: dict | None, scale: float, sym: str, unit: str, nd
 
 def _ident_panel(P: dict, info: dict) -> None:
     """The study's columns on the parameter panel (module docstring)."""
-    bm = f" of {_sig(info['block_m'])} m" if _num(info.get("block_m")) else ""
     P["identifiability_study"] = True
-    P["identifiability"] = (f"W3 profile likelihood on all labelled cells, adjusted for spatial dependence with the "
-                            f"run's {info.get('n_clusters')} CV blocks{bm} as clusters (Raue et al. 2009; Chandler & "
-                            "Bate 2007)")
+    P["identifiability"] = ("W3 profile likelihood on all labelled cells (Raue et al. 2009), "
+                            + covariance_text(info, short=True))
     P["prior_sensitivity"] = ("W3: the prior's share of the run objective's curvature and its pull; power-scaling of "
                               "the calibrated posterior (Kallioinen et al. 2024; Ribatet, Cooley & Davison 2012); "
                               "prior–data conflict (Evans & Moshonov 2006)")
@@ -1265,9 +1304,10 @@ def _ident_panel(P: dict, info: dict) -> None:
         return
     for r in P["rows"]:
         if r["key"] == "r_a":
-            _sandwich(r, info["linear"].get("a"), fK * P["rho_cp"] / P["norm"], "r_a", "s/m")
+            _sandwich(r, info["linear"].get("a"), fK * P["rho_cp"] / P["norm"], "r_a", "s/m",
+                      cov=info.get("score_covariance"))
         elif r["key"] == "gamma":
-            _sandwich(r, info["linear"].get("gamma"), fK * 1000.0, "γ", "K/km")
+            _sandwich(r, info["linear"].get("gamma"), fK * 1000.0, "γ", "K/km", cov=info.get("score_covariance"))
 
 
 def _ident_rows(rows: list[dict], info: dict, by_key: dict) -> None:
@@ -1285,7 +1325,8 @@ def _ident_rows(rows: list[dict], info: dict, by_key: dict) -> None:
             names = ", ".join(_lc(p["label"]) for p in bad)
             r.update(status="not_testable", label=VERDICT_LABELS["not_testable"], basis=None, identifiability_gate=True,
                      reason=(f"{names} {'is' if len(bad) == 1 else 'are'} not identified by the data alone (W3 "
-                             "block-adjusted profile likelihood): a mechanism whose key parameter the data cannot pin "
+                             "profile likelihood adjusted for spatial dependence; the class rests on the wider of the "
+                             "block and adjacent-block intervals): a mechanism whose key parameter the data cannot pin "
                              "down cannot be Supported, whatever its point estimate (its own test alone would give "
                              "Supported)"))
         if r["mechanism"] in seen:
@@ -1603,20 +1644,19 @@ def _ci_text(ci, unit: str = "") -> str:
 def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
     """The register's identifiability block (``reg["identifiability"]``, status ``used``) as a markdown table, with
     the r_a / γ uncertainty check from the panel of ``reg``."""
-    bm = f" of {_sig(block['block_m'])} m" if _num(block.get("block_m")) else ""
     L = [f"**Identifiability from the data alone (W3).** Profile likelihood of each physics parameter refitted on all "
-         f"labelled cells with every prior off (Raue et al. 2009), its curvature adjusted for spatial dependence with "
-         f"the run's {block.get('n_clusters')} CV blocks{bm} as clusters (Chandler & Bate 2007; "
-         f"n = {int(block['n']) if _num(block.get('n')) else '—'}"
-         + (f", {_sig(block['coarse_m'])} m cells" if _num(block.get("coarse_m")) else "") + "). 95% interval: "
-         "Λ_A ≤ 3.84. Prior share: the penalty's share of the run objective's curvature in the parameter. Posterior: "
+         f"labelled cells with every prior off (Raue et al. 2009; n = {int(block['n']) if _num(block.get('n')) else '—'}"
+         + (f", {_sig(block['coarse_m'])} m cells" if _num(block.get("coarse_m")) else "") + "), "
+         + covariance_text(block) + ". 95% interval: Λ_A ≤ 3.84 (2.71 one-sided for an estimate on its fit bound, "
+         "Self & Liang 1987). Prior share: the penalty's share of the run objective's curvature in the parameter. Posterior: "
          "a Laplace approximation of the block-adjusted likelihood with the nominal priors (Ribatet, Cooley & "
          "Davison 2012)" + ("" if block.get("laplace_adequate") is not False else
                             ", poor for this run (the profile intervals do not rely on it)")
          + ". Power-scaling sensitivity ≥ 0.05 flags a component (Kallioinen et al. 2024). Conflict: Evans & "
          "Moshonov (2006) tail probability.", "",
-         "| parameter | run | data-only 95% CI | class | prior share | pull | posterior mean ± sd | power-scaling "
-         "prior / likelihood | conflict p |", "|---|---|---|---|---|---|---|---|---|"]
+         "| parameter | run | data-only 95% CI (block sandwich) | with adjacent blocks | class | prior share | pull | "
+         "posterior mean ± sd | power-scaling prior / likelihood | conflict p |",
+         "|---|---|---|---|---|---|---|---|---|---|"]
     for p in (block.get("parameters") or {}).values():
         if not p.get("in_model"):
             continue
@@ -1634,7 +1674,8 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
         cf = p.get("conflict") or {}
         cfs = (f"{float(cf['p']):.2g}" + (" (conflict)" if cf.get("flag") else "") if _num(cf.get("p")) else
                "not testable" if cf else "—")
-        L.append(f"| {_md(p['label'])} | {_sig(p.get('estimate_run'), u)} | {_ci_text(p.get('ci95'), u)} | {cls} | "
+        L.append(f"| {_md(p['label'])} | {_sig(p.get('estimate_run'), u)} | {_ci_text(p.get('ci95'), u)} | "
+                 f"{_ci_text(p.get('ci95_neighbours'), u)} | {cls} | "
                  f"{_fmt(p.get('prior_share_run'), 2)} | {_fmt(p.get('pull'), 2)} | {pm} | {_md(pss)} | {cfs} |")
     for r in ((reg or {}).get("panel") or {}).get("rows") or []:
         sw = r.get("sandwich")

@@ -1211,6 +1211,7 @@ def _analyse(st: _Study, params, units, posterior: bool, fold_params, context: d
            "settings": {**st.S, "chi2_95": CHI2_95, "flat_lambda": FLAT_LAMBDA, "psens_threshold": PSENS_THRESHOLD,
                         "conflict_alpha": CONFLICT_ALPHA, "flat_info": FLAT_INFO, "null_eig": NULL_EIG,
                         "posterior": bool(posterior)},
+           "covariance": {"computed": list(st.modes), "used": st.primary},
            "references": dict(REFERENCES), "warnings": st.warnings, "timings": st.timings}
     if dat_model.a <= 0 or dat["coef"][0] <= 0:
         st.warn("the data-only fit is anti-physical (a ≤ 0): the physics term is disabled, nothing to profile")
@@ -2757,21 +2758,25 @@ def identifiability_markdown(rep: dict | None) -> str:
                  f"{_g(r.get('prior_share_run'), 2)} | {_g(r.get('pull'), 2)} | {pm} | {pss} | {cfs} |")
     lin = rep.get("linear") or []
     if lin:
-        L += ["", "| linear coefficient | data-only ± SE naive / block | run ± SE naive / block | c |",
+        L += ["", "| linear coefficient | data-only ± SE naive / block | run ± SE naive / "
+              + ("adjacent-block" if (rep.get("covariance") or {}).get("used") == "neighbours" else "block")
+              + " | c |",
               "|---|---|---|---|"]
         for r in lin:
             L.append(f"| {r['label']} | {_g(r['estimate_data'], 4)} ± {_g(r['se_naive_data'], 3)} / "
                      f"{_g(r['se_robust_data'], 3)} | {_g(r['estimate_run'], 4)} ± {_g(r['se_naive_run'], 3)} / "
                      f"{_g(r['se_robust_run'], 3)} | {_g(r.get('adjust_factor'), 2)} |")
     d = rep.get("derived") or {}
+    used = (rep.get("covariance") or {}).get("used") or "blocks"
     for key, name in (("r_a", "r_a"), ("gamma_K_per_km", "γ")):
         x = d.get(key)
         if not x:
             continue
         fj = x.get("fold_jackknife")
-        L += ["", f"*{name} ({x['unit']}):* run {_g(x['run']['value'])} ± {_g(x['run']['se_robust'])} (block "
-                  f"sandwich; naive ± {_g(x['run']['se_naive'])}), data-only {_g(x['data_only']['value'])} ± "
-                  f"{_g(x['data_only']['se_robust'])}"
+        L += ["", f"*{name} ({x['unit']}):* run {_g(x['run']['value'])} ± {_g(x['run']['se_robust'])} "
+                  f"({'adjacent-block' if used == 'neighbours' else 'block'} sandwich; naive ± "
+                  f"{_g(x['run']['se_naive'])}), data-only {_g(x['data_only']['value'])} ± "
+                  f"{_g(x['data_only']['se_robust'])} (block sandwich)"
               + (f"; fold jackknife {_g(fj['value'])} ± {_g(fj['se'])}" if fj else "") + "."]
     post = rep.get("posterior") or {}
     if post:

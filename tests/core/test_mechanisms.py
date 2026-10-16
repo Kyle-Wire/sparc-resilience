@@ -765,7 +765,7 @@ def _ident(folds, rows, *, n=1000, cv=None, a_se=None, gamma_se=None, units="deg
             "se_naive_data": 1e-5, "se_robust_data": gamma_se or 1e-4, "estimate_run": g_m, "se_naive_run": 1e-5,
             "se_robust_run": gamma_se or 1e-4, "adjust_factor": 0.01}]
     rep = {"schema": 1, "status": "ok", "n": n, "n_clusters": 23, "coarse_m": None, "units": units, "window": window,
-           "cluster": {"kind": "cv_block", "block_m": 2000.0}, "settings": {"score_covariance": "neighbours"},
+           "cluster": {"kind": "cv_block", "block_m": 2000.0}, "settings": {"score_covariance": "blocks"},
            "posterior": {"laplace_adequate": True}, "warnings": [], "parameters": rows, "linear": lin,
            "run": {"n_points_run": n, "cv": cv, "fold_means": {r["key"]: mean(r["key"]) for r in rows}}}
     rep["run"].update(run)
@@ -942,6 +942,55 @@ def test_lever_text_flags_a_conflict_and_a_poor_laplace_approximation():
     assert "weak likelihood" not in st
     assert "its posterior summaries and power-scaling are not reported (they rest on a Laplace approximation that is poor" in st
     assert "the prior–data conflict check finds a conflict (p = 0.012)" in st
+
+
+@pytest.mark.parametrize("used", ["blocks", "neighbours"])
+def test_reports_describe_the_block_sandwich_and_the_adjacent_block_sensitivity(used):
+    """PHYSICS_PLAN W3 review X14: the register, its markdown and the writeups say that the intervals are Chandler &
+    Bate's block sandwich by default, the adjacent-block (Conley-type) variant is a sensitivity, and the class rests
+    on the wider of the two; both intervals are quoted; r_a/γ's sandwich is named after the V the study used."""
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    folds = _folds()
+    L = _prow("L", ci=(200.0, 420.0), run=256.0, data=270.0, share=0.05)
+    L["ci95_neighbours"] = [190.0, 480.0]
+    L["ci95_conservative"] = [190.0, 480.0]
+    s = _prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.4)
+    s["ci95_neighbours"] = [0.15, 0.55]                       # equal: quoted once
+    jk = _panel(M.evaluate({}, folds, _cfg()), "r_a")["se"]
+    rep = _ident(folds, [L, s], a_se=jk / (F_TO_K * RHO_CP / 635.8))
+    rep["covariance"] = {"computed": ["blocks", "neighbours"], "used": used}
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    P = reg["panel"]
+    for text in (P["identifiability"], M.mechanisms_markdown(reg)):
+        assert "Chandler & Bate 2007" in text and "block sandwich" in text and "Conley 1999" in text
+        assert "adjacent blocks" in text and "wider of the two" in text
+    Lp = _panel(reg, "L")["identifiability"]
+    assert Lp["ci95_neighbours"] == [190.0, 480.0] and Lp["ci95_conservative"] == [190.0, 480.0]
+    assert ("95% profile interval 200 to 420 m with the block sandwich, 190 to 480 m with adjacent blocks"
+            in Lp["text"])
+    assert "with adjacent blocks" not in _panel(reg, "s")["identifiability"]["text"]
+    md = M.mechanisms_markdown(reg)
+    assert "| data-only 95% CI (block sandwich) | with adjacent blocks |" in md
+    assert "| 200 to 420 m | 190 to 480 m |" in md
+    sw = _panel(reg, "r_a")["sandwich"]
+    if used == "blocks":
+        assert sw["kind"] == "block sandwich" and "(block sandwich, clusters = the CV blocks" in sw["text"]
+    else:
+        assert sw["kind"] == "adjacent-block sandwich" and "Conley 1999" in sw["text"]
+    sec = methods_markdown(m)
+    sec = sec[sec.index("## Identifiability"):]
+    sec = sec[:sec.index("\n## ", 3)]
+    assert "the block sandwich of Chandler & Bate 2007, the default" in sec and "Conley 1999" in sec
+    assert "wider of the two 95% intervals" in sec
+    assert "mixing length L (200 to 420 m; 190 to 480 m with adjacent blocks)" in sec
+    card = model_card_markdown(m)
+    csec = card[card.index("## Identifiability"):]
+    assert "Chandler & Bate 2007's block sandwich" in csec and "Conley 1999" in csec and "wider of the two" in csec
+    # nothing says the intervals are adjusted by the blocks alone
+    assert "as clusters (Chandler & Bate 2007)" not in sec + csec + md
 
 
 def test_writeups_report_identifiability_from_the_register():

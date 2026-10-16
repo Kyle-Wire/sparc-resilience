@@ -100,9 +100,17 @@ def _sig(v, unit: str = "") -> str:
 
 
 def _span(p: dict) -> str:
+    """The block-sandwich 95% interval, and the adjacent-block one when it differs (the class rests on the wider)."""
     ci = p.get("ci95") or [None, None]
     u = f" {p['unit']}" if p.get("unit") in ("m", "W/m²") else ""
-    return f"{_sig(ci[0]) if ci[0] is not None else 'open'} to {_sig(ci[1]) if ci[1] is not None else 'open'}{u}"
+
+    def one(c):
+        return f"{_sig(c[0]) if c[0] is not None else 'open'} to {_sig(c[1]) if c[1] is not None else 'open'}{u}"
+
+    nb = p.get("ci95_neighbours")
+    if isinstance(nb, (list, tuple)) and len(nb) == 2 and list(nb) != list(ci):
+        return f"{one(ci)}; {one(nb)} with adjacent blocks"
+    return one(ci)
 
 
 def _identifiability_facts(m: dict) -> dict | None:
@@ -156,15 +164,16 @@ def _lc(label: str) -> str:
 
 def _identifiability_text(f: dict) -> list[str]:
     """Sentences of the methods section (also the model card's bullets)."""
+    from sparc.core.mechanisms import covariance_text
+
     ib = f["block"]
-    bm = f" of {_sig(ib['block_m'])} m" if ib.get("block_m") else ""
     out = {"method": (f"Which physics parameters this map pins down was tested by profile likelihood (Raue et al. 2009) "
                       f"on all {int(ib['n']):,} labelled cells" if ib.get("n") else
                       "Which physics parameters this map pins down was tested by profile likelihood (Raue et al. 2009)")
            + (f" ({_sig(ib['coarse_m'])} m cells)" if ib.get("coarse_m") else "")
-           + f" with every prior off, its curvature adjusted for spatial dependence with the run's {ib.get('n_clusters')} "
-             f"cross-validation blocks{bm} as clusters (Chandler & Bate 2007); 95% intervals are where the adjusted "
-             "profile statistic stays below 3.84. The priors' influence on the run is the penalty's share of the run "
+           + " with every prior off, " + covariance_text(ib) + "; 95% intervals are where the adjusted profile "
+             "statistic stays below 3.84 (2.71 for a one-sided bound from an estimate on its fit bound, Self & Liang "
+             "1987). The priors' influence on the run is the penalty's share of the run "
              "objective's curvature in each parameter (prior share), power-scaling sensitivity of a Laplace "
              "approximation of the calibrated posterior (Kallioinen et al. 2024; Ribatet, Cooley & Davison 2012) "
              "and the Evans & Moshonov (2006) prior–data conflict check."}
@@ -450,8 +459,10 @@ def model_card_markdown(m: dict) -> str:
         L += ["", "## Identifiability", ""]
         if idf["status"] == "used":
             t = _identifiability_text(idf)
-            L += ["Profile likelihood on all labelled cells with the priors off, adjusted for spatial dependence with "
-                  "the CV blocks as clusters (`identifiability.json`).", "",
+            from sparc.core.mechanisms import covariance_text
+
+            L += ["Profile likelihood on all labelled cells with the priors off, "
+                  + covariance_text(idf["block"], short=True) + " (`identifiability.json`).", "",
                   f"- **What the data pin down.** {t['pinned']}", f"- **What the penalty sets.** {t['penalty']}",
                   f"- **{t['conflict'].split(':', 1)[0]}.**{t['conflict'].split(':', 1)[1]}", f"- {t['gate']}"]
             if t["sandwich"]:

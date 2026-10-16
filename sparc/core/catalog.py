@@ -464,8 +464,12 @@ DATA_DICTIONARY: dict[str, dict[str, tuple[str, str, str]]] = {
     },
     "identifiability.json": {
         "ci95": ("", "", "Data-only 95% profile-likelihood interval of the parameter, in its own unit, with the "
-                         "likelihood adjusted for spatial dependence over the CV blocks (Λ_A ≤ 3.84; Raue et al. 2009, "
-                         "Chandler & Bate 2007)"),
+                         "likelihood adjusted for spatial dependence by Chandler & Bate (2007)'s block sandwich, the CV "
+                         "blocks as independent clusters (Λ_A ≤ 3.84, or 2.71 one-sided for an estimate on its fit "
+                         "bound; Raue et al. 2009, Self & Liang 1987)"),
+        "ci95_neighbours": ("", "", "The same interval with adjacent blocks' score cross-products added to the block "
+                                    "sandwich (a Conley 1999-type spatial HAC): a sensitivity; the class rests on the "
+                                    "wider of the two intervals on each side (ci95_conservative)"),
         "identifiability": ("", "", "identified, practically_non_identifiable (the profile stays below 3.84 on a "
                                     "side) or structurally_non_identifiable (flat profile)"),
         "prior_share_run": ("1", "", "The penalty's share of the run objective's curvature in the parameter: above "
