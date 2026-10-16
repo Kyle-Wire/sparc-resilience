@@ -81,7 +81,9 @@ Method
    ``draws`` draws from the Laplace posterior, importance log-weights (α − 1)·(component log value) for
    α = 1/1.01 and 1.01, Pareto-smoothed as ArviZ's ``_powerscale_lw`` does (:func:`psislw`, a port of ArviZ's
    ``psislw``/``_psislw``/``_gpdfit``/``_gpinv`` for a 1-D array; checked against ArviZ 0.20.0's own functions,
-   identical to the last bit on 200 random weight vectors and 50 sensitivities), the cumulative Jensen–Shannon
+   identical to the last bit on 200 random weight vectors and 50 sensitivities; the tests pin reference values
+   computed with ArviZ 0.20.0's ``_cjs_dist``, ``_powerscale_lw``, ``_powerscale_sens`` and ``psens`` on an
+   InferenceData), the cumulative Jensen–Shannon
    distance (:func:`cjs_distance`, ArviZ's ``_cjs_dist``) on the draws and their negation (the larger),
    sensitivity = (CJS_lower + CJS_upper)/(2·log₂ 1.01).  Reported with each component: the smoothed weights'
    effective sample size (the smaller of the two α) and the larger Pareto k̂ of the two tail fits (ArviZ's

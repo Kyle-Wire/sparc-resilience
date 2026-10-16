@@ -279,6 +279,84 @@ def test_pareto_smoothed_weights_match_arviz():
     assert k_short == math.inf
 
 
+# ArviZ 0.20.0 reference values (PHYSICS_PLAN W3 review X19), produced with ArviZ's OWN functions, not the port:
+# `pip download arviz==0.20.0 --no-deps` into an empty scratch directory (wheel sha256 5ec4f2ec180a8305ff3d1108c29e1
+# 89944ab939663eb5bc3231ff199a1a5dc36), installed with its dependencies in a throwaway venv outside the project
+# (numpy 2.4.6 and scipy 1.16.3 as in the project's venv; xarray 2024.9.0, matplotlib 3.9.2), and called as
+# ``arviz.stats.stats._cjs_dist(draws, weights)``; ``_powerscale_sens(draws, lower_weights=, upper_weights=, delta=)``
+# with the weights made as ``psens`` makes them (``exp(_powerscale_lw(alpha=α, component_draws=c))`` normalised, α =
+# 1/(1+δ) and 1+δ); ``_powerscale_lw(alpha=1.01, component_draws=c)``; and ``arviz.psens(idata, component=...)`` on
+# the InferenceData of :func:`_az_idata_inputs` (posterior theta, pointwise log_likelihood y, log_prior theta added
+# with ``add_groups``).  The inputs below are rebuilt from the same seeds.  This test does not import arviz.
+_AZ_CJS = {"x1_exp03": 0.06200516812467475, "neg_x1_exp03": 0.06782218693778053, "x2_w2": 0.004893227164628284,
+           "neg_x2_w2": 0.01734523379843964, "x3_w3": 0.014670574893910155}
+_AZ_SENS = {"skew_prior": 2.0674894122077245, "skew_heavy": 0.4922570186031529,
+            "skew_heavy_delta05": 2.0676975780797067}
+_AZ_LW_UPPER = {0: -7.421142838280725, 1: -6.875017879764181, 399: -6.892482558440427, 181: -5.09586202279013,
+                390: -9.144800169382657}
+_AZ_PSENS_IDATA = {"prior": 0.1737307866157668, "likelihood": 0.24088145766571395}
+
+
+def _az_cjs_inputs():
+    r = np.random.default_rng
+    x1 = r(11).standard_normal(400)
+    x2 = r(12).gamma(2.0, size=300)                       # skewed: CJS(x) differs from CJS(−x)
+    w2 = r(13).uniform(0.5, 1.5, size=300)
+    x3 = r(14).standard_t(3, size=250)
+    w3 = np.exp(1.5 * r(15).standard_normal(250))       # heavy weights
+    return x1, x2, w2, x3, w3
+
+
+def _az_sens_inputs():
+    th = np.random.default_rng(21).gamma(3.0, 0.5, size=800)                  # skewed draws
+    lp = -0.5 * ((th - 1.0) / 0.4) ** 2                                       # an informative prior's log density
+    ll = 25.0 * np.random.default_rng(22).standard_t(4, size=800)             # heavy-tailed: the Pareto smoothing acts
+    return th, lp, ll
+
+
+def _az_idata_inputs():
+    """A conjugate normal model, 2 chains × 300 draws, 20 observations, prior N(0, 0.5²)."""
+    rng = np.random.default_rng(31)
+    y = rng.normal(1.5, 1.0, size=20)
+    mu0, tau, sigma = 0.0, 0.5, 1.0
+    prec = 1 / tau ** 2 + len(y) / sigma ** 2
+    m = (mu0 / tau ** 2 + y.sum() / sigma ** 2) / prec
+    theta = m + rng.standard_normal((2, 300)) / np.sqrt(prec)
+    log_lik = -0.5 * ((y[None, None, :] - theta[..., None]) / sigma) ** 2 - np.log(sigma * np.sqrt(2 * np.pi))
+    log_prior = -0.5 * ((theta - mu0) / tau) ** 2 - np.log(tau * np.sqrt(2 * np.pi))
+    return theta, log_lik, log_prior
+
+
+def test_cjs_distance_matches_arviz_reference_values():
+    x1, x2, w2, x3, w3 = _az_cjs_inputs()
+    got = {"x1_exp03": ID.cjs_distance(x1, np.exp(0.3 * x1)), "neg_x1_exp03": ID.cjs_distance(-x1, np.exp(0.3 * x1)),
+           "x2_w2": ID.cjs_distance(x2, w2), "neg_x2_w2": ID.cjs_distance(-x2, w2), "x3_w3": ID.cjs_distance(x3, w3)}
+    for k, v in _AZ_CJS.items():
+        assert got[k] == pytest.approx(v, rel=1e-12, abs=0), k
+
+
+def test_power_scaling_matches_arviz_reference_values():
+    th, lp, ll = _az_sens_inputs()
+    assert ID.power_scaling_sensitivity(th, log_prior=lp)["prior"] == pytest.approx(_AZ_SENS["skew_prior"], rel=1e-12)
+    heavy = ID.power_scaling_sensitivity(th, log_lik=ll)
+    assert heavy["likelihood"] == pytest.approx(_AZ_SENS["skew_heavy"], rel=1e-12) and heavy["prior"] is None
+    assert ID.power_scaling_sensitivity(th, log_lik=ll, delta=0.05)["likelihood"] == \
+        pytest.approx(_AZ_SENS["skew_heavy_delta05"], rel=1e-12)
+    lw, _ = ID.psislw((1.01 - 1.0) * ll)                 # ArviZ's _powerscale_lw: psislw((α − 1)·component)
+    for i, v in _AZ_LW_UPPER.items():
+        assert lw[i] == pytest.approx(v, rel=0, abs=1e-12), i
+    assert int(np.argmax(ll)) == 181 and int(np.argmin(ll)) == 390        # the indices pinned above
+    _, up, _, _ = ID._psens_weights(ll, 0.01)
+    assert up == pytest.approx(np.exp(lw) / np.exp(lw).sum(), rel=1e-12)
+    # arviz.psens on an InferenceData: the posterior draws of theta (chains stacked), the log prior, and the
+    # pointwise log-likelihood summed over the observations
+    theta, log_lik, log_prior = _az_idata_inputs()
+    ps = ID.power_scaling_sensitivity(theta.ravel(), log_prior=log_prior.ravel(), log_lik=log_lik.sum(-1).ravel())
+    assert ps["prior"] == pytest.approx(_AZ_PSENS_IDATA["prior"], rel=1e-12)
+    assert ps["likelihood"] == pytest.approx(_AZ_PSENS_IDATA["likelihood"], rel=1e-12)
+    assert ps["diagnosis"] == "prior_data_conflict"          # both ≥ 0.05 (Kallioinen et al. 2024)
+
+
 def test_cjs_distance_port():
     x = np.random.default_rng(0).standard_normal(500)
     assert ID.cjs_distance(x, np.ones_like(x)) == pytest.approx(0.0, abs=1e-6)     # rounding: cumsum vs linspace
