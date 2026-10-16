@@ -489,6 +489,39 @@ def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_
     assert "both at 0.05 or more is a potential prior–data conflict" in cap and '"not assessable" means' in cap
 
 
+def test_a_stored_register_from_before_the_reporting_fixes_is_recomputed(demo, tmp_path):
+    """A run whose manifest holds a register written by earlier code (no run_value / class_short; a study that
+    profiled nothing marked "used") gets its register recomputed on the page, so the card shows the run's fold mean
+    and the new labels, and a disabled study is reported as such (PHYSICS_PLAN W3 review X15–X18)."""
+    from sparc.core import mechanisms as M
+    from sparc.core.results_page import collect
+
+    _, cfg = demo
+    run = tmp_path / "synth_run"
+    shutil.copytree(SYNTH, run)
+    rep = _study_for(run)
+    (run / "identifiability.json").write_text(json.dumps(rep))
+    reg = M.mechanisms_for_run(run, copy.deepcopy(cfg.raw), write=False)
+    for p in reg["identifiability"]["parameters"].values():           # what an older register lacked
+        p.pop("run_value"), p.pop("class_short")
+    m = json.loads((run / "manifest.json").read_text())
+    m["mechanisms"] = reg
+    (run / "manifest.json").write_text(json.dumps(m))
+    rows = {r["key"]: r for r in collect(run, cfg)["identifiability"]["rows"]}
+    assert rows["s"]["class_short"] == "identified" and rows["s"]["threshold"] is not None
+    assert rows["L"]["run_value"] is not None and rows["L"]["run_value"] != rows["L"]["estimate_run"]
+    # an older register that marked a study with nothing profiled as used
+    rep.update(status="disabled", parameters=[], linear=[], derived={})
+    rep["run"]["fold_means"] = {}
+    (run / "identifiability.json").write_text(json.dumps(rep))
+    m["mechanisms"]["identifiability"] = {"status": "used", "study_status": "disabled", "parameters": {},
+                                          "not_identified": [], "note": "nothing was profiled"}
+    (run / "manifest.json").write_text(json.dumps(m))
+    blob = collect(run, cfg)
+    assert blob["identifiability"]["status"] == "disabled"
+    assert blob["mechanisms"]["identifiability"]["status"] == "disabled"
+
+
 @pytest.mark.slow
 def test_identifiability_card_renders_in_chromium(studied, tmp_path):
     """The card's script runs without a console error and fills the table and one profile chart per parameter

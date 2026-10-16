@@ -1720,13 +1720,14 @@ def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
             continue
         u = p["unit"] if p["unit"] in ("m", "W/m²") else ""
         cls = p.get("class_label") or "—"
-        if p.get("open_sides") and p.get("class") not in ("structurally_non_identifiable", "one_sided"):
-            cls += f" (open: {', '.join(p['open_sides'])})"
+        if p.get("class") == "not_assessable":
+            if p.get("ci95_naive"):
+                cls += (f" (unadjusted one-sided bound {_ci_text(p['ci95_naive'], u)}, too narrow under spatial "
+                        "dependence)")
         elif p.get("class") == "one_sided" and p.get("summary"):
             cls += f" ({p['summary']})"
-        elif p.get("class") == "not_assessable" and p.get("ci95_naive"):
-            cls += (f" (unadjusted one-sided bound {_ci_text(p['ci95_naive'], u)}, too narrow under spatial "
-                    "dependence)")
+        elif p.get("open_sides") and p.get("class") != "structurally_non_identifiable":
+            cls += f" (open: {', '.join(p['open_sides'])})"
         if p.get("reaches_zero"):
             cls += "; does not exclude 0"
         post = p.get("posterior") or {}

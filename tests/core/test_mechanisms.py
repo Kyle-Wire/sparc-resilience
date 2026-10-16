@@ -1032,6 +1032,11 @@ def test_a_disabled_study_is_not_written_up_as_profiled():
                       "No physics parameter is identified", "No parameter's value is set mostly by the penalty",
                       "flags no prior–data conflict", "cannot be Supported"):
             assert claim not in sec, claim
+    # a register written before this fix marked such a study "used" (study_status "disabled"): still "Not done"
+    m["mechanisms"]["identifiability"] = {**ib, "status": "used", "study_status": "disabled", "note": None}
+    for doc in (methods_markdown(m), model_card_markdown(m)):
+        sec = doc[doc.index("## Identifiability"):]
+        assert "Not done. The identifiability study profiled nothing" in sec and "No physics parameter" not in sec
 
 
 def test_study_warnings_appear_in_the_register_and_both_writeups():
@@ -1109,7 +1114,8 @@ def test_new_classes_and_unreliable_cells_have_plain_labels():
     folds = _folds()
     one = _prow("L", cls="one_sided", ci=(200.0, None), run=256.0, data=270.0, open_sides=("upper",))
     one["summary"] = "L ≥ 200 m; upper side open at the end of the search range (2000)"
-    na = _prow("a1", cls="not_assessable", ci=None, run=0.3, data=0.0, at_bound={"side": "lower", "bound": 0.0})
+    na = _prow("a1", cls="not_assessable", ci=None, run=0.3, data=0.0, at_bound={"side": "lower", "bound": 0.0},
+               open_sides=("lower",))                                   # as the study reports it
     na.update(ci95_naive=[0.0, 0.18], ci95_naive_label="unadjusted (too narrow under spatial dependence)")
     bad = _prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.2,
                 psens={"prior": 0.2, "likelihood": 0.01, "diagnosis": "weak_likelihood", "method": "laplace",
@@ -1132,6 +1138,7 @@ def test_new_classes_and_unreliable_cells_have_plain_labels():
     assert "one-sided: bounded by the data on one side only (L ≥ 200 m; upper side open" in line
     line = next(ln for ln in md.splitlines() if ln.startswith("| Impervious heat storage"))
     assert "not assessable: on its fit bound" in line and "unadjusted one-sided bound 0 to 0.18" in line
+    assert "(open:" not in line
 
 
 def test_writeups_report_identifiability_from_the_register():

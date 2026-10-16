@@ -122,6 +122,11 @@ def _identifiability_facts(m: dict) -> dict | None:
         if isinstance(m.get("identifiability"), dict) and m["identifiability"]:
             return {"status": "unregistered"}
         return None
+    if ib.get("status") == "used" and ib.get("study_status") == "disabled":
+        # a register written before PHYSICS_PLAN W3 review X16 marked a study that profiled nothing as used
+        from sparc.core.mechanisms import DISABLED_NOTE
+
+        ib = {**ib, "status": "disabled", "note": DISABLED_NOTE}
     if ib.get("status") != "used":
         return {"status": ib.get("status"), "note": ib.get("note"),
                 "warnings": [str(w) for w in ib.get("warnings") or []] if ib.get("status") == "disabled" else []}

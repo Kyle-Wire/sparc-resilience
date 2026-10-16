@@ -442,7 +442,7 @@ def _mechanisms_section(m: dict, run: Path, cfg) -> dict | None:
 
     has_study = run_identifiability(run, m)[0] is not None
     for sec in (m.get("mechanisms"), _stage_file(run, "mechanisms.json")):
-        if isinstance(sec, dict) and sec.get("rows") and (not has_study or "identifiability" in sec):
+        if isinstance(sec, dict) and sec.get("rows") and (not has_study or _register_current(sec)):
             return sec
     try:
         from sparc.core.mechanisms import mechanisms_for_run
@@ -450,6 +450,22 @@ def _mechanisms_section(m: dict, run: Path, cfg) -> dict | None:
         return mechanisms_for_run(run, copy.deepcopy(cfg.raw), write=False)
     except Exception:                                     # noqa: BLE001 - the page builds without it
         return None
+
+
+def _register_current(sec: dict) -> bool:
+    """A stored register that reports the run's identifiability study as this code does: it has the study's block,
+    and a used block carries the fields the card shows (the run's fold mean, the short class labels: registers
+    written before PHYSICS_PLAN W3 review X14–X18 lack them) and does not present a study that profiled nothing
+    (``disabled``) as used.  Otherwise the page recomputes the register."""
+    ib = sec.get("identifiability")
+    if not isinstance(ib, dict):
+        return False
+    if ib.get("status") != "used":
+        return True
+    if ib.get("study_status") == "disabled":
+        return False
+    return all(isinstance(p, dict) and "class_short" in p and "run_value" in p
+               for p in (ib.get("parameters") or {}).values())
 
 
 def _identifiability_section(m: dict, run: Path, mech: dict | None) -> dict | None:
