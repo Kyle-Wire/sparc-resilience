@@ -998,6 +998,41 @@ def test_reports_describe_the_block_sandwich_and_the_adjacent_block_sensitivity(
     assert "as clusters (Chandler & Bate 2007)" not in sec + csec + md
 
 
+def test_a_disabled_study_is_not_written_up_as_profiled():
+    """PHYSICS_PLAN W3 review X16: a study whose data-only fit is anti-physical profiled nothing (status
+    ``disabled``): the register, its markdown and the writeups say so, and nothing reads as if profiles were done
+    (no identifiability columns, no "no parameter is identified", no gate, no method sentence)."""
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    folds = _folds()
+    rep = _ident(folds, [])
+    rep.update(status="disabled", parameters=[], linear=[], derived={},
+               warnings=["the data-only fit is anti-physical (a ≤ 0): the physics term is disabled, nothing to profile"])
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    ib = reg["identifiability"]
+    assert ib["status"] == "disabled" and "profiled nothing" in ib["note"] and "a ≤ 0" in ib["note"]
+    assert ib["parameters"] == {} and ib["not_identified"] == [] and ib["warnings"] == rep["warnings"]
+    P = reg["panel"]
+    assert not P["identifiability_study"] and P["identifiability"].startswith("W3 profile likelihood not done")
+    assert "not done" in P["prior_sensitivity"]
+    assert all("identifiability" not in r for r in P["rows"]) and all("sandwich" not in r for r in P["rows"])
+    assert not any(r.get("identifiability_gate") for r in reg["rows"])
+    assert "identifiability" not in reg["gates"]["levers"]["Pct_Canopy"]
+    md = M.mechanisms_markdown(reg)
+    assert "*Identifiability (W3):* the identifiability study profiled nothing" in md
+    assert "Identifiability from the data alone (W3)" not in md and "come later" not in md
+    for doc in (methods_markdown(m), model_card_markdown(m)):
+        sec = doc[doc.index("## Identifiability"):]
+        sec = sec[:sec.index("\n## ", 3)]
+        assert "Not done. The identifiability study profiled nothing" in sec
+        for claim in ("was tested by profile likelihood", "Profile likelihood on all labelled cells",
+                      "No physics parameter is identified", "No parameter's value is set mostly by the penalty",
+                      "flags no prior–data conflict", "cannot be Supported"):
+            assert claim not in sec, claim
+
+
 def test_writeups_report_identifiability_from_the_register():
     from sparc.core.writeup import methods_markdown, model_card_markdown
 

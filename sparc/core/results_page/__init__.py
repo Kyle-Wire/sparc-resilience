@@ -459,8 +459,9 @@ def _identifiability_section(m: dict, run: Path, mech: dict | None) -> dict | No
     from sparc.core.mechanisms import run_identifiability
 
     ib = (mech or {}).get("identifiability") or {}
-    if ib.get("status") == "ignored":
-        return {"status": "ignored", "note": ib.get("note")}
+    if ib.get("status") in ("ignored", "disabled"):
+        # ignored: made for another fit; disabled: the study profiled nothing (its data-only fit is anti-physical)
+        return {"status": ib["status"], "note": ib.get("note"), "warnings": ib.get("warnings") or []}
     if ib.get("status") != "used":
         return None
     rep, _ = run_identifiability(run, m)

@@ -162,6 +162,11 @@ def _identifiability_facts(m: dict) -> dict | None:
     return out
 
 
+def _cap(text) -> str:
+    text = str(text or "")
+    return text[:1].upper() + text[1:]
+
+
 def _lc(label: str) -> str:
     return label[:1].lower() + label[1:] if label else label
 
@@ -308,6 +313,8 @@ def methods_markdown(m: dict) -> str:
         elif idf["status"] == "unregistered":
             L += ["An identifiability study (`identifiability.json`) exists, but the mechanism register predates it: "
                   "re-run `sparc core mechanisms` to use it."]
+        elif idf["status"] == "disabled":
+            L += [f"Not done. {_cap(idf.get('note'))}."]
         else:
             L += [f"Not used: {idf.get('note')}."]
     if cv:
@@ -475,6 +482,8 @@ def model_card_markdown(m: dict) -> str:
         elif idf["status"] == "unregistered":
             L += ["- An identifiability study exists, but the mechanism register predates it: re-run "
                   "`sparc core mechanisms`."]
+        elif idf["status"] == "disabled":
+            L += [f"- Not done. {_cap(idf.get('note'))}."]
         else:
             L += [f"- Not used: {idf.get('note')}."]
     L += ["", "## Noise floor", "",

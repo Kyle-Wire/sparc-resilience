@@ -256,6 +256,10 @@ _PSENS_TEXT = {"prior_data_conflict": "power-scaling flags a potential prior–d
                "weak_likelihood": "power-scaling flags a strong prior with a weak likelihood (prior sensitive only)"}
 _PSENS_SHORT = {"prior_data_conflict": "potential prior–data conflict",
                 "weak_likelihood": "strong prior, weak likelihood"}
+#: The register's note on a study that profiled nothing (``status: "disabled"``)
+DISABLED_NOTE = ("the identifiability study profiled nothing: its data-only physics fit (every prior off) is "
+                 "anti-physical (gain a ≤ 0), so no parameter's identifiability, prior share or prior sensitivity was "
+                 "assessed (re-run `sparc core identifiability` after the physics fit changes)")
 #: r_a and γ: the block-sandwich SE of the full-data reference and the fold jackknife SE are noted when they differ
 #: by more than this factor (an operational threshold of the W3 task, not a published one).
 SANDWICH_FACTOR = 2.0
@@ -1228,6 +1232,16 @@ def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict
         block.update(status="ignored", note=f"identifiability study ignored: {why}; re-run `sparc core identifiability` "
                                             "for this run")
         return None, block
+    cl = ident.get("cluster") or {}
+    if ident.get("status") == "disabled":
+        # the study stopped before any profile (its data-only fit has a ≤ 0): nothing it could say about any
+        # parameter, so nothing is reported as profiled, identified or gated (PHYSICS_PLAN W3 review X16)
+        block.update(status="disabled", study_status="disabled", n=ident.get("n"),
+                     n_clusters=ident.get("n_clusters"), block_m=cl.get("block_m"), coarse_m=ident.get("coarse_m"),
+                     warnings=[str(w) for w in ident.get("warnings") or []], parameters={}, linear={},
+                     not_identified=[], refs=[],
+                     note=DISABLED_NOTE)
+        return None, block
     post = ident.get("posterior") or {}
     laplace_ok = post.get("laplace_adequate") if post else None
     params = {}
@@ -1240,7 +1254,6 @@ def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict
             linear[r["key"]] = {k: r.get(k) for k in ("label", "unit", "estimate_run", "se_robust_run", "se_naive_run",
                                                        "estimate_data", "se_robust_data", "se_naive_data",
                                                        "adjust_factor")}
-    cl = ident.get("cluster") or {}
     info = {"params": params, "linear": linear, "n": ident.get("n"), "n_clusters": ident.get("n_clusters"),
             "block_m": cl.get("block_m"), "coarse_m": ident.get("coarse_m"),
             "score_covariance": ((ident.get("covariance") or {}).get("used")
@@ -1252,9 +1265,6 @@ def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict
                  laplace_adequate=laplace_ok, warnings=info["warnings"], parameters=params, linear=linear,
                  not_identified=[k for k, p in params.items() if p["in_model"] and p["class"] in NOT_IDENTIFIED],
                  refs=list(_IDENT_REFS))
-    if ident.get("status") == "disabled":
-        block["note"] = ("the identifiability study's data-only physics fit is anti-physical (a ≤ 0): nothing was "
-                         "profiled")
     return info, block
 
 
@@ -1431,6 +1441,9 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
     ident, ident_block = _ident_info(identifiability, ctx, identifiability_source or "argument")
     ctx["ident"] = ident
     panel = _panel(ctx)
+    if ident_block.get("status") == "disabled":
+        panel["identifiability"] = f"W3 profile likelihood not done; {ident_block['note']}"
+        panel["prior_sensitivity"] = "W3 prior sensitivity not done: the identifiability study profiled nothing"
     kind, basis = _basis(ctx["target_kind"])
     by_key = {r["key"]: r for r in panel["rows"]}
     block = _physics_block(ctx)
@@ -1732,9 +1745,11 @@ def mechanisms_markdown(reg: dict | None) -> str:
             L += ["", f"*{r['mechanism']} context:* {r['context']}"]
             seen.add(r["mechanism"])
     P = reg.get("panel") or {}
+    ib_status = (reg.get("identifiability") or {}).get("status")
     if P.get("rows"):
         later = ("Identifiability from the data alone and the priors' influence: the table after this one."
                  if P.get("identifiability_study") else
+                 f"Identifiability: {P.get('identifiability')}." if ib_status == "disabled" else
                  f"Identifiability ({P.get('identifiability')}) and prior sensitivity ({P.get('prior_sensitivity')}) "
                  "come later.")
         L += ["", f"**Fitted physics in physical units** ({P.get('uncertainty')}; {P.get('n_active')} of "
@@ -1764,7 +1779,7 @@ def mechanisms_markdown(reg: dict | None) -> str:
     ib = reg.get("identifiability") or {}
     if ib.get("status") == "used":
         L += ["", identifiability_markdown_table(ib, reg)]
-    elif ib.get("status") == "ignored":
+    elif ib.get("status") in ("ignored", "disabled"):
         L += ["", f"*Identifiability (W3):* {ib.get('note')}."]
     G = reg.get("gates") or {}
     if G.get("statements"):

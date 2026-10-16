@@ -392,6 +392,43 @@ def test_identifiability_card_with_a_study_of_another_fit_says_so(demo, tmp_path
     assert card["status"] == "ignored" and "different physics fit" in card["note"] and "rows" not in card
 
 
+def test_identifiability_card_of_a_disabled_study_says_nothing_was_profiled(demo, tmp_path):
+    """PHYSICS_PLAN W3 review X16: a study that profiled nothing (anti-physical data-only fit) gets a card that says
+    so, with no rows, and the parameter panel's caption does not promise a next card."""
+    from sparc.core.results_page import collect, render_page
+
+    _, cfg = demo
+    run = tmp_path / "synth_run"
+    shutil.copytree(SYNTH, run)
+    rep = _study_for(run)
+    rep.update(status="disabled", parameters=[], linear=[], derived={},
+               warnings=["the data-only fit is anti-physical (a ≤ 0): the physics term is disabled, nothing to profile"])
+    rep["run"]["fold_means"] = {}
+    (run / "identifiability.json").write_text(json.dumps(rep))
+    blob = collect(run, cfg)
+    card = blob["identifiability"]
+    assert card["status"] == "disabled" and "profiled nothing" in card["note"] and "rows" not in card
+    assert card["warnings"] == rep["warnings"]
+    assert blob["mechanisms"]["identifiability"]["status"] == "disabled"
+    assert blob["mechanisms"]["panel"]["identifiability"].startswith("W3 profile likelihood not done")
+    html = render_page(blob, cfg)
+    assert "The identifiability study ran but profiled nothing" in html
+    if Path(CHROMIUM).exists():
+        page = tmp_path / "page.html"
+        page.write_text(html, encoding="utf-8")
+        res = subprocess.run([CHROMIUM, "--headless=new", "--no-sandbox", "--disable-gpu", "--enable-logging=stderr",
+                              "--v=0", "--virtual-time-budget=5000", "--dump-dom", page.as_uri()],
+                             capture_output=True, text=True, timeout=180)
+        assert res.returncode == 0 and "Uncaught" not in res.stderr, res.stderr[-2000:]
+        dom = res.stdout
+        cap = dom[dom.index('id="identCap"'):]
+        cap = cap[:cap.index("</p>")]
+        assert "profiled nothing, so nothing on this card was assessed" in cap
+        mcap = dom[dom.index('id="mechPanelCap"'):]
+        mcap = mcap[:mcap.index("</p>")]
+        assert "Identifiability: W3 profile likelihood not done" in mcap and "are in the next card" not in mcap
+
+
 @pytest.mark.slow
 def test_identifiability_card_renders_in_chromium(studied, tmp_path):
     """The card's script runs without a console error and fills the table and one profile chart per parameter
