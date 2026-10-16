@@ -1367,6 +1367,20 @@ def test_cli_and_api_reject_bad_arguments_before_any_fit(tmp_path, monkeypatch, 
     assert ID.check_arguments("L,kappa,kc", 2, 100) == ["L", "kappa_canopy"]
     assert ID.check_arguments(None, None, 0, posterior=False) is None      # draws unused without the posterior
 
+def test_cli_reports_a_study_value_error_as_an_error_line(tmp_path, monkeypatch, capsys):
+    """A ValueError raised inside the study (e.g. fewer than two spatial blocks of labelled cells) is an ERROR line
+    and exit code 2, not a traceback."""
+    from sparc.core import cli
+
+    def too_few(*a, **k):
+        raise ValueError("the identifiability study needs at least two independent clusters (CV blocks), got 1")
+
+    monkeypatch.setattr(ID, "identifiability_report", too_few)
+    (tmp_path / "manifest.json").write_text("{}")
+    assert cli.main(["identifiability", "-r", str(tmp_path)]) == 2
+    assert "ERROR: the identifiability study needs at least two independent clusters" in capsys.readouterr().err
+
+
 @pytest.fixture(scope="module")
 def small_run(tmp_path_factory):
     from sparc.core.config import load_core_config

@@ -541,8 +541,12 @@ def cmd_core_identifiability(args) -> int:
     settings = {}
     if args.threads:
         settings["num_threads"] = int(args.threads)
-    rep = identifiability_report(run, cfg, params=params, coarse=args.coarse or None, max_points=args.max_points,
-                                 draws=args.draws, seed=args.seed, settings=settings)
+    try:
+        rep = identifiability_report(run, cfg, params=params, coarse=args.coarse or None, max_points=args.max_points,
+                                     draws=args.draws, seed=args.seed, settings=settings)
+    except ValueError as exc:                        # e.g. fewer than two spatial blocks: no sandwich is possible
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     print(identifiability_markdown(rep))
     reg = rep.get("register") or {}
     print(f"\nwrote {Path(run) / 'identifiability.json'} and the manifest's identifiability section "
