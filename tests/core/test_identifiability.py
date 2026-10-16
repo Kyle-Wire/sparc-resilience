@@ -792,6 +792,50 @@ def test_non_monotone_profiles_are_repaired_or_reported(monkeypatch):
     assert all("multimodal" in w for w in st.warnings if "not monotone" in w)
 
 
+def _stub_study(modes=("blocks",)):
+    st = ID._Study.__new__(ID._Study)
+    st.modes, st.warnings, st.l_hat = list(modes), [], 0.0
+    return st
+
+
+def _stub_row(lams, key="w", x_hat=0.0, at_bound=None, held=None):
+    """A row whose upper side has profile points at x = 1, 2, ... with naive and adjusted Λ ``lams`` (R = 1)."""
+    pts = [{"value": float(i + 1), "x": float(i + 1), "l": -lam / 2.0, "lam_i": lam, "lam_a": {"blocks": lam},
+            "lam_a_ipath": {"blocks": lam}, "R": {"blocks": 1.0}, "leaves": {}} for i, lam in enumerate(lams)]
+    return {"key": key, "label": key, "unit": "W/m²", "_nat": key, "_points": pts, "_x_hat": x_hat,
+            "_sides": {"upper": {"points": list(pts), "edge": False}}, "_thr": ID.CHI2_95, "at_bound": at_bound,
+            "held": held, "estimate_data": x_hat, "boundary_adjustment": None, "notes": []}
+
+
+def test_an_interval_ends_at_the_outermost_crossing_of_a_profile_that_falls_back():
+    """A profile likelihood can be multimodal: a side that crosses 3.841 and falls back below it further out does
+    not end at its first crossing.  It ends at the outermost crossing (the hull of {ψ : Λ ≤ 3.841}), or is open when
+    the outermost explored point is below the threshold; either way it is recorded and warned about."""
+    seq = [{"x": 1.0, "lam": 1.0}, {"x": 2.0, "lam": 4.5}, {"x": 3.0, "lam": 3.0}, {"x": 4.0, "lam": 6.0}]
+    first = ID._first_crossing(seq, 0.0, 0.0, "lam")
+    hull = ID._crossing(seq, 0.0, 0.0, "lam")
+    assert 1.0 < first < 2.0 and 3.0 < hull < 4.0
+    assert ID._crossing(seq[:3], 0.0, 0.0, "lam") is None                   # falls back and never crosses again
+    mono = [{"x": 1.0, "lam": 1.0}, {"x": 2.0, "lam": 4.5}, {"x": 3.0, "lam": 6.0}]
+    assert ID._crossing(mono, 0.0, 0.0, "lam") == ID._first_crossing(mono, 0.0, 0.0, "lam")
+    st = _stub_study()
+    r = _stub_row([1.0, 4.5, 3.0])
+    ID._finish_profile(st, r, 0.0)
+    assert r["ci95"][1] is None and "upper" in r["open_sides"] and r["identifiability"] != "identified"
+    fb = r["profile"]["fell_back"]
+    assert {v["profile"] for v in fb} == {"naive", "blocks"} and all(v["end"] is None for v in fb)
+    assert any("falls back below it further out" in w and "is open" in w for w in st.warnings)
+    st = _stub_study()
+    r = _stub_row([1.0, 4.5, 3.0, 6.0])
+    ID._finish_profile(st, r, 0.0)
+    assert r["ci95"][1] == pytest.approx(hull) and r["ci95_naive"][1] == pytest.approx(hull)
+    assert any("ends at the outermost crossing" in w for w in st.warnings)
+    st = _stub_study()
+    r = _stub_row([1.0, 4.5, 6.0])
+    ID._finish_profile(st, r, 0.0)
+    assert r["profile"]["fell_back"] == [] and not st.warnings
+
+
 # ---------------------------------------------------------------------------
 # (c) a canopy layer the model cannot use; (e) a parameter on its fit bound
 # ---------------------------------------------------------------------------

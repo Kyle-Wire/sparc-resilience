@@ -154,8 +154,12 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   maximisation, so it is re-maximised from that point's optimum and the better optima kept (two passes).  A
   profile likelihood need not be monotone away from ψ̂ (the likelihood can be multimodal), so what remains after
   re-maximisation is recorded (``profile.monotone``, ``non_monotone``) and warned about: the profile may be
-  multimodal there, and the interval end on that side is uncertain.  On the 13-parameter city world of the tests the single-start version gave L's adjusted profile 3.94
-  at 92.0 m and 3.48 at 92.2 m, and an upper 95% end of 91.9 m instead of 92.8 m.
+  multimodal there, and the interval end on that side is uncertain.  An interval end is the outermost crossing
+  of the threshold on its side (the hull of {ψ : Λ ≤ threshold} over the explored points), so a side that
+  crosses and then falls back below the threshold ends further out, or is open when the outermost explored point
+  is below it (``profile.fell_back``, warned about), never at its first crossing.  On the 13-parameter city
+  world of the tests the single-start version gave L's adjusted profile 3.94 at 92.0 m and 3.48 at 92.2 m, and
+  an upper 95% end of 91.9 m instead of 92.8 m.
 * **Profile range.**  A side also stops at a physical limit (:data:`PHYSICAL_LIMITS`: a fraction's 0 or 1,
   the 0 of a non-negative slope, sink or drift), where that side is open but the interval ends, and an EF
   parameter stops where its own term reaches logit ±30 (:func:`_ef_walk_limit`): σ rounds to 1 in float64
@@ -1840,8 +1844,28 @@ def _released(st: _Study, start: dict, skip: set) -> dict | None:
 
 
 def _crossing(seq: list[dict], x0: float, lam0: float, key: str, thr: float = CHI2_95):
-    """First outward crossing of ``thr`` along ``seq`` (points ordered outward from x0), interpolated linearly
-    in √Λ (exact for a quadratic profile).  None when the side does not cross."""
+    """Outward end, on one side, of the hull of {ψ : Λ ≤ ``thr``} over the explored points (``seq`` ordered
+    outward from x0, where Λ = ``lam0``): the crossing of ``thr`` after the outermost point whose Λ is below it,
+    interpolated linearly in √Λ (exact for a quadratic profile).  None when the outermost explored point is still
+    below ``thr`` (the side does not cross).  A profile that crosses and then falls back below the threshold (a
+    multimodal profile likelihood, or a failed maximisation) therefore ends at its outermost crossing, or stays
+    open, never at its first crossing (:func:`_first_crossing`)."""
+    pts = [(x0, max(lam0, 0.0))] + [(p["x"], max(p[key], 0.0)) for p in seq]
+    below = [i for i, (_, lam) in enumerate(pts) if lam < thr]
+    if not below:
+        return x0
+    i = below[-1]
+    if i == len(pts) - 1:
+        return None
+    (xa, la), (xb, lb) = pts[i], pts[i + 1]
+    a, b = math.sqrt(la), math.sqrt(lb)
+    f = (math.sqrt(thr) - a) / (b - a) if b > a else 1.0
+    return xa + f * (xb - xa)
+
+
+def _first_crossing(seq: list[dict], x0: float, lam0: float, key: str, thr: float = CHI2_95):
+    """The first outward crossing of ``thr`` along ``seq`` (as :func:`_crossing`, which takes the outermost one);
+    None when no point reaches ``thr``."""
     xp, lp = x0, max(lam0, 0.0)
     if lp >= thr:
         return x0
@@ -1886,20 +1910,15 @@ def _walk(st: _Study, r: dict, side: int, x_hat: float, h0: float, lo_w, hi_w, d
         f = math.sqrt(float(S["target_step"]) / dl) if dl > 1e-9 else 3.0
         h *= min(max(f, 0.5), 3.0)
         x_prev, lam_prev, warm = x, lam_min, p["leaves"]
-    # bisect a wide crossing bracket (of each adjusted profile) so the interval end is interpolated over a short step
+    # bisect a wide crossing bracket (of each adjusted profile) so the interval end is interpolated over a short step;
+    # the bracket is the one :func:`_crossing` interpolates in (after the outermost point below the threshold)
     for mode in st.modes:
         for _ in range(int(S["refine"])):
-            seq = sorted(pts, key=lambda q: abs(q["x"] - x_hat))
-            prev = {"x": x_hat, "lam_a": {mode: 0.0}, "leaves": warm0}
-            br = None
-            for q in seq:
-                if q["lam_a"][mode] >= thr:
-                    br = (prev, q)
-                    break
-                prev = q
-            if br is None:
+            seq = [{"x": x_hat, "lam_a": {mode: 0.0}, "leaves": warm0}] + sorted(pts, key=lambda q: abs(q["x"] - x_hat))
+            below = [i for i, q in enumerate(seq) if q["lam_a"][mode] < thr]
+            if not below or below[-1] == len(seq) - 1:
                 break
-            a, b = br
+            a, b = seq[below[-1]], seq[below[-1] + 1]
             if b["lam_a"][mode] - thr <= float(S["margin"]) and thr - a["lam_a"][mode] <= float(S["margin"]):
                 break
             xm = 0.5 * (a["x"] + b["x"])
@@ -2106,6 +2125,7 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
     explored = list(r["_sides"])
     status = {mode: {} for mode in st.modes}
     status_naive = {}
+    fell_back: list[dict] = []
     for name, res in r["_sides"].items():
         seq = sorted(res["points"], key=lambda q: abs(q["x"] - x_hat))
         res["points"] = seq
@@ -2115,6 +2135,16 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
         for mode in st.modes:
             status[mode][name] = _side_status(r, name, res, _crossing_mode(seq, x_hat, mode, r["_thr"]))
         status_naive[name] = _side_status(r, name, res, _crossing(seq, x_hat, lam0, "lam_i", r["_thr"]))
+        # a profile that crosses the threshold and falls back below it further out: the interval ends at the outermost
+        # crossing (or the side is open), not at the first one (_crossing)
+        curves = [("naive", [{"x": q["x"], "lam": q["lam_i"]} for q in seq], lam0)] + [
+            (mode, [{"x": q["x"], "lam": q["lam_a"][mode]} for q in seq], 0.0) for mode in st.modes]
+        for which, cs, l0 in curves:
+            first = _first_crossing(cs, x_hat, l0, "lam", r["_thr"])
+            hull = _crossing(cs, x_hat, l0, "lam", r["_thr"])
+            if first is not None and hull != first:
+                fell_back.append({"side": name, "profile": which, "first": _from_walk(r, first),
+                                  "end": None if hull is None else _from_walk(r, hull)})
     bound = r["at_bound"]["bound"] if r["at_bound"] else None
 
     def ci(stat):
@@ -2182,7 +2212,14 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
     nonmono = [v for res in r["_sides"].values() for v in (res.get("non_monotone") or [])]
     prof = {"grid": [g[0] for g in grid], "lambda_naive": [g[2] for g in grid],
             "sides_explored": explored, "stopped_at_bound": [n for n, res in r["_sides"].items() if res["edge"]],
-            "monotone": not nonmono, "non_monotone": nonmono}
+            "monotone": not nonmono, "non_monotone": nonmono, "fell_back": fell_back}
+    for v in fell_back:
+        msg = (f"the {v['profile']} profile of {r['key']} crosses the 95% threshold on the {v['side']} side at "
+               f"{_g(v['first'])} and falls back below it further out (a multimodal profile likelihood or a failed "
+               "maximisation): that side "
+               + (f"ends at the outermost crossing, {_g(v['end'])}" if v["end"] is not None else "is open"))
+        r["notes"].append(msg)
+        st.warn(msg)
     if nonmono:
         r["notes"].append("the profile is not monotone after re-maximisation ("
                           + "; ".join(f"{v['profile']}: {_g(v['inner'])} above {_g(v['outer'])}" for v in nonmono)
