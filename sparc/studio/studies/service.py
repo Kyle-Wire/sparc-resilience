@@ -38,7 +38,10 @@ __all__ = ["POST_KINDS", "RUN_STUDY_KINDS", "PROJECT_STUDY_KINDS", "STUDY_KINDS"
            "attached_runs", "stale_vs", "write_mirror", "publish", "summary_for", "import_study_dir",
            "detect_kind", "delete_study", "effective_status", "project_dir_of", "attached_studies_of"]
 
-POST_KINDS = ("baselines", "planner", "emulator", "uncertainty", "writeup")
+#: ``POST /runs/{rid}/actions/{kind}``.  ``identifiability`` (PHYSICS_PLAN W3) is an action without a
+#: ``GET /runs/{rid}/studies`` row (it is not in :data:`ROW_KINDS`: a row needs a new value in the wire
+#: contract's kind enum); the Overview's outputs grid offers it while ``identifiability.json`` is missing.
+POST_KINDS = ("baselines", "planner", "emulator", "uncertainty", "writeup", "identifiability")
 RUN_STUDY_KINDS = ("placebo", "simcheck", "multiverse", "reproduce")
 PROJECT_STUDY_KINDS = ("benchmark",)
 STUDY_KINDS = RUN_STUDY_KINDS + PROJECT_STUDY_KINDS

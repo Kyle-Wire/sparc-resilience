@@ -145,7 +145,8 @@ def test_emulator_refuses_an_untrusted_checkpoint(client, demo, synth, tmp_path,
 
 def test_identifiability_is_a_generic_job_kind(client, ctx, fixture_run, fake_studies, calls, wait_job):
     """``post.identifiability`` (PHYSICS_PLAN W3) runs through ``POST /api/jobs`` on the launch snapshot, is
-    listed with its params schema in ``/api/meta``, and is not a row of the run's studies (that needs studio-web)."""
+    listed with its params schema in ``/api/meta``, and is not a row of the run's studies (that needs studio-web).
+    The Overview's outputs grid offers it as an action, and that action runs (it used to answer 404)."""
     rid, rd = fixture_run
     title = snapshot_title(rd)
     kinds = {k["kind"]: k for k in client.get("/api/meta").json()["job_kinds"]}
@@ -167,7 +168,64 @@ def test_identifiability_is_a_generic_job_kind(client, ctx, fixture_run, fake_st
     assert "identifiability" not in {r["kind"] for r in client.get(f"/api/runs/{rid}/studies").json()}
     r = client.post("/api/jobs", json={"kind": "post.identifiability", "run_id": rid, "params": {"params": ["nope"]}})
     assert r.status_code == 422
-    assert client.post(f"/api/runs/{rid}/actions/identifiability", json={}).json()["error"]["code"] == "unknown_kind"
+    # the Overview's "Run the identifiability study" button: its action, POSTed as the web client does
+    (rd / "identifiability.json").unlink()
+    r = client.get(f"/api/runs/{rid}/views/overview")
+    assert r.status_code == 200, r.text
+    grid = {g["id"]: g for g in r.json()["sections"]["outputs_grid"]}
+    act = grid["identifiability"]["action"]
+    assert grid["identifiability"]["state"] == "missing"
+    assert act == {"kind": "run_job", "label": "Run the identifiability study", "method": "POST",
+                   "path": f"/api/runs/{rid}/actions/identifiability", "body": {}}
+    job = _post(client, act["path"], act["body"])
+    assert job["kind"] == "post.identifiability" and job["run_id"] == rid and job["lane"] == "heavy"
+    _done(client, wait_job, job)
+    (call,) = calls(job)
+    assert call["fn"] == "identifiability_report" and Path(call["run_dir"]) == rd and call["cfg"]["title"] == title
+    assert call["params"] is None and call["coarse"] is None and call["max_points"] is None
+    assert (rd / "identifiability.json").exists()
+    job = _post(client, act["path"], {"params": ["L"], "coarse_m": 120, "draws": 500})   # the kind's params
+    _done(client, wait_job, job)
+    (call,) = calls(job)
+    assert call["params"] == ["L"] and call["coarse"] == 120.0 and call["draws"] == 500
+    r = client.post(act["path"], json={"draws": 10})
+    assert r.status_code == 422 and r.json()["error"]["detail"]["errors"][0]["path"] == "params.draws"
+    assert "identifiability" not in {r["kind"] for r in client.get(f"/api/runs/{rid}/studies").json()}
+
+
+def test_identifiability_action_needs_a_physics_model(client, fixture_run):
+    """Without a physics model the study cannot run: no button on the Overview, and the action answers
+    ``422 requirements`` naming the config key."""
+    from types import SimpleNamespace
+
+    from sparc.core.catalog import output_by_id
+    from sparc.studio.runs.outputs import output_action
+    from sparc.studio.studies.views import requirements
+
+    rid, rd = fixture_run
+    spec = output_by_id("identifiability")
+
+    def fake(raw):
+        return SimpleNamespace(run_id=rid, manifest_raw={"config": raw}, cfg_raw=raw, cfg=None, status="complete",
+                               exists=lambda rel: True)
+
+    on = fake({"physics": {"roles": {"canopy": "tree"}}})
+    assert requirements(on, "identifiability") == {"ok": True, "missing": []}
+    assert output_action(on, spec, resumable=False)["path"] == f"/api/runs/{rid}/actions/identifiability"
+    for raw, key in (({"models": {"physics": False}}, "models.physics"),
+                     ({"physics": {"enabled": False}}, "physics.enabled"), ({"physics": {"roles": {}}}, "physics.roles")):
+        off = fake(raw)
+        assert requirements(off, "identifiability") == {"ok": False, "missing": [key]}
+        assert output_action(off, spec, resumable=False) is None
+    # the route itself: a run whose launch snapshot turns the physics model off
+    snap = json.loads((rd / "studio" / "launch.json").read_text())
+    core = snap["config_raw"].get("core", snap["config_raw"])
+    core.setdefault("models", {})["physics"] = False
+    (rd / "studio" / "launch.json").write_text(json.dumps(snap))
+    r = client.post(f"/api/runs/{rid}/actions/identifiability", json={})
+    assert r.status_code == 422, r.text
+    err = r.json()["error"]
+    assert err["code"] == "requirements" and err["detail"]["missing"] == ["models.physics"]
 
 
 def test_unknown_kinds_and_params(client, fixture_run):

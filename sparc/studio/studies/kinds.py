@@ -21,10 +21,12 @@ config given at import (:func:`run_config`), never the project's current config.
 ``.md`` / ``.json`` files the CLI used to (``placebo.json/.md``, ``simcheck_summary.md``,
 ``multiverse_summary.md``, ``benchmark.json/.md``) with :mod:`sparc.core.runio`.
 
-``post.identifiability`` (PHYSICS_PLAN W3) is a job kind only: the generic job API (``POST /api/jobs``), the
-job tracker and ``/api/meta`` list it, and its ``identifiability.json`` is in the output catalog, but it is not a
-row of ``GET /runs/{rid}/studies`` (:data:`service.ROW_KINDS`): a Validation-tab card needs a ``studio-web``
-change and a new value in the wire contract's kind enum.
+``post.identifiability`` (PHYSICS_PLAN W3) runs through the generic job API (``POST /api/jobs``) and the
+post-run action route (``POST /api/runs/{rid}/actions/identifiability``, :data:`service.POST_KINDS`; the
+Overview's outputs grid offers it while ``identifiability.json`` is missing); the job tracker and ``/api/meta``
+list it, and its ``identifiability.json`` is in the output catalog, but it is not a row of
+``GET /runs/{rid}/studies`` (:data:`service.ROW_KINDS`): a Validation-tab card needs a ``studio-web`` change and a
+new value in the wire contract's kind enum.
 
 Server-side hooks: ``on_event`` registers each child run of a study as soon as its ``run.dir`` event
 arrives (``origin = study_child``, ``study_id``, ``parent_run_id``) and follows the job's status;

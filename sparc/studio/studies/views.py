@@ -78,11 +78,23 @@ def _data_missing(ctx) -> list[str]:
         return ["data.path"]
 
 
+def _physics_off_key(ctx) -> str | None:
+    """The config key that turns the run's physics model off (``models.physics``, ``physics.enabled``,
+    ``physics.roles``; :func:`sparc.core.mechanisms._physics_off`), None when the run fits one."""
+    from sparc.core.mechanisms import _physics_off
+
+    why = _physics_off(ctx.cfg_raw or (ctx.manifest_raw or {}).get("config") or {})   # the config the job uses
+    if why is None:
+        return None
+    return why.split(" ", 1)[0]
+
+
 def requirements(ctx, kind: str) -> dict:
     """``{ok, missing}``: what ``kind`` needs from the run behind ``ctx`` (a ``RunContext``).
 
-    ``missing`` names config keys (``planner.layers``, ``physics.roles.canopy``, ``data.path``) or run files
-    (``manifest``, ``predictions``, ``checkpoint``)."""
+    ``missing`` names config keys (``planner.layers``, ``physics.roles.canopy``, ``data.path``; for
+    ``identifiability`` the key that turns the physics model off: ``models.physics``, ``physics.enabled`` or
+    ``physics.roles``) or run files (``manifest``, ``predictions``, ``checkpoint``)."""
     missing: list[str] = []
     has_manifest = ctx.manifest_raw is not None
     if kind in ("baselines", "planner", "emulator", "uncertainty", "writeup", "reproduce") and not has_manifest:
@@ -107,6 +119,13 @@ def requirements(ctx, kind: str) -> dict:
         missing += _roles_missing(ctx, need_all=True) + _data_missing(ctx)
     if kind in ("multiverse", "baselines", "planner"):
         missing += [m for m in _data_missing(ctx) if m not in missing]
+    if kind == "identifiability":
+        missing += [k for k in ("manifest",) if not has_manifest]
+        missing += [k for k in ("predictions",) if not ctx.exists("predictions.parquet")]
+        missing += [m for m in _data_missing(ctx) if m not in missing]
+        off = _physics_off_key(ctx)
+        if off:
+            missing.append(off)
     if kind == "reproduce" and has_manifest:
         m = ctx.manifest_raw or {}
         prov = m.get("provenance") or {}

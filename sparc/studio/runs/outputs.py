@@ -85,8 +85,14 @@ def output_action(ctx, spec, *, resumable: bool) -> dict | None:
         if what == "emulator":
             return {"kind": "build_emulator", "label": "Build emulator", "method": "POST",
                     "path": f"/api/runs/{rid}/actions/emulator", "body": {}}
+        if what == "identifiability":
+            from sparc.studio.studies.views import _physics_off_key
+
+            if _physics_off_key(ctx):                 # no physics model in this run: nothing to study
+                return None
         labels = {"planner": "Run planner pack", "uncertainty": "Compute uncertainty envelopes",
-                  "writeup": "Regenerate methods & model card", "baselines": "Score the baselines"}
+                  "writeup": "Regenerate methods & model card", "baselines": "Score the baselines",
+                  "identifiability": "Run the identifiability study"}
         return {"kind": "run_job", "label": labels.get(what, f"Run {what}"), "method": "POST",
                 "path": f"/api/runs/{rid}/actions/{what}", "body": {}}
     if kind == "study" and what in ("placebo", "simcheck", "multiverse", "reproduce"):
