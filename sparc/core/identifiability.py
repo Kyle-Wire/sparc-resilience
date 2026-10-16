@@ -235,6 +235,17 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   spatial dependence)", and the parameter is *not assessable* rather than identified; it gets no profile
   posterior either.  On Providence at 120 m cells: s (inflation 56, c = 0.023) and w (5.5, 0.053) are
   adjusted, a₁ (inflation 846) is not assessable, κ carries no information at its bound.
+  **This boundary path under-covers in validation** (:data:`BOUNDARY_COVERAGE`).  In the near-boundary world of
+  the tests (``BOUND_TRUE``: the shade world with a planted s = 0.01 and an evaporative fraction that does not
+  depend on canopy, 60 replicates, the tests' slow ``test_coverage_near_the_boundary``) s landed on its bound in
+  21 replicates: the scalar-c path ran in 18 (c 0.06–0.18, median 0.11) and 3 were not assessable (5% of all).
+  The c path's one-sided bounds covered the planted 0.01 in only 50% (blocks) and 67% (neighbours) of those 18
+  (naive 0%); a miss would have needed a bound 1.04–2.1 times higher in all but one replicate (5.6), and in 10
+  of the 18 a held parameter (κ, flat at s = 0) left its value inside the interval (*Held parameters*).  The 39
+  interior estimates covered it in 95% and 97% (naive 46%), so overall coverage was 77% and 83% (naive 33%; not
+  assessable counted as not covering).  So a bound from this path is likely too narrow: each such row's summary
+  and note say so, and Providence's canopy-shading statement s ≤ 0.42, which rests on it, is an indicative bound,
+  not a validated one.
 * **SEs and curvature at the penalized optimum** are those of the M-estimator solving the run's estimating
   equation ∇J = 0 (J = MSE/var(y) + penalty): Σ = A⁻¹VA⁻¹ with A = k·(G_D + ∇²penalty), k = n·var(y)/(2·MSE),
   naive A⁻¹(JᵀJ/σ²)A⁻¹; G_D = 2JᵀJ/(n·var y) is the data term's expected (Gauss–Newton) curvature, J = ∂r/∂θ.
@@ -330,6 +341,15 @@ RESTART_DL = 0.05
 PHYSICAL_LIMITS = {"s": {"lower": 0.0, "upper": 1.0}, "a1": {"lower": 0.0, "upper": 1.0},
                    "a1n": {"lower": 0.0, "upper": 1.0}, "e1": {"lower": 0.0}, "e2": {"lower": 0.0},
                    "e3": {"lower": 0.0}, "w": {"lower": 0.0}, "v": {"lower": 0.0}}
+#: Validation of the boundary path (Self & Liang one-sided bound, Λ_A = c·Λ_I at the bound) in the near-boundary
+#: world of the tests (``BOUND_TRUE``: planted s = 0.01; 60 replicates, seeds 300–359; review F3): how often s landed
+#: on its bound, how often the scalar-c path ran, and the coverage of the planted value by the one-sided bounds of
+#: that path and overall (a study without an adjusted interval counted as not covering).  Quoted in the notes of
+#: the rows that use the path.
+BOUNDARY_COVERAGE = {"world": "BOUND_TRUE (s = 0.01)", "replicates": 60, "on_bound": 21, "c_path": 18,
+                     "not_assessable": 3, "c_path_blocks": 0.50, "c_path_neighbours": 0.67, "c_path_naive": 0.0,
+                     "interior_blocks": 0.95, "interior_neighbours": 0.97, "all_blocks": 0.77,
+                     "all_neighbours": 0.83, "all_naive": 0.33}
 #: The profile of an EF parameter stops where its term alone reaches this logit (:func:`_ef_walk_limit`).
 EF_WALK_LOGIT = 30.0
 
@@ -2226,6 +2246,9 @@ def _summary(r: dict, cls: str, sides: dict) -> str:
     u = f" {r['unit']}" if r.get("unit") in ("m", "W/m²") else ""
     lo, hi = sides.get("lower"), sides.get("upper")
     tail = "; one-sided 95% bound at Λ = 2.706 (Self & Liang 1987)" if r["at_bound"] else ""
+    if r["at_bound"] and cls != "not_assessable" and (r.get("boundary_adjustment") or {}).get("computable"):
+        # the scalar boundary adjustment under-covers in the module's near-boundary validation (module docstring)
+        tail += ", adjusted by the scalar c at the bound, which under-covers in validation (likely too narrow)"
     if cls == "structurally_non_identifiable":
         return f"{sym}: flat profile (no information)"
     if cls == "not_assessable":
@@ -2307,7 +2330,11 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
                           "Liang 1987: the likelihood-ratio statistic is a 50:50 mixture of 0 and χ²₁ there)")
         if ba.get("computable"):
             r["notes"].append("adjusted by the scalar c = Σ_naive/Σ_rob of the well-conditioned curvature at the bound "
-                              f"(c = {_g(ba['c'].get('blocks'), 3)} with the block V)")
+                              f"(c = {_g(ba['c'].get('blocks'), 3)} with the block V); in the module's near-boundary "
+                              "validation the bounds of this path covered the planted value in only "
+                              f"{BOUNDARY_COVERAGE['c_path_blocks']:.0%} (blocks) and "
+                              f"{BOUNDARY_COVERAGE['c_path_neighbours']:.0%} (neighbours) of {BOUNDARY_COVERAGE['c_path']} "
+                              "replicates, so read it as indicative and likely too narrow")
     # the class rests on the wider of the adjusted intervals (conservative): per side, the union of the sides
     union = {name: _union_status([status[mode][name] for mode in st.modes], name) for name in explored}
     max_lam = max([min(p["lam_a"].values()) for p in pts], default=0.0)

@@ -685,6 +685,62 @@ def test_coverage_in_a_multi_parameter_shade_world_summary(tmp_path_factory):
     assert cov["L"]["naive"] <= cov["L"]["blocks"] - 0.3 and cov["s"]["naive"] <= cov["s"]["blocks"] - 0.3
 
 
+BOUND_CHUNKS, BOUND_R = 2, 30
+
+
+def bound_summary(res: list[dict]) -> dict:
+    """Coverage of the planted s of :data:`BOUND_TRUE` by the blocks, neighbours and naive 95% intervals (a study
+    without an adjusted interval counts as not covering), overall and split by how s was assessed: on its bound with
+    the Self & Liang one-sided bound and the scalar c (``c_path``), on its bound but not assessable, or interior."""
+    th = BOUND_TRUE["s"]
+    rr = [r["s"] for r in res]
+    groups = {"all": rr,
+              "c_path": [q for q in rr if q.get("at_bound") and q["cls"] != "not_assessable"],
+              "not_assessable": [q for q in rr if q["cls"] == "not_assessable"],
+              "interior": [q for q in rr if not q.get("at_bound")]}
+    out = {"n": len(rr), "truth": th}
+    for name, sub in groups.items():
+        out[name] = {"n": len(sub), **{m: (float(np.mean([q[m] for q in sub])) if sub else None)
+                                       for m in ("blocks", "neighbours", "naive")}}
+    est = np.array([q["estimate_data"] for q in rr], float)
+    out["mean"], out["sd"] = float(np.mean(est)), float(np.std(est, ddof=1))
+    return out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("chunk", range(BOUND_CHUNKS))
+def test_coverage_near_the_boundary(chunk, tmp_path_factory):
+    """Review F3: the near-boundary world :data:`BOUND_TRUE` (planted s = 0.01), where s often lands on its bound 0
+    with a well-conditioned extended curvature, so the Self & Liang one-sided bound at Λ = 2.706 with Λ_A = c·Λ_I is
+    computed (the method behind Providence's statement on canopy shading).  ``BOUND_CHUNKS`` chunks of ``BOUND_R``
+    replicates (about 5 minutes each), summarised by the next test when they run in one session."""
+    res = [_shade_replicate(seed, truth=BOUND_TRUE, params=("s",))
+           for seed in range(300 + chunk * BOUND_R, 300 + (chunk + 1) * BOUND_R)]
+    d = tmp_path_factory.getbasetemp() / "bound_coverage"
+    d.mkdir(exist_ok=True)
+    (d / f"{chunk}.json").write_text(json.dumps(res))
+    print(f"\nchunk {chunk}: " + json.dumps(bound_summary(res)))
+
+
+@pytest.mark.slow
+def test_coverage_near_the_boundary_summary(tmp_path_factory):
+    d = tmp_path_factory.getbasetemp() / "bound_coverage"
+    files = sorted(d.glob("*.json")) if d.exists() else []
+    if len(files) < BOUND_CHUNKS:
+        pytest.skip("run every chunk of test_coverage_near_the_boundary in this session first")
+    res = [r for f in files for r in json.loads(f.read_text())]
+    cov = bound_summary(res)
+    print(f"\nnear-boundary world, {len(res)} replicates: " + json.dumps(cov, indent=1))
+    assert cov["c_path"]["n"] >= 1                      # the case under test: the c path ran
+    assert cov["all"]["naive"] <= cov["all"]["blocks"]   # the adjustment widens, never narrows, the intervals
+    assert cov["interior"]["neighbours"] >= BOUND_MIN["interior"]
+
+
+#: coverage floor of the neighbours interval for the interior estimates of the near-boundary world, set below the
+#: validation run's 97% (module docstring; the boundary c path under-covers there, 67%, and is reported, not floored)
+BOUND_MIN = {"interior": 0.85}
+
+
 #: coverage floors of the neighbours interval in the shade world, set below the validation run's 97% (L) and 80%
 #: (s) (module docstring): s under-covers there because its estimator is biased upward, which no variance
 #: adjustment fixes
@@ -1146,6 +1202,9 @@ def test_a_parameter_on_its_fit_bound_gets_a_one_sided_profile_and_no_conflict_t
     assert s["identifiability"] == "one_sided" and s["open_sides"] == ["lower"] and s["sides_at_limit"] == ["lower"]
     assert s["summary"].startswith(f"s ≤ {ID._g(s['ci95_conservative'][1])}; lower side open at the physical limit 0")
     assert "Self & Liang 1987" in s["summary"] and s["ci95_conservative"][1] >= s["ci95"][1]
+    # the scalar-c boundary path under-covers in the near-boundary validation: its bound is labelled (review F3)
+    assert "likely too narrow" in s["summary"] and "near-boundary validation" in s["note"]
+    assert f"{ID.BOUNDARY_COVERAGE['c_path_blocks']:.0%} (blocks)" in s["note"]
     assert s["conflict"]["p"] is None and "fit bound" in s["conflict"]["reason"]
     assert s["posterior"]["method"] == "profile" and s["posterior"]["mean"] > 0.0
     assert s["psens"]["method"] == "profile" and s["psens"]["prior"] is not None
