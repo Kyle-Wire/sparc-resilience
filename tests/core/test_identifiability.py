@@ -798,13 +798,32 @@ def _stub_study(modes=("blocks",)):
     return st
 
 
-def _stub_row(lams, key="w", x_hat=0.0, at_bound=None, held=None):
-    """A row whose upper side has profile points at x = 1, 2, ... with naive and adjusted Λ ``lams`` (R = 1)."""
-    pts = [{"value": float(i + 1), "x": float(i + 1), "l": -lam / 2.0, "lam_i": lam, "lam_a": {"blocks": lam},
-            "lam_a_ipath": {"blocks": lam}, "R": {"blocks": 1.0}, "leaves": {}} for i, lam in enumerate(lams)]
+def _stub_row(lams, key="w", x_hat=0.0, at_bound=None, held=None, xs=None, edge=False):
+    """A row whose upper side has profile points at ``xs`` (default x = 1, 2, ...) with naive and adjusted Λ
+    ``lams`` (R = 1); ``edge``: the walk stopped at its limit."""
+    xs = xs or [float(i + 1) for i in range(len(lams))]
+    pts = [{"value": float(x), "x": float(x), "l": -lam / 2.0, "lam_i": lam, "lam_a": {"blocks": lam},
+            "lam_a_ipath": {"blocks": lam}, "R": {"blocks": 1.0}, "leaves": {}} for x, lam in zip(xs, lams)]
     return {"key": key, "label": key, "unit": "W/m²", "_nat": key, "_points": pts, "_x_hat": x_hat,
-            "_sides": {"upper": {"points": list(pts), "edge": False}}, "_thr": ID.CHI2_95, "at_bound": at_bound,
+            "_sides": {"upper": {"points": list(pts), "edge": edge}}, "_thr": ID.CHI2_95, "at_bound": at_bound,
             "held": held, "estimate_data": x_hat, "boundary_adjustment": None, "notes": []}
+
+
+def test_a_side_open_at_a_physical_limit_ends_at_the_limit_not_at_the_walk_end():
+    """A fraction's walk stops AT_BOUND_FRAC inside its bound (0.005 / 0.995 for s); a side that reaches it without
+    crossing ends at the physical limit itself (0 or 1), in the interval and in the summary."""
+    st = _stub_study()
+    r = _stub_row([0.5, 1.0], key="s", x_hat=0.3, xs=[0.6, 0.995], edge=True)
+    r["unit"] = "fraction of absorbed sunlight"
+    ID._finish_profile(st, r, 0.0)
+    assert r["ci95"][1] == 1.0 and r["ci95_naive"][1] == 1.0 and r["ci95_conservative"][1] == 1.0
+    assert r["sides_at_limit"] == ["upper"] and "upper side open at the physical limit 1" in r["summary"]
+    assert "0.995" not in r["summary"]
+    # a search range (L's) is not a physical limit: the side is open with no finite end
+    st = _stub_study()
+    r = _stub_row([0.5, 1.0], key="kappa_canopy", x_hat=0.0, xs=[1.0, 2.99], edge=True)
+    ID._finish_profile(st, r, 0.0)
+    assert r["ci95"][1] is None and r["sides_at_limit"] == [] and "end of the search range" in r["summary"]
 
 
 def test_an_interval_ends_at_the_outermost_crossing_of_a_profile_that_falls_back():

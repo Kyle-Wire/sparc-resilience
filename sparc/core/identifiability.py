@@ -293,12 +293,13 @@ NULL_EIG = 1e-9
 #: restart of the reference from that point (operational).
 RESTART_DL = 0.05
 #: Fit bounds that are physical limits of a parameter (a fraction in [0, 1]; a non-negative slope, sink or
-#: drift): a profile that reaches one without crossing the threshold is open there (practically
-#: non-identifiable on that side, Raue et al. 2009), its interval ending at the limit.  The other bounds (L, κ,
-#: the shade sigmoid's c₀ and width, an EF parameter's walk limit) are search ranges: reaching one leaves that
-#: side open too, with no finite end.
-PHYSICAL_LIMITS = {"s": ("lower", "upper"), "a1": ("lower", "upper"), "a1n": ("lower", "upper"),
-                   "e1": ("lower",), "e2": ("lower",), "e3": ("lower",), "w": ("lower",), "v": ("lower",)}
+#: drift), by side, with the limit's value: a profile that reaches one without crossing the threshold is open there
+#: (practically non-identifiable on that side, Raue et al. 2009), its interval ending at the limit itself (0 or 1,
+#: not the walk's end ``AT_BOUND_FRAC`` inside it).  The other bounds (L, κ, the shade sigmoid's c₀ and width, an
+#: EF parameter's walk limit) are search ranges: reaching one leaves that side open too, with no finite end.
+PHYSICAL_LIMITS = {"s": {"lower": 0.0, "upper": 1.0}, "a1": {"lower": 0.0, "upper": 1.0},
+                   "a1n": {"lower": 0.0, "upper": 1.0}, "e1": {"lower": 0.0}, "e2": {"lower": 0.0},
+                   "e3": {"lower": 0.0}, "w": {"lower": 0.0}, "v": {"lower": 0.0}}
 #: The profile of an EF parameter stops where its term alone reaches this logit (:func:`_ef_walk_limit`).
 EF_WALK_LOGIT = 30.0
 
@@ -2026,8 +2027,9 @@ def _crossing_mode(seq: list[dict], x0: float, mode: str, thr: float = CHI2_95):
 def _side_status(r: dict, name: str, res: dict, x_end) -> tuple[str, float | None, str | None]:
     """(status, end, why open) of one explored side of one profile: ("cross", end, None) when Λ crossed the
     threshold at ``x_end`` (walk scale); ("limit", the limit, why) when it reached a physical limit
-    (:data:`PHYSICAL_LIMITS`) without crossing; ("open", None, why) otherwise (a search range or a walk limit, or
-    the explored range).  A side that does not cross is open (Raue et al. 2009), wherever it stops."""
+    (:data:`PHYSICAL_LIMITS`; the limit itself, not the walk's end inside it) without crossing; ("open", None, why)
+    otherwise (a search range or a walk limit, or the explored range).  A side that does not cross is open (Raue et
+    al. 2009), wherever it stops."""
     seq = res["points"]
     if x_end is not None:
         return "cross", _from_walk(r, x_end), None
@@ -2035,7 +2037,8 @@ def _side_status(r: dict, name: str, res: dict, x_end) -> tuple[str, float | Non
     if res.get("beyond_limit"):
         return "open", None, "the estimate lies beyond the walk limit (a numerically saturated model)"
     if seq and res["edge"] and name in PHYSICAL_LIMITS.get(r["key"], ()):
-        return "limit", far, f"at the physical limit {_g(far)}"
+        lim = PHYSICAL_LIMITS[r["key"]][name]          # a fraction's walk stops AT_BOUND_FRAC inside its 0 or 1
+        return "limit", lim, f"at the physical limit {_g(lim)}"
     if seq and res["edge"]:
         return "open", None, f"at the end of the search range ({_g(far)})"
     return "open", None, ("not crossed within the explored range" + (f" (to {_g(far)})" if far is not None else ""))
