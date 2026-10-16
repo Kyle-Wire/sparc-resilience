@@ -656,8 +656,11 @@ def test_indefinite_or_singular_curvature_does_not_crash(case):
                      context={"block_m": block_m, "physics": cfg, "window": "day"})
     assert rep["status"] == "ok" and rep["parameters"] and _finite_or_none(rep)
     assert rep["warnings"]                                       # the degenerate curvature is reported
-    if case == "sigmoid_shade":
-        assert any("H_I is not negative definite" in w for w in rep["warnings"])
+    # every curvature warning describes the final reference (a restart drops the discarded pass's warnings)
+    nd = any("H_I is not negative definite at the data-only optimum (smallest" in w for w in rep["warnings"])
+    assert nd == (not rep["hessian"]["negative_definite"]), (rep["hessian"], rep["warnings"])
+    p_main = rep["hessian"]["n_parameters"]
+    assert all(f"for {p_main} parameters" in w for w in rep["warnings"] if " clusters for " in w)
     if case == "four_clusters":
         assert rep["n_clusters"] == 4 and any("clusters for" in w for w in rep["warnings"])
     for r in rep["parameters"]:
@@ -677,6 +680,35 @@ def test_a_held_flat_parameter_does_not_report_the_main_curvature_as_degenerate(
     assert rep["hessian"]["held_flat"] == ["e0"] and rep["hessian"]["negative_definite"] is True
     assert not any("not negative definite" in w for w in rep["warnings"]), rep["warnings"]
     assert _row(rep, "e0")["identifiability"] in ("structurally_non_identifiable", "practically_non_identifiable")
+
+
+def test_a_restart_drops_the_warnings_of_the_discarded_pass(monkeypatch):
+    """A profile point that beats the data-only optimum restarts the reference, and the curvature and profiles are
+    recomputed: the warnings about the discarded pass (here a marker it emits) must not reach the report, which
+    keeps only the final pass's warnings and the restart notice (it used to keep stale curvature and profile
+    warnings, which reached the results card and methods.md)."""
+    real = ID._at_optimum
+    calls = []
+
+    def fake(st, dat_model, pen, keys, fold_params):
+        out = list(real(st, dat_model, pen, keys, fold_params))
+        calls.append(len(calls))
+        st.warn(f"marker of pass {len(calls)}")
+        if len(calls) == 1:                    # pretend a profile point beat the optimum: forces one restart
+            out[-1] = {"l": st.l_hat + 1.0, "key": "L", "value": 95.0,
+                       "leaves": {**dat_model.leaves, "_coef": list(out[0]["coef"])}}
+        return tuple(out)
+
+    monkeypatch.setattr(ID, "_at_optimum", fake)
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.5, seed=3)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L"], posterior=False,
+                     settings={**QUICK, "max_restarts": 1, "block_m": BLOCK_M})
+    assert len(calls) == 2 and rep["reference"]["data_only"]["restarts"] == 1
+    assert "marker of pass 1" not in rep["warnings"] and "marker of pass 2" in rep["warnings"]
+    notice = next(w for w in rep["warnings"] if "(restart 1)" in w)
+    assert "warning(s) about the discarded reference are not reported" in notice
+    assert rep["reference"]["data_only"]["discarded_warnings"] >= 1
+    assert len(rep["warnings"]) == len(set(rep["warnings"]))
 
 
 def test_an_estimate_beyond_its_walk_limit_is_not_walked_backwards():

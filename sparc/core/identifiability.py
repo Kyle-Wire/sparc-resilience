@@ -173,7 +173,9 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
 * **Restarts.**  When a profile point beats the data-only optimum by more than Δl = 0.05 (0.1 in naive Λ; l_D,
   below, with advection fitted),
   the reference is refitted from that point and the curvature and profiles are recomputed (at most twice,
-  then a warning): a profile is only meaningful relative to the maximum.
+  then a warning): a profile is only meaningful relative to the maximum.  The warnings of a discarded pass
+  (about its curvature and profiles) are dropped with it; the restart notice counts them
+  (``reference.data_only.discarded_warnings``).
 * **Held parameters.**  A parameter on a fit bound at the data-only optimum (a softplus floor or a sigmoid
   end; on Providence's data-only fit s, a₁, w and κ) has a vanishing derivative in the unconstrained leaf, so H_I would be singular:
   it is held at the bound for H, V and the Laplace step, and gets a one-sided profile.  So is a parameter that
@@ -1235,16 +1237,24 @@ def _analyse(st: _Study, params, units, posterior: bool, fold_params, context: d
         return out
 
     # ---- curvature and profiles at the data-only optimum; restart from a better profile point if one is found
-    restarts = 0
+    restarts, discarded = 0, 0
     while True:
+        # the warnings of a pass describe its reference (curvature, profiles); a pass thrown away by a restart takes
+        # its warnings with it, so the report's warnings are the final pass's plus those from before any pass
+        # (setup) and the restart notices
+        before = list(st.warnings)
         dat, rows, held_bound, held_flat, partners, prior_spec, best = _at_optimum(st, dat_model, pen, keys,
                                                                                 fold_params)
         improve = best["l"] - st.l_hat
         if improve <= RESTART_DL or restarts >= int(st.S["max_restarts"]):
             break
         restarts += 1
+        n_pass = len(st.warnings) - len(before)
+        discarded += n_pass
+        st.warnings[:] = before
         st.warn(f"a profile point of {best['key']} improved on the data-only optimum by Δl = {improve:.3g}: "
-                f"refitting the data-only reference from it (restart {restarts})")
+                f"refitting the data-only reference from it (restart {restarts})"
+                + (f"; the {n_pass} warning(s) about the discarded reference are not reported" if n_pass else ""))
         with progress.task("reference_fit", key=f"data_only_restart{restarts}"):
             cand = st._fit(0.0, init=best["leaves"], max_iter=int(st.S["polish_iter"]))
         if cand.a > 0:
@@ -1260,6 +1270,7 @@ def _analyse(st: _Study, params, units, posterior: bool, fold_params, context: d
                 "approximate; the parameters it moves are not identified by the data")
     out["reference"]["data_only"] = _ref_summary(dat, dat_losses, dat_model, active_keys, lin_names)
     out["reference"]["data_only"]["restarts"] = restarts
+    out["reference"]["data_only"]["discarded_warnings"] = discarded
     out["reference"]["data_only"]["max_profile_improvement_l"] = float(max(improve, 0.0))
     if dat.get("ef_saturated_frac", 0.0) > 0.5:
         st.warn(f"the data-only evaporative fraction is saturated (|logit| > 20) at {dat['ef_saturated_frac']:.0%} of "
