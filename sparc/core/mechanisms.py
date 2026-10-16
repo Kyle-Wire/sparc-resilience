@@ -214,8 +214,12 @@ REFERENCES = {
                  "893–914. doi:10.1214/06-BA129",
     "conley1999": "Conley, T.G. (1999). GMM estimation with cross sectional dependence. Journal of Econometrics "
                   "92(1), 1–45. doi:10.1016/S0304-4076(98)00084-0",
+    "selfliang1987": "Self, S.G. & Liang, K.-Y. (1987). Asymptotic properties of maximum likelihood estimators and "
+                     "likelihood ratio tests under nonstandard conditions. Journal of the American Statistical "
+                     "Association 82(398), 605–610",
 }
-_IDENT_REFS = ("raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006", "conley1999")
+_IDENT_REFS = ("raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006", "conley1999",
+               "selfliang1987")
 
 # --------------------------------------------------------------------------- W3 identifiability (constants)
 #: The key parameters of each mechanism, as keys of the identifiability report.  A signature cannot be Supported
@@ -229,8 +233,9 @@ KEY_PARAMS = {"M1": ("s", "kappa_canopy", "shade_c0", "shade_width"), "M2": ("e0
 ROLE_PARAMS = {"canopy": ("s", "kappa_canopy", "shade_c0", "shade_width", "e2"), "impervious": ("a1", "a1n", "e3"),
                "ndvi": ("e1",), "water_distance": ("w",)}
 #: Raue et al. (2009)'s classes that block Supported
-NOT_IDENTIFIED = ("practically_non_identifiable", "structurally_non_identifiable")
+NOT_IDENTIFIED = ("practically_non_identifiable", "structurally_non_identifiable", "not_assessable")
 IDENT_LABELS = {"identified": "identified", "practically_non_identifiable": "practically non-identifiable",
+                "not_assessable": "not assessable (no adjustment for spatial dependence computable at its bound)",
                 "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted"}
 #: Parameters whose physical lower limit is 0 (a fraction, a non-negative slope, sink or drift;
 #: ``identifiability.PHYSICAL_LIMITS``): an interval that reaches 0 means the data do not exclude "no effect".
@@ -1118,6 +1123,12 @@ def _ident_sentence(p: dict) -> str:
         return f"{p['label']}: not fitted in this run."
     if cls == "structurally_non_identifiable":
         core = "not identified by the data alone (flat profile likelihood)"
+    elif cls == "not_assessable":
+        nv = p.get("ci95_naive") or [None, None]
+        core = ("not assessable from the data alone (its data-only estimate sits on a fit bound, where no adjustment "
+                "for spatial dependence is computable; the unadjusted one-sided bound, "
+                f"{_sig(nv[0]) if nv[0] is not None else 'open'} to {_sig(nv[1]) if nv[1] is not None else 'open'}{u}, "
+                "is too narrow)")
     elif cls == "practically_non_identifiable":
         if p["open_sides"]:
             core = (f"not identified by the data alone (its 95% profile interval, {span}, stays open on the "

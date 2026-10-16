@@ -162,9 +162,25 @@ Choices beyond the plan (each argued; the simulation numbers are from the albedo
   no cost in l_I and defeat the adjustment (on a test world it narrowed L's adjusted interval by a third).
   Holding them fixed made the profiles too steep: on Providence (60 m cells) L = 460 m had Λ_I = 409 with s,
   a₁, w and κ held and 126 with them free; on the sink world of the tests, 6.18 against 5.78.
-* **One-sided profiles of a held parameter** are adjusted in the main coordinates extended by that parameter's
-  own walk coordinate (its leaf would be infinite at the bound).  At a boundary maximum the
-  vertical adjustment is an approximation (Chandler & Bate derive it at an interior maximum).
+* **A parameter on its fit bound (Self & Liang 1987).**  Its data-only estimate is a boundary maximum: the
+  likelihood-ratio statistic for the bound value is then asymptotically a 50:50 mixture of a point mass at 0
+  and χ²₁, so its profile is one-sided (walked from the bound inward) and its one-sided 95% bound is where Λ
+  reaches χ²₁(0.90) = 2.706 (``threshold``; :data:`CHI2_90`), for the adjusted and the naive profile alike.
+  The vertical adjustment is derived at an interior maximum and its ratio δᵀH_Aδ/δᵀH_Iδ depends on the
+  nuisance displacement, so it is not used here; this module's choice is the scalar adjustment
+  Λ_A(ψ) = c·Λ_I(ψ), c = [Σ_naive]_ψψ/[Σ_rob]_ψψ (per score covariance), with Σ from H_I and the cluster scores
+  at the boundary point in the main coordinates extended by ψ's walk coordinate (one-sided derivatives: the
+  model is analytic in ψ's natural value).  For a scalar ψ this is the adjustment's value in the quadratic
+  approximation, Λ_I ≈ Δψ²/[Σ_naive]_ψψ and Λ_A ≈ Δψ²/[Σ_rob]_ψψ, while Λ_I itself is the true profile.  c is
+  only used when that curvature is well-conditioned: l_I concave along ψ, the unit-diagonal −H_I extended by ψ
+  positive definite with smallest eigenvalue ≥ :data:`BOUND_MIN_EIG`, and ψ's variance inflation ≤
+  :data:`BOUND_MAX_VIF` (``boundary_adjustment``: c, the eigenvalue, the inflation, the reason).  Otherwise
+  (an indefinite or near-singular extended H_I, e.g. a₁ nearly confounded with e₃ at a₁ = 0, which earlier
+  drove a₁'s vertically adjusted profile to ~0) there is no adjusted interval: ``ci95`` is None, the naive
+  one-sided bound is reported as ``ci95_naive`` with ``ci95_naive_label`` "unadjusted (too narrow under
+  spatial dependence)", and the parameter is *not assessable* rather than identified; it gets no profile
+  posterior either.  On Providence at 120 m cells: s (inflation 56, c = 0.023) and w (5.5, 0.053) are
+  adjusted, a₁ (inflation 846) is not assessable, κ carries no information at its bound.
 * **SEs and curvature at the penalized optimum** are those of the M-estimator solving the run's estimating
   equation ∇J = 0 (J = MSE/var(y) + penalty): Σ = A⁻¹VA⁻¹ with A = k·(G_D + ∇²penalty), k = n·var(y)/(2·MSE),
   naive A⁻¹(JᵀJ/σ²)A⁻¹; G_D = 2JᵀJ/(n·var y) is the data term's expected (Gauss–Newton) curvature, J = ∂r/∂θ.
@@ -226,6 +242,15 @@ __all__ = ["SCHEMA", "CHI2_95", "REFERENCES", "PARAMS", "cjs_distance", "power_s
 SCHEMA = 1
 #: χ²₁(0.95): the 95% pointwise profile-likelihood threshold (Raue et al. 2009)
 CHI2_95 = 3.841458820694124
+#: χ²₁(0.90): the one-sided 95% bound of a parameter whose estimate is on the boundary of its parameter space,
+#: where the likelihood-ratio statistic is a 50:50 mixture of a point mass at 0 and χ²₁ (Self & Liang 1987)
+CHI2_90 = 2.705543454095404
+#: A parameter on its fit bound gets its block adjustment (the scalar c = Σ_naive,ψψ/Σ_rob,ψψ at the bound) only
+#: when the curvature it comes from is well-conditioned: the unit-diagonal −H_I extended by ψ positive definite
+#: with smallest eigenvalue ≥ BOUND_MIN_EIG, and ψ's variance inflation [(−H)⁻¹]_ψψ·(−H)_ψψ ≤ BOUND_MAX_VIF
+#: (ψ not nearly confounded with the other parameters at the bound).  Operational tolerances of this module.
+BOUND_MIN_EIG = 1e-4
+BOUND_MAX_VIF = 100.0
 #: Λ_A below this everywhere explored: a flat profile (Raue et al. 2009's structural non-identifiability)
 FLAT_LAMBDA = 0.1
 PSENS_DELTA = 0.01                 # power-scaling perturbation (ArviZ psens default)
@@ -289,6 +314,9 @@ REFERENCES = {
                       "doi:10.1007/s11222-023-10366-5",
     "evans2006": "Evans, M. & Moshonov, H. (2006). Checking for prior-data conflict. Bayesian Analysis 1(4), "
                  "893–914. doi:10.1214/06-BA129",
+    "selfliang1987": "Self, S.G. & Liang, K.-Y. (1987). Asymptotic properties of maximum likelihood estimators and "
+                     "likelihood ratio tests under nonstandard conditions. Journal of the American Statistical "
+                     "Association 82(398), 605–610",
     "conley1999": "Conley, T.G. (1999). GMM estimation with cross sectional dependence. Journal of Econometrics "
                   "92(1), 1–45. doi:10.1016/S0304-4076(98)00084-0",
 }
@@ -1371,8 +1399,8 @@ def _row_base(st: _Study, key: str, dat: dict, pen: dict, prior_spec: dict, fold
            "estimate_data": None, "estimate_run_folds": _folds_mean(fold_params, key), "at_bound": None,
            "held": None, "se_naive": None, "se_robust": None, "se_robust_neighbours": None, "adjust_factor": None,
            "adjust_factor_neighbours": None, "profile": None, "ci95": None, "ci95_neighbours": None,
-           "ci95_naive": None, "identifiability": None, "class_by_covariance": None, "open_sides": [],
-           "sides_at_limit": [],
+           "ci95_naive": None, "ci95_naive_label": None, "threshold": None, "boundary_adjustment": None,
+           "identifiability": None, "class_by_covariance": None, "open_sides": [], "sides_at_limit": [],
            "pull": None,
            "prior": None, "prior_share_run": None, "posterior": None, "psens": None, "conflict": None,
            "notes": []}
@@ -1419,17 +1447,53 @@ def _row_base(st: _Study, key: str, dat: dict, pen: dict, prior_spec: dict, fold
 
 
 def _ext(st: _Study, nat: str, dat: dict, cache: dict) -> dict:
-    """The main coordinates plus a held parameter ``nat`` (its walk coordinate): its one-sided profile's
-    adjustment and its SE."""
+    """The main coordinates plus a parameter ``nat`` held on its fit bound (its walk coordinate, finite there): H_I
+    and the cluster scores at the boundary point (one-sided derivatives: the model is analytic in the natural
+    value, so autograd's derivative at the bound is the one-sided one), whether that curvature is well-conditioned
+    (:data:`BOUND_MIN_EIG`, :data:`BOUND_MAX_VIF`), and then ψ's SEs and its scalar adjustment
+    c = Σ_naive,ψψ/Σ_rob,ψψ per score covariance (``c``; None when not computable)."""
     if nat in cache:
         return cache[nat]
     sp = _Space(st, dat["leaves"], st.main.keys + [nat])
     th = sp.pack(dat["natural"], dat["coef"])
     H = st.hessian(sp, th)
     j = sp.index(nat)
-    flat = -H[j, j] <= FLAT_INFO * st.n / max(dat["mse"], 1e-300)
-    Cs = None if flat else st.curvatures(H, st.scores(sp, th))   # no curvature to adjust with when flat
-    out = {"space": sp, "theta": th, "Cs": Cs, "j": j, "flat": bool(flat)}
+    flat = bool(abs(H[j, j]) <= FLAT_INFO * st.n / max(dat["mse"], 1e-300))
+    convex = bool(not flat and H[j, j] > 0)          # l_I not concave along ψ at the bound
+    A = _sym(-H)
+    d = np.sqrt(np.maximum(np.abs(np.diag(A)), 1e-300))
+    Cu = A / np.outer(d, d)
+    w = np.linalg.eigvalsh(Cu)
+    min_eig = float(w.min())
+    vif = None
+    if min_eig > 0:
+        vif = float(np.linalg.inv(Cu)[j, j])
+    well = bool(not flat and not convex and min_eig >= BOUND_MIN_EIG and vif is not None and vif <= BOUND_MAX_VIF)
+    Cs, c = None, None
+    if not flat:
+        U = st.scores(sp, th)
+        Cs = st.curvatures(H, U)
+        if well:                       # positive definite: the exact inverse, no eigenvalue floor
+            Sn = _sym(np.linalg.inv(A))
+            c = {}
+            for mode, C in Cs.items():
+                Sr = _sym(Sn @ C["V"] @ Sn)
+                C.update(Sn=Sn, Sr=Sr)
+                c[mode] = float(Sn[j, j] / Sr[j, j]) if Sr[j, j] > 0 else None
+            if any(v is None or not math.isfinite(v) for v in c.values()):
+                well, c = False, None
+    why = None
+    if not well:
+        why = ("the data carry no information on it at the bound" if flat else
+               "l_I is not concave along it at the bound (a positive second derivative)" if convex else
+               f"the curvature at the bound is not positive definite (smallest eigenvalue of the unit-diagonal −H_I "
+               f"{min_eig:.3g})" if min_eig <= 0 else
+               f"the curvature at the bound is ill-conditioned (smallest eigenvalue {min_eig:.3g} < {BOUND_MIN_EIG:g}"
+               f"{'' if vif is None else f', variance inflation of ψ {vif:.3g}'})" if min_eig < BOUND_MIN_EIG else
+               f"at the bound it is nearly confounded with other parameters (variance inflation {vif:.3g} > "
+               f"{BOUND_MAX_VIF:g})")
+    out = {"space": sp, "theta": th, "Cs": Cs, "j": j, "flat": flat, "well": well, "c": c, "min_eig": min_eig,
+           "vif": vif, "why": why}
     cache[nat] = out
     return out
 
@@ -1455,12 +1519,11 @@ def _row_se(st: _Study, r: dict, dat: dict, cache: dict) -> None:
         var = {mode: (float(g @ C["Sn"] @ g), float(g @ C["Sr"] @ g)) for mode, C in Cs.items()}
     elif r["held"]:
         e = _ext(st, r["_nat"], dat, cache)
-        if e["flat"]:
-            r["notes"].append("no SE: the data carry no information on it")
-            return
-        if e["Cs"]["blocks"]["min_eig"] < NULL_EIG:
-            r["notes"].append("no SE: at its bound it is confounded with other parameters (a direction of H_I "
-                              "without curvature); its one-sided profile still applies")
+        if r["held"] == "bound":
+            r["boundary_adjustment"] = {"computable": e["well"], "c": e["c"], "min_eig_unit": e["min_eig"],
+                                        "vif": e["vif"], "reason": e["why"]}
+        if not e["well"]:
+            r["notes"].append(f"no SE: {e['why'] or 'no well-conditioned curvature'}")
             return
         j, d = e["j"], _dnat(e["space"], r["_nat"], dat["natural"][r["_nat"]])
         var = {mode: (float(C["Sn"][j, j]) * d ** 2, float(C["Sr"][j, j]) * d ** 2) for mode, C in e["Cs"].items()}
@@ -1655,6 +1718,17 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
     with torch.no_grad():
         lval = -0.5 * st.n * math.log(float(mse)) - float(st.drift_l(P))
     lam_i = max(2.0 * (st.l_hat - lval), 0.0)
+    if r["held"] == "bound":
+        # a boundary maximum (Self & Liang 1987): the scalar adjustment Λ_A = c·Λ_I with c = Σ_naive,ψψ/Σ_rob,ψψ
+        # from the well-conditioned curvature at the bound, or none (Λ_A = Λ_I, the row is not assessable)
+        e = _ext(st, nat, dat, cache)
+        out = {"value": float(value), "l": lval, "loss": float(loss), "leaves": leaves, "lam_i": lam_i,
+               "R": {}, "R_ipath": {}, "lam_a": {}, "lam_a_ipath": {}}
+        for mode in st.modes:
+            cm = e["c"][mode] if e["c"] else None
+            out["R"][mode] = out["R_ipath"][mode] = cm
+            out["lam_a"][mode] = out["lam_a_ipath"][mode] = lam_i * cm if cm is not None else lam_i
+        return out
     if r["held"]:
         e = _ext(st, nat, dat, cache)
         sp, th_hat, Cs, flat = e["space"], e["theta"], e["Cs"], e["flat"]
@@ -1747,7 +1821,7 @@ def _crossing(seq: list[dict], x0: float, lam0: float, key: str, thr: float = CH
 
 def _walk(st: _Study, r: dict, side: int, x_hat: float, h0: float, lo_w, hi_w, dat: dict, cache: dict) -> dict:
     S = st.S
-    thr, stop = CHI2_95, CHI2_95 + float(S["margin"])
+    thr, stop = r["_thr"], CHI2_95 + float(S["margin"])
     pts: list[dict] = []
     warm0 = {**dat["leaves"], "_coef": list(dat["coef"])}
     if (side > 0 and hi_w is not None and x_hat >= hi_w) or (side < 0 and lo_w is not None and x_hat <= lo_w):
@@ -1861,9 +1935,9 @@ def _profile(st: _Study, r: dict, dat: dict, cache: dict) -> None:
     if r["at_bound"]:
         sides = (1,) if r["at_bound"]["side"] == "lower" else (-1,)
         est = float(r["at_bound"]["bound"])
+    # an estimate on its fit bound: the profile starts at the bound itself, where Λ = 0 (not at the walk limit
+    # AT_BOUND_FRAC inside it, which would put the first crossing too far in when the profile is steep)
     x_hat = _to_walk(r, est)
-    if r["at_bound"]:
-        x_hat = lo_w if sides == (1,) and lo_w is not None else (hi_w if hi_w is not None else x_hat)
     se_w = None
     if r.get("se_robust"):
         se_w = r["se_robust"] / max(abs(r["estimate_data"]), 1e-300) if PARAMS[r["key"]][3] == "log" \
@@ -1877,6 +1951,9 @@ def _profile(st: _Study, r: dict, dat: dict, cache: dict) -> None:
         h0 = min(h0, 0.25 * rng)
     h0 = max(h0, 1e-6 * max(1.0, abs(x_hat)))
     r["_x_hat"], r["_sides"] = x_hat, {}
+    # an estimate on the boundary of the parameter space: one-sided 95% bound at χ²₁(0.90) (Self & Liang 1987)
+    r["_thr"] = CHI2_90 if r["at_bound"] else CHI2_95
+    r["threshold"] = r["_thr"]
     pts = []
     for side in sides:
         res = _walk(st, r, side, x_hat, h0, lo_w, hi_w, dat, cache)
@@ -1950,8 +2027,8 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
             r["notes"].append(f"the data-only estimate lies beyond the profile's walk limit on the {name} side (the "
                               "model is numerically saturated there): that side is not explored and stays open")
         for mode in st.modes:
-            status[mode][name] = _side_status(r, name, res, _crossing_mode(seq, x_hat, mode))
-        status_naive[name] = _side_status(r, name, res, _crossing(seq, x_hat, lam0, "lam_i"))
+            status[mode][name] = _side_status(r, name, res, _crossing_mode(seq, x_hat, mode, r["_thr"]))
+        status_naive[name] = _side_status(r, name, res, _crossing(seq, x_hat, lam0, "lam_i", r["_thr"]))
     bound = r["at_bound"]["bound"] if r["at_bound"] else None
 
     def ci(stat):
@@ -1962,12 +2039,31 @@ def _finish_profile(st: _Study, r: dict, best_l: float) -> None:
     for mode in st.modes:
         r["ci95" + _SUFFIX[mode]] = ci(status[mode])
     r["ci95_naive"] = ci(status_naive)
+    ba = r.get("boundary_adjustment") or {}
+    not_assessable = bool(r["at_bound"] and not ba.get("computable"))
+    if r["at_bound"]:
+        r["notes"].append(f"its data-only estimate is on its {r['at_bound']['side']} fit bound: a boundary maximum, so "
+                          "its profile is one-sided and its 95% bound is where Λ reaches χ²₁(0.90) = 2.706 (Self & "
+                          "Liang 1987: the likelihood-ratio statistic is a 50:50 mixture of 0 and χ²₁ there)")
+        if ba.get("computable"):
+            r["notes"].append("adjusted by the scalar c = Σ_naive/Σ_rob of the well-conditioned curvature at the bound "
+                              f"(c = {_g(ba['c'].get('blocks'), 3)} with the block V)")
     # the class rests on the wider of the adjusted intervals (conservative): per side, the union of the sides
     union = {name: _union_status([status[mode][name] for mode in st.modes], name) for name in explored}
     max_lam = max([min(p["lam_a"].values()) for p in pts], default=0.0)
     flat = max_lam < FLAT_LAMBDA
     by_mode = {mode: _classify(r, status[mode], flat)[0] for mode in st.modes}
     cls, open_sides, at_limit = _classify(r, union, flat)
+    if not_assessable and not flat:
+        # no adjustment from a well-conditioned curvature: no adjusted interval; the naive one-sided bound is
+        # reported, labelled, and the parameter is not assessable (rather than identified)
+        cls = "not_assessable"
+        by_mode = {mode: "not_assessable" for mode in st.modes}
+        for mode in st.modes:
+            r["ci95" + _SUFFIX[mode]] = None
+        r["ci95_naive_label"] = "unadjusted (too narrow under spatial dependence)"
+        r["notes"].append(f"not assessable: its block adjustment is not computable ({ba.get('reason')}); the naive "
+                          "one-sided bound is unadjusted (too narrow under spatial dependence)")
     r["identifiability"] = cls
     r["class_by_covariance"] = by_mode
     r["open_sides"], r["sides_at_limit"] = open_sides, at_limit
@@ -2247,12 +2343,15 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
             x = np.array([post.natural(r["_nat"], v) for v in TH[:, i]])
             xm = post.natural(r["_nat"], mode[i])
         else:
-            if r["at_bound"] and r["prior"] and r.get("_points"):
+            computable = (r.get("boundary_adjustment") or {}).get("computable")
+            if r["at_bound"] and r["prior"] and r.get("_points") and computable:
                 _profile_posterior(st, r, prior_spec[r["_nat"]], rng)
             else:
                 r["posterior"] = {"mean": None, "sd": None, "method": None,
-                                  "note": "held at its fit bound, no nominal prior" if r["at_bound"] else
-                                  "held (no information and no nominal prior)"}
+                                  "note": ("held at its fit bound and not assessable: no adjusted profile to build a "
+                                           "posterior from" if r["at_bound"] and r["prior"] and not computable else
+                                           "held at its fit bound, no nominal prior" if r["at_bound"] else
+                                           "held (no information and no nominal prior)")}
             continue
         laplace_keys.append(r["key"])
         r["posterior"] = {"method": "laplace", "mean": float(np.mean(x)), "sd": float(np.std(x, ddof=1)),
@@ -2503,7 +2602,8 @@ def _register_with(run_dir: Path, config_raw: dict | None, rep: dict) -> dict | 
 
 # --------------------------------------------------------------------------- markdown
 _CLASS = {"identified": "identified", "practically_non_identifiable": "practically non-identifiable",
-          "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted", None: "—"}
+          "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted",
+          "not_assessable": "not assessable", None: "—"}
 
 
 def _g(v, nd=3) -> str:
@@ -2572,8 +2672,11 @@ def identifiability_markdown(rep: dict | None) -> str:
         cf = r.get("conflict") or {}
         cfs = ("—" if not cf else f"{_g(cf['p'], 2)}" + (" **conflict**" if cf.get("flag") else "")
                if cf.get("p") is not None else "not testable")
+        naive = _ci(r.get("ci95_naive")) + (f" {r['ci95_naive_label']}" if r.get("ci95_naive_label") else "")
+        if r.get("threshold") == CHI2_90:
+            cls += "; one-sided bound at Λ = 2.706 (Self & Liang 1987)"
         L.append(f"| {r['label']} ({r['unit']}) | {_g(r.get('estimate_run'))} | {_g(r.get('estimate_data'))} | "
-                 f"{_ci(r.get('ci95'))} | {_ci(r.get('ci95_neighbours'))} | {_ci(r.get('ci95_naive'))} | "
+                 f"{_ci(r.get('ci95'))} | {_ci(r.get('ci95_neighbours'))} | {naive} | "
                  f"{_g(r.get('adjust_factor'), 2)} | {cls} | "
                  f"{_g(r.get('prior_share_run'), 2)} | {_g(r.get('pull'), 2)} | {pm} | {pss} | {cfs} |")
     lin = rep.get("linear") or []

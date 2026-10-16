@@ -130,7 +130,8 @@ def _identifiability_facts(m: dict) -> dict | None:
            "identified": [item(p) for p in ps if p["class"] == "identified" and not p.get("reaches_zero")],
            "zero": [item(p) for p in ps if p["class"] == "identified" and p.get("reaches_zero")],
            "not_identified": [f"{_lc(p['label'])} ({p['class_label']})" for p in ps
-                              if p["class"] in ("practically_non_identifiable", "structurally_non_identifiable")],
+                              if p["class"] in ("practically_non_identifiable", "structurally_non_identifiable",
+                                                "not_assessable")],
            "penalty": [f"{sym(p)} = {_sig(p['estimate_run'])} (prior share {float(p['prior_share_run']):.2f})"
                        for p in ps if p.get("prior_share_run") is not None and float(p["prior_share_run"]) > 0.5
                        and p.get("estimate_run") is not None],

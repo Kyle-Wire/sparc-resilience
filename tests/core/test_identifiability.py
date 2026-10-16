@@ -642,23 +642,71 @@ def test_constant_canopy_makes_s_non_identifiable_and_prior_dominated():
     assert set(rep["posterior"]["flat_prior_parameters"]) >= {"s", "kappa_canopy", "e2"}
 
 
+def _cross(prof, key, thr, x0):
+    """The upper crossing of ``thr`` by a one-sided profile, interpolated linearly in √Λ."""
+    pts = sorted((g, l) for g, l in zip(prof["grid"], prof[key]) if g >= x0)
+    for (g0, l0), (g1, l1) in zip(pts, pts[1:]):
+        if l1 >= thr > l0:
+            a, b = math.sqrt(max(l0, 0.0)), math.sqrt(l1)
+            return g0 + (math.sqrt(thr) - a) / (b - a) * (g1 - g0)
+    return None
+
+
 def test_a_parameter_on_its_fit_bound_gets_a_one_sided_profile_and_no_conflict_test():
-    # canopy *warms* in this world, so the data push the shading strength s (≥ 0) onto its lower bound
-    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.3, seed=2, canopy_effect=1.0,
+    """A boundary maximum (Self & Liang 1987): the profile is walked from the bound inward, its one-sided 95% bound
+    is where Λ reaches χ²₁(0.90) = 2.706 (naive and adjusted), and the adjustment is the scalar c = Σ_naive/Σ_rob of
+    the well-conditioned curvature at the bound, Λ_A = c·Λ_I."""
+    # canopy *warms* a little in this world, so the data push the shading strength s (≥ 0) onto its lower bound
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.3, seed=2, canopy_effect=0.1,
                                                    roles={"albedo": "albedo", "canopy": "canopy"})
     rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "s"], draws=500,
                      settings={**FAST, "max_points": 6, "block_m": BLOCK_M})
     s = _row(rep, "s")
     assert s["at_bound"] == {"side": "lower", "bound": 0.0} and s["held"] == "bound"
     assert s["profile"]["sides_explored"] == ["upper"] and s["ci95"][0] == 0.0
-    assert s["open_sides"] in ([], ["upper"])
     assert "s" in rep["hessian"]["held_at_bound"]
+    assert s["threshold"] == pytest.approx(2.705543454095404) and _row(rep, "L")["threshold"] == ID.CHI2_95
+    ba = s["boundary_adjustment"]
+    assert ba["computable"] and ba["vif"] <= ID.BOUND_MAX_VIF and ba["min_eig_unit"] >= ID.BOUND_MIN_EIG
+    prof = s["profile"]
+    for mode, sfx in (("blocks", ""), ("neighbours", "_neighbours")):
+        c = ba["c"][mode]
+        assert 0 < c and s["adjust_factor" + sfx] == pytest.approx(c, rel=1e-9)
+        for lam_a, lam_i in zip(prof["lambda_adj" + sfx], prof["lambda_naive"]):
+            assert lam_a == pytest.approx(c * lam_i, rel=1e-9, abs=1e-12)
+        assert s["ci95" + sfx][1] == pytest.approx(_cross(prof, "lambda_adj" + sfx, 2.705543454095404, 0.0), rel=1e-9)
+    assert s["ci95_naive"][1] == pytest.approx(_cross(prof, "lambda_naive", 2.705543454095404, 0.0), rel=1e-9)
+    assert s["ci95_naive"][1] < _cross(prof, "lambda_naive", ID.CHI2_95, 0.0)   # the one-sided bound is tighter
     assert s["conflict"]["p"] is None and "fit bound" in s["conflict"]["reason"]
     assert s["posterior"]["method"] == "profile" and s["posterior"]["mean"] > 0.0
     assert s["psens"]["method"] == "profile" and s["psens"]["prior"] is not None
     assert s["estimate_run"] >= s["estimate_data"] - 1e-9
     md = ID.identifiability_markdown(rep)
     assert "at lower bound" in md and "Canopy shading strength" in md
+
+
+def test_a_bound_parameter_without_a_well_conditioned_curvature_is_not_assessable():
+    """Canopy warms strongly here: at s = 0 l_I is not concave along s (the extended H_I is indefinite), so no block
+    adjustment is computable from it.  No adjusted interval is reported (the vertical adjustment from the floored
+    curvature used to give one); the naive one-sided bound is, labelled as unadjusted, and s is not assessable,
+    with no profile posterior and a register sentence that says so."""
+    from sparc.core import mechanisms as M
+
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.3, seed=2, canopy_effect=1.0,
+                                                   roles={"albedo": "albedo", "canopy": "canopy"})
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["s"], draws=200,
+                     settings={**QUICK, "max_points": 4, "ref_starts": 2, "polish_iter": 60, "block_m": BLOCK_M})
+    s = _row(rep, "s")
+    ba = s["boundary_adjustment"]
+    assert s["at_bound"]["side"] == "lower" and ba["computable"] is False and ba["c"] is None and ba["reason"]
+    assert s["identifiability"] == "not_assessable" and s["class_by_covariance"]["blocks"] == "not_assessable"
+    assert s["ci95"] is None and s["ci95_neighbours"] is None and s["se_robust"] is None
+    assert s["ci95_naive"][0] == 0.0 and s["ci95_naive_label"] == "unadjusted (too narrow under spatial dependence)"
+    assert s["ci95_naive"][1] == pytest.approx(_cross(s["profile"], "lambda_naive", ID.CHI2_90, 0.0), rel=1e-9)
+    assert s["posterior"]["method"] is None and "not assessable" in s["posterior"]["note"] and s["psens"] is None
+    assert "unadjusted (too narrow" in ID.identifiability_markdown(rep)
+    reg = M._ident_param(s, True)
+    assert reg["class"] in M.NOT_IDENTIFIED and "not assessable" in reg["text"] and "too narrow" in reg["text"]
 
 
 def test_a_poor_laplace_approximation_flags_its_summaries_unreliable(monkeypatch):
@@ -668,7 +716,7 @@ def test_a_poor_laplace_approximation_flags_its_summaries_unreliable(monkeypatch
     Laplace posterior states which parameters it is conditional on.  The check is forced to fail by raising its
     threshold above 1 (an ESS share can never reach it)."""
     monkeypatch.setattr(ID, "LAPLACE_MIN_ESS_FRAC", 1.01)
-    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.3, seed=2, canopy_effect=1.0,
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.3, seed=2, canopy_effect=0.1,
                                                    roles={"albedo": "albedo", "canopy": "canopy"})
     rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "s", "e0"], draws=200,
                      settings={**FAST, "max_points": 4, "block_m": BLOCK_M})
@@ -777,7 +825,7 @@ def test_cli_writes_identifiability_json_and_the_manifest_section(small_run, cap
     assert rep["advection"]["fit"] is (man["physics_advection"]["kept"] if man.get("physics_advection") else
                                        rep["advection"]["fit"])
     assert set(rep["references"]) == {"raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006",
-                                      "conley1999"}
+                                      "conley1999", "selfliang1987"}
     for key in ("schema", "n", "n_clusters", "cluster", "coarse_m", "advection", "reference", "parameters",
                 "linear", "derived", "settings", "timings", "references"):
         assert key in rep, key
