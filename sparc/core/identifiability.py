@@ -2075,7 +2075,7 @@ def _summary(r: dict, cls: str, sides: dict) -> str:
     if cls == "not_assessable":
         nv = r.get("ci95_naive") or [None, None]
         b = (f"{sym} ≤ {_g(nv[1])}{u}" if r["at_bound"]["side"] == "lower" else f"{sym} ≥ {_g(nv[0])}{u}")
-        return f"not assessable: unadjusted {b} (too narrow under spatial dependence){tail}"
+        return f"unadjusted {b} (too narrow under spatial dependence){tail}"
     if cls == "identified":
         return f"{_g(lo[1])} ≤ {sym} ≤ {_g(hi[1])}{u}"
     parts = []
