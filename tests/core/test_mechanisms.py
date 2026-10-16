@@ -992,8 +992,14 @@ def test_reports_describe_the_block_sandwich_and_the_adjacent_block_sensitivity(
     assert "the block sandwich of Chandler & Bate 2007, the default" in sec and "Conley 1999" in sec
     assert "wider of the two 95% intervals" in sec
     assert "mixing length L (200 to 420 m; 190 to 480 m with adjacent blocks)" in sec
+    # r_a's full-data SE is named after the covariance the study used, in the writeups too (review F16)
+    kind = "block sandwich" if used == "blocks" else "adjacent-block sandwich"
+    assert f"({kind}, full-data fit)" in sec
+    if used == "neighbours":
+        assert "(block sandwich, full-data fit)" not in sec
     card = model_card_markdown(m)
     csec = card[card.index("## Identifiability"):]
+    assert f"({kind}, full-data fit)" in csec
     assert "Chandler & Bate 2007's block sandwich" in csec and "Conley 1999" in csec and "wider of the two" in csec
     # nothing says the intervals are adjusted by the blocks alone
     assert "as clusters (Chandler & Bate 2007)" not in sec + csec + md

@@ -379,6 +379,8 @@ def test_identifiability_card_shows_the_study_and_its_profiles(studied):
     assert data["identifiability"]["rows"][0]["profile"]["grid"] == card["rows"][0]["profile"]["grid"]
     assert "Can the data pin down the physics?" in html and "function identifiabilityCard()" in html
     assert "identifiabilityCard();" in html and 'id="identProfiles"' in html
+    # the parameter panel's tooltip names the SE after the covariance the study used (review F16)
+    assert 'r.sandwich.kind || "block sandwich"' in html and "`block sandwich ± ${" not in html
     for phrase in ("full-data refit", "Run value: the run's own value, the mean over its folds",
                    "run's value (fold mean)", "the block sandwich of Chandler & Bate 2007: the default", "Conley 1999",
                    "The class rests on the wider of the two intervals", "With adjacent blocks",

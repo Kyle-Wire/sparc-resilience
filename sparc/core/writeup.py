@@ -246,7 +246,8 @@ def _identifiability_text(f: dict) -> list[str]:
     out["gate"] = gate
     sw = []
     for label, s, r in f["sandwich"]:
-        sw.append(f"{_lc(label)} {_sig(s['value'])} ± {_sig(s['se'])} {r['unit']} (block sandwich, full-data fit) "
+        sw.append(f"{_lc(label)} {_sig(s['value'])} ± {_sig(s['se'])} {r['unit']} ({s.get('kind') or 'block sandwich'}, "
+                  "full-data fit) "
                   f"against the fold jackknife {_sig(r.get('value'))} ± {_sig(r.get('se'))} {r['unit']}"
                   + (" — they differ by more than a factor of 2" if s.get("note") else ""))
     out["sandwich"] = ("Uncertainty of the physical quantities: " + "; ".join(sw) + "; the range tests use the "
