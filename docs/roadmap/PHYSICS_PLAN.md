@@ -1,6 +1,6 @@
 # SPARC Physics: Plan
 
-**Status:** in progress: W0, W1 and the W3 parameter panel done 2026-10-15 (§9); W3 profile likelihood and prior sensitivity are next · **Date:** 2026-10-15 · **Scope:** the physics base model in `sparc/core/` (`physics.py`, `operators.py`) and the checks that decide how far to trust it · **Builds on:** [`CORE_ROADMAP.md`](CORE_ROADMAP.md) §2.1 and Appendices C–G
+**Status:** in progress: W0, W1 and W3 done (2026-10-15/16, §9); W2 (source completeness) is next · **Date:** 2026-10-15 · **Scope:** the physics base model in `sparc/core/` (`physics.py`, `operators.py`) and the checks that decide how far to trust it · **Builds on:** [`CORE_ROADMAP.md`](CORE_ROADMAP.md) §2.1 and Appendices C–G
 
 > Supersedes [`prd-wave-phase-physics.md`](../prd/prd-wave-phase-physics.md) and its task list, retired 2026-10-15 before any of its tasks were started; see §2.3.
 
@@ -402,6 +402,58 @@ Effort key from the core roadmap: S ≈ days, M ≈ 1–2 weeks, L ≈ 3+ weeks.
 - a Studio view of the register (the file is listed, but there is no table yet);
 - the Studio report export does not include the register;
 - the Playwright end-to-end tests and the TypeScript side of the reducer contract were not run here.
+
+### 2026-10-16: W3 identifiability study; canopy shading stated as a number
+
+**How it was built.**
+- An implementer built the study, and a second one wired it into the register and reports.
+- A first review round had three lenses. Its 31 findings, about 18 distinct, were reproduced and fixed one commit at a time; the fixes were restart-tolerant, because the container restarted repeatedly.
+- A second review round produced 20 findings. One skeptic checked each and confirmed 18, and all 18 were fixed or flagged.
+- Decisions taken in review:
+  - Chandler & Bate's block sandwich is the default; the adjacent-block (Conley-type) version is a sensitivity analysis, and the class rests on the wider interval.
+  - Profiles maximise over every other parameter, from several starts.
+  - Parameters on a bound follow Self & Liang (1987), or are "not assessable".
+
+**Validation** (coverage of the planted value by nominal 95% intervals, 60 replicates per setting):
+
+| World | Parameter | Block sandwich | Adjacent blocks | Naive |
+|---|---|---|---|---|
+| One-parameter (L), noise range = block size | L | 80% | 88% | 20% |
+| Same, independent noise | L | 92% | 93% | 93% |
+| Shade world (9 free parameters), correlated noise | L | 80% | 97% | 38% |
+| Shade world | s | 72% | 80% | 25% |
+| Near-boundary world (s on its bound) | s | 50% | 67% | — |
+
+The adjustment removes most of the naive overconfidence. It still leaves intervals somewhat too narrow, most of all for a parameter on its bound, so such results are labelled indicative.
+
+**Providence, full resolution** (54,701 cells, 23 blocks of 2 km; 25 min):
+- **Information.** The dependence-adjusted information is 0.2–0.8% of the naive (c = 0.002–0.008). The correlated cells carry about 125–500 times less information than their count suggests.
+- **Identified by the data:**
+  - mixing length L: 218–373 m (block sandwich), 210–418 m (adjacent blocks); prior share 0.05;
+  - gain a, as r_a = 41.4 ± 10.9 s/m (block sandwich), consistent with the fold jackknife's 45.9 ± 9.4.
+- **Canopy shading s** (the W3 exit question):
+  - On the data alone the estimate is 0, no shading.
+  - The one-sided 95% upper bound is s ≤ 0.34 (block sandwich) or ≤ 0.35 (adjacent blocks). This is likely too narrow, given the boundary-world coverage above.
+  - The run's s = 0.37 (fold mean) lies just above that bound, and 93% of its curvature comes from the prior penalty.
+  - Power-scaling on the 1-D profile posterior (0.22 ± 0.13) reads as a potential prior–data conflict.
+  - **In short:** this product does not establish canopy shading, consistent with Appendix G.
+- **Set by the priors, not the data:**
+  - κ: structurally non-identifiable;
+  - a₁: not assessable at its bound (0);
+  - the water sink w: ≤ 143 W/m², estimate 0;
+  - the evaporative-fraction slopes e₁ and e₂: one-sided, 0 not excluded;
+  - e₃: identified under the block sandwich, one-sided under adjacent blocks;
+  - e₀: one-sided.
+- **γ** = −3.7 ± 3.2 K/km (block sandwich) is still too imprecise for the lapse-rate test.
+- **Laplace approximation:** poor (importance ESS 177 of 2000), so the posterior summaries and power-scaling of L and e₀–e₃ are flagged not reliable and not reported.
+- **Register:** only M6(a) is Supported. The key parameters of M1 (s, κ), M2 (EF), M3 (a₁) and M8 (w) are not identified, which blocks Supported for those mechanisms whatever later tests show, until the data change (W6, W7).
+
+**Limitations carried forward.**
+- Held parameters that move inside an interval make that side approximate, likely too narrow. This is flagged per row.
+- The boundary adjustment (Self & Liang plus a scalar c) under-covers.
+- With few clusters per parameter (Providence: 23 blocks for about 10 parameters), the sandwich is noisy.
+- Some thresholds are this module's operational choices and are documented as such: BOUND_MIN_EIG, BOUND_MAX_VIF, MONO_TOL, and the Laplace adequacy ESS of 10%.
+- Studio can launch the study and lists its output, but has no dedicated view yet (that needs a `studio-web` change).
 
 ## References
 
