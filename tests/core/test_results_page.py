@@ -459,6 +459,11 @@ def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_
     s.update(identifiability="not_assessable", ci95=None, ci95_neighbours=None, ci95_conservative=None,
              ci95_naive=[0.0, 0.18], ci95_naive_label="unadjusted (too narrow under spatial dependence)",
              psens=None, posterior={"method": None, "note": "not assessable"})
+    lap = ("the Laplace approximation of the calibrated posterior is poor (importance-sampling ESS 104 of 2000 draws; "
+           "median l_A − quadratic −25.6): at its draws the calibrated log-likelihood l_A is far from the "
+           "approximation's quadratic form, so the posterior mean/sd and power-scaling of L (the Laplace step) are "
+           "flagged unreliable (reliable: false) and are not findings; the profile intervals do not rely on it")
+    rep["warnings"] = [STUDY_WARNING, lap]
     (run / "identifiability.json").write_text(json.dumps(rep))
     blob = collect(run, cfg)
     rows = {r["key"]: r for r in blob["identifiability"]["rows"]}
@@ -500,6 +505,10 @@ def test_identifiability_card_labels_new_classes_and_unreliable_cells(demo, tmp_
     assert 'stroke-dasharray="5 4"' in fig_s and 'stroke-width="2"' not in fig_s and 'stroke-dasharray="1.5 3"' \
         not in fig_s
     assert 'stroke-width="2"' in fig_L                     # an assessable parameter keeps its adjusted curve
+    # review F17: the study's own Laplace warning is not followed by the card's sentence saying the same
+    warn = dom[dom.index('id="identWarn"'):]
+    warn = warn[:warn.index("</p>")]
+    assert "importance-sampling ESS 104" in warn and warn.count("approximation of the calibrated posterior") == 1
 
 
 def test_a_profile_posterior_is_tagged_and_the_laplace_conditioning_is_stated(demo, tmp_path):

@@ -1431,7 +1431,10 @@ function identifiabilityCard() {
     $("identSand").textContent = I.sandwich.map((s) => `${s.label}: ${nfmt(s.sandwich_value, 1)} ± ${fmt(s.sandwich_se, 1)} ${s.unit} from the full-data fit with the ${s.kind || "block sandwich"} SE, beside the fold jackknife ${nfmt(s.jackknife_value, 1)} ± ${fmt(s.jackknife_se, 1)} ${s.unit}` + (s.note ? " — the two SEs differ by more than a factor of 2, so the jackknife interval the verdict uses is itself uncertain" : "")).join(". ") + ". The range tests use the jackknife."; }
   const withProf = (I.rows || []).filter((r) => r.profile && (r.profile.grid || []).length > 1);
   if (withProf.length) { $("identLegend").hidden = false; for (const r of withProf) $("identProfiles").append(profileChart(r, thr)); }
-  const warn = [...studyWarn(I.warnings), ...(I.laplace_adequate === false ? ["The Laplace (Gaussian) approximation of the calibrated posterior (Ribatet, Cooley & Davison 2012) is poor for this run, so the posterior mean ± sd and power-scaling of the parameters that rest on it are not shown (a parameter on its fit bound has a 1-D profile posterior instead, shown); the profile intervals do not rely on it."] : [])];
+  // the study's own warning already says the Laplace approximation is poor (with its ESS): the card's sentence is
+  // added only for a study that does not say so itself, so the caveat is not given twice
+  const lapWarned = (I.warnings || []).some((w) => /^the Laplace approximation of the calibrated posterior is poor/.test(w || ""));
+  const warn = [...studyWarn(I.warnings), ...(I.laplace_adequate === false && !lapWarned ? ["The Laplace (Gaussian) approximation of the calibrated posterior (Ribatet, Cooley & Davison 2012) is poor for this run, so the posterior mean ± sd and power-scaling of the parameters that rest on it are not shown (a parameter on its fit bound has a 1-D profile posterior instead, shown); the profile intervals do not rely on it."] : [])];
   if (warn.length) { $("identWarn").hidden = false; $("identWarn").textContent = warn.join(" "); }
 }
 
