@@ -1177,6 +1177,7 @@ Params are validated by pydantic per kind (`additionalProperties: false`). `resu
 | `post.emulator` `[S]` | `{patches?: number = 8}` (1–64). The checkpoint is checked when the job **starts** (a `preflight`), not when it is queued, so it can sit in a Launch `then` chain | `{levers: Record<string, {patch_pass_rate, uniform_rel_err}>}` |
 | `post.uncertainty` `[S]` | `{multiverse_study?: string, simcheck_studies?: string[], placebo_study?: string, real_r2_gate?: boolean}` (default: attached studies) | `{n_scenarios, sources}` |
 | `post.writeup` `[S]` | `{}` | `{files: string[]}` |
+| `post.identifiability` `[S]` | `{params?: string[] /* L, s, kappa, a1, e1… */, coarse_m?: number, max_points?: number (2–50), draws?: number (100–20000), seed?: number = 0}`. `POST /api/jobs` or `POST /api/runs/{rid}/actions/identifiability` (the Overview's outputs grid offers it while `identifiability.json` is missing; no `GET /runs/{rid}/studies` row) | `{status, n, n_clusters, classes: Record<string, string>, register: "used"|"ignored"|"disabled"|null, warnings: number, files: string[]}` |
 | `study.placebo` `[S]` | `{kinds: ("grf"\|"shift"\|"rotate")[] = all three, coarse_m: number\|null = 60, seed: number = 0, grf_range_m: number = 600}` | `{n_pass_model, n_pass_causal, n_placebos, children: string[] /* child run dirs */}` |
 | `study.simcheck` `[S]` | `{design: Record<"physics"\|"additive"\|"own_only"\|"coarse_scale"\|"confounded"\|"null", number>, coarse_m: number\|null = 90, epochs: number = 200, workers: number = 1, threads: number = 1, continue_study_id?: string}` | `{n_rows, n_errors, summary: object}` |
 | `study.multiverse` `[S]` | `{variants?: string[], custom_variants?: Record<string, Record<string, unknown>>, coarse_m: number\|null = 60, workers: number = 1, threads: number = 1}` | `{sign_stability_min, median_kendall_tau, children: string[] /* child run dirs */}` |
@@ -1224,8 +1225,8 @@ type Study = { id: string; project_id: string; kind: string; target_run_id: stri
 **`GET /api/runs/{rid}/studies`** → `200 StudyStatusRow[]`.
 
 **`POST /api/runs/{rid}/actions/{kind}`**
-`kind ∈ baselines|planner|emulator|uncertainty|writeup`. Body: the kind's params (§8) → `202 Job`.
-Errors: `404 unknown_kind`, `422 requirements` (`detail.missing`, e.g. `planner.layers`), `409 no_checkpoint` (emulator), `409 untrusted_pickle` (emulator: the run was imported without trusting its checkpoint, SPEC §10.8; `action` re-imports it with `trust_pickles`), `422 validation` (params; an unknown `package` for the planner; uncertainty study ids that are not studies of that kind).
+`kind ∈ baselines|planner|emulator|uncertainty|writeup|identifiability`. Body: the kind's params (§8) → `202 Job`.
+Errors: `404 unknown_kind`, `422 requirements` (`detail.missing`, e.g. `planner.layers`; for `identifiability` `manifest`, `predictions`, `data.path` or the key that turns the physics model off: `models.physics`, `physics.enabled`, `physics.roles`), `409 no_checkpoint` (emulator), `409 untrusted_pickle` (emulator: the run was imported without trusting its checkpoint, SPEC §10.8; `action` re-imports it with `trust_pickles`), `422 validation` (params; an unknown `package` for the planner; uncertainty study ids that are not studies of that kind).
 
 **`POST /api/runs/{rid}/studies/{kind}`**
 `kind ∈ placebo|simcheck|multiverse|reproduce`. Body: params → `202 {study: Study, job: Job}`.

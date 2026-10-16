@@ -16,7 +16,9 @@ Nothing here is tied to one city:
   unpickled), and the held-out / buffer cells of each fold travel as one u8 mask per fold;
 * ``causal``, ``cv_distance``, ``optimize``, ``influence``, ``baselines``, ``climate``, ``scenarios`` and
   ``mechanisms`` fall back to their stage files when the manifest lacks them (runs stopped before the manifest
-  was finalised); the physics mechanism register is recomputed from ``physics.json`` for runs made before it;
+  was finalised); the physics mechanism register is recomputed from ``physics.json`` for runs made before it, or
+  before their identifiability study (``identifiability.json``, PHYSICS_PLAN W3), whose card shows what the data
+  alone pin down;
 * the map's layer catalogue (:func:`layer_catalog`) and the variable names come from the config's physics
   roles and actionable levers;
 * the Pareto caption is written from the frontier's numbers (:func:`pareto_caption`).
@@ -434,9 +436,13 @@ def _causal_section(m: dict, run: Path) -> dict | None:
 
 def _mechanisms_section(m: dict, run: Path, cfg) -> dict | None:
     """The manifest's physics mechanism register, else ``mechanisms.json``, else recomputed from the manifest and
-    ``physics.json`` with the page's config (runs made before the register existed)."""
+    ``physics.json`` with the page's config (runs made before the register existed, or before their
+    identifiability study: a register without an ``identifiability`` block while the run has a study)."""
+    from sparc.core.mechanisms import run_identifiability
+
+    has_study = run_identifiability(run, m)[0] is not None
     for sec in (m.get("mechanisms"), _stage_file(run, "mechanisms.json")):
-        if isinstance(sec, dict) and sec.get("rows"):
+        if isinstance(sec, dict) and sec.get("rows") and (not has_study or _register_current(sec)):
             return sec
     try:
         from sparc.core.mechanisms import mechanisms_for_run
@@ -444,6 +450,66 @@ def _mechanisms_section(m: dict, run: Path, cfg) -> dict | None:
         return mechanisms_for_run(run, copy.deepcopy(cfg.raw), write=False)
     except Exception:                                     # noqa: BLE001 - the page builds without it
         return None
+
+
+def _register_current(sec: dict) -> bool:
+    """A stored register that reports the run's identifiability study as this code does: it has the study's block,
+    and a used block carries the fields the card shows (the run's fold mean, the short class labels: registers
+    written before PHYSICS_PLAN W3 review X14–X18 lack them) and does not present a study that profiled nothing
+    (``disabled``) as used.  Otherwise the page recomputes the register."""
+    ib = sec.get("identifiability")
+    if not isinstance(ib, dict):
+        return False
+    if ib.get("status") != "used":
+        return True
+    if ib.get("study_status") == "disabled":
+        return False
+    return all(isinstance(p, dict) and "class_short" in p and "run_value" in p
+               for p in (ib.get("parameters") or {}).values())
+
+
+def _identifiability_section(m: dict, run: Path, mech: dict | None) -> dict | None:
+    """The identifiability card (PHYSICS_PLAN W3): the register's per-parameter summary (classes, prior share,
+    power-scaling, conflict; the register uses the study only when it belongs to the run) with the study's profile
+    curves.  None without a study; ``{status: "ignored", note}`` when the study belongs to another fit."""
+    from sparc.core.mechanisms import run_identifiability
+
+    ib = (mech or {}).get("identifiability") or {}
+    if ib.get("status") in ("ignored", "disabled"):
+        # ignored: made for another fit; disabled: the study profiled nothing (its data-only fit is anti-physical)
+        return {"status": ib["status"], "note": ib.get("note"), "warnings": ib.get("warnings") or []}
+    if ib.get("status") != "used":
+        return None
+    rep, _ = run_identifiability(run, m)
+    prof = {r["key"]: r.get("profile") or {} for r in (rep or {}).get("parameters") or [] if isinstance(r, dict)}
+    keep = ("key", "label", "unit", "class", "class_label", "run_value", "estimate_run", "estimate_data", "ci95",
+            "ci95_neighbours",
+            "ci95_conservative", "class_by_covariance", "class_short", "threshold", "ci95_naive", "ci95_naive_label",
+            "summary", "posterior_unreliable", "open_sides", "sides_at_limit", "not_assessable_reason",
+            "at_bound", "reaches_zero", "prior", "prior_share_run", "pull", "posterior", "psens", "conflict", "text")
+    rows = []
+    for key, p in (ib.get("parameters") or {}).items():
+        if not p.get("in_model"):
+            continue
+        pr = prof.get(key) or {}
+        rows.append({**{k: p.get(k) for k in keep},
+                     "profile": ({k: pr.get(k) for k in ("grid", "lambda_adj", "lambda_adj_neighbours", "lambda_naive")}
+                                 if pr.get("grid") else None)})
+    sandwich = [{"label": r["label"], "unit": r["unit"], "jackknife_value": r.get("value"), "jackknife_se": r.get("se"),
+                 "sandwich_value": r["sandwich"].get("value"), "sandwich_se": r["sandwich"].get("se"),
+                 "kind": r["sandwich"].get("kind") or "block sandwich", "note": r["sandwich"].get("note")}
+                for r in ((mech or {}).get("panel") or {}).get("rows") or [] if r.get("sandwich")]
+    settings = (rep or {}).get("settings") or {}
+    from sparc.core.mechanisms import posterior_text
+
+    return {"status": "used", "n": ib.get("n"), "n_clusters": ib.get("n_clusters"), "block_m": ib.get("block_m"),
+            "coarse_m": ib.get("coarse_m"), "laplace_adequate": ib.get("laplace_adequate"),
+            # which posterior each row's summary and power-scaling describe, and what the Laplace one holds fixed
+            "posterior_text": posterior_text(ib), "posterior_conditional_on": ib.get("posterior_conditional_on") or [],
+            "score_covariance": ib.get("score_covariance") or "blocks",
+            "chi2_95": settings.get("chi2_95", 3.841458820694124), "psens_threshold": settings.get("psens_threshold", 0.05),
+            "rows": rows, "sandwich": sandwich, "warnings": ib.get("warnings") or [],
+            "gated": [r["id"] for r in (mech or {}).get("rows") or [] if r.get("identifiability_gate")]}
 
 
 def _identify_section(run: Path) -> dict | None:
@@ -638,6 +704,7 @@ def collect(run, cfg, placebo_path=None) -> dict:
     rep = cfg.raw.get("report") or {}
     units = data.target_units
     U = _unit_label(units)
+    mech = _mechanisms_section(m, run, cfg)
     optimize = jl("optimize.json") or m.get("optimize")
     climate = m.get("climate") or jl("climate.json")
     cv = m.get("cv") or {}
@@ -657,7 +724,7 @@ def collect(run, cfg, placebo_path=None) -> dict:
         "causal": _causal_section(m, run), "identify": _identify_section(run), "optimize": optimize, "climate": climate,
         "baselines": m.get("baselines") or jl("baselines.json"), "provenance": m.get("provenance"),
         "literature": m.get("literature"), "planner": m.get("planner"), "uncertainty": m.get("uncertainty"),
-        "mechanisms": _mechanisms_section(m, run, cfg),
+        "mechanisms": mech, "identifiability": _identifiability_section(m, run, mech),
         "heat": heat_risk, "verdicts": verdicts,
         "simcheck": m.get("simcheck"), "multiverse": m.get("multiverse"), "placebo": placebo, "design": design,
         "sites": sites, "physics_advection": m.get("physics_advection"),

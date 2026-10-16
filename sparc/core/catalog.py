@@ -189,6 +189,8 @@ OUTPUTS: list[OutputSpec] = [
        ("html",), optional=True),
     _S("reproduce", ("reproduce.json",), "Reproduction checklist", "trust", "study:reproduce", "json", ("json",),
        optional=True),
+    _S("identifiability", ("identifiability.json",), "Physics identifiability and prior sensitivity", "trust",
+       "post:identifiability", "json", ("json",), "identifiability", "identifiability.json", optional=True),
     # ---------------------------------------------------------------- studies (study dir)
     _S("placebo_study", ("placebo.json",), "Placebo suite", "trust", "study:placebo", "json", ("json",),
        root="study"),
@@ -459,6 +461,33 @@ DATA_DICTIONARY: dict[str, dict[str, tuple[str, str, str]]] = {
                            "|LW_net| at night; a_K = a in kelvin per unit q, × 5/9 for a °F target)"),
         "gamma": ("K/km", "", "Elevation coefficient in kelvin per kilometre"),
         "basis": ("", "", "What the verdicts rest on (an interpolated product makes them indicative)"),
+    },
+    "identifiability.json": {
+        "ci95": ("", "", "Data-only 95% profile-likelihood interval of the parameter, in its own unit, with the "
+                         "likelihood adjusted for spatial dependence by Chandler & Bate (2007)'s block sandwich, the CV "
+                         "blocks as independent clusters (Λ_A ≤ 3.84, or 2.71 one-sided for an estimate on its fit "
+                         "bound; Raue et al. 2009, Self & Liang 1987)"),
+        "ci95_neighbours": ("", "", "The same interval with adjacent blocks' score cross-products added to the block "
+                                    "sandwich (a Conley 1999-type spatial HAC): a sensitivity; the class rests on the "
+                                    "wider of the two intervals on each side (ci95_conservative)"),
+        "estimate_run": ("", "", "The study's full-data refit of the run's objective (penalty on) on every labelled "
+                                 "cell: the value the prior share and the pull describe, not the run's own value"),
+        "estimate_run_folds": ("", "", "The run's own value: the mean over its folds with the physics term on "
+                                       "(physics.json), as the parameter panel shows it"),
+        "identifiability": ("", "", "identified (both sides of the profile cross the threshold), one_sided (one side "
+                                    "crosses, the other stays open: bounded on one side only), "
+                                    "practically_non_identifiable (neither side crosses), "
+                                    "structurally_non_identifiable (flat profile) or not_assessable (the estimate sits "
+                                    "on a fit bound where no adjustment for spatial dependence is computable); only "
+                                    "identified counts as identified (Raue et al. 2009)"),
+        "prior_share_run": ("1", "", "The penalty's share of the run objective's curvature in the parameter: above "
+                                     "0.5 the run's value is set mostly by its prior"),
+        "adjust_factor": ("1", "", "Naive / block-adjusted variance: how much the spatial dependence shrinks the "
+                                   "information"),
+        "psens": ("1", "prior ≥ 0.05: informative prior; likelihood < 0.05: weak likelihood; both ≥ 0.05: potential "
+                       "prior–data conflict", "Power-scaling sensitivity of the prior and the likelihood (Kallioinen et "
+                                              "al. 2024); reliable: false when it rests on a poor Laplace approximation "
+                                              "(not a finding)"),
     },
     "baselines.json": {
         "delta_mse": ("{target}²", "positive = stack better", "MSE(baseline) − MSE(stack)"),

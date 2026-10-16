@@ -724,6 +724,471 @@ def test_packaged_studio_providence_example_matches_the_repo_config():
 
 
 # ---------------------------------------------------------------------------
+# W3: the identifiability study in the register (hand-made reports for the folds of _folds())
+# ---------------------------------------------------------------------------
+
+_LABELS = {"L": ("Mixing length L", "m"), "s": ("Canopy shading strength s", "fraction of absorbed sunlight"),
+           "kappa_canopy": ("Shade saturation scale κ", "canopy fraction"), "a1": ("Impervious heat storage a₁",
+                                                                                   "fraction of Q*"),
+           "e2": ("Evaporative-fraction slope on canopy e₂", "logit per canopy fraction"),
+           "w": ("Water-cell sink w", "W/m²")}
+
+
+def _prow(key, cls="identified", ci=(0.2, 0.5), run=None, data=None, share=None, at_bound=None, psens=None,
+          conflict=None, open_sides=(), sides_at_limit=()):
+    """One parameter row of an identifiability report (the fields the register reads)."""
+    label, unit = _LABELS[key]
+    return {"key": key, "label": label, "unit": unit, "estimate_run": run, "estimate_data": data,
+            "estimate_run_folds": None, "at_bound": at_bound, "held": "bound" if at_bound else None,
+            "se_naive": 0.01, "se_robust": 0.1, "adjust_factor": 0.01, "ci95": list(ci) if ci else None,
+            "ci95_naive": [0.3, 0.4], "identifiability": cls, "open_sides": list(open_sides),
+            "sides_at_limit": list(sides_at_limit), "pull": 0.5, "prior": None, "prior_share_run": share,
+            "posterior": {"method": "laplace", "mean": run, "sd": 0.1}, "psens": psens, "conflict": conflict,
+            "profile": {"grid": [0.1, 0.3, 0.6], "lambda_adj": [5.0, 0.0, 6.0], "lambda_naive": [50.0, 0.0, 60.0]},
+            "note": None}
+
+
+def _ident(folds, rows, *, n=1000, cv=None, a_se=None, gamma_se=None, units="degF", window="day", **run):
+    """An identifiability report made for ``folds`` (their fold means recorded as the study records them) with
+    parameter ``rows``; ``a_se`` / ``gamma_se``: sandwich SEs of the gain a (°F per unit q) and γ (°F per m)."""
+    act = [f for f in folds if f["a"] > 0 and not f.get("fit_warning")]
+    pk = {"L": "L_m", "v": "v_norm_m"}
+
+    def mean(k):
+        return sum(f[pk.get(k, k)] for f in act) / len(act)
+
+    a_m, g_m = mean("a"), mean("gamma")
+    lin = [{"key": "a", "label": "Source gain a", "unit": "target units per unit q", "estimate_data": a_m,
+            "se_naive_data": 0.5, "se_robust_data": a_se or 1.0, "estimate_run": a_m, "se_naive_run": 0.5,
+            "se_robust_run": a_se or 1.0, "adjust_factor": 0.01},
+           {"key": "gamma", "label": "Elevation coefficient γ", "unit": "target units per m", "estimate_data": g_m,
+            "se_naive_data": 1e-5, "se_robust_data": gamma_se or 1e-4, "estimate_run": g_m, "se_naive_run": 1e-5,
+            "se_robust_run": gamma_se or 1e-4, "adjust_factor": 0.01}]
+    rep = {"schema": 1, "status": "ok", "n": n, "n_clusters": 23, "coarse_m": None, "units": units, "window": window,
+           "cluster": {"kind": "cv_block", "block_m": 2000.0}, "settings": {"score_covariance": "blocks"},
+           "posterior": {"laplace_adequate": True}, "warnings": [], "parameters": rows, "linear": lin,
+           "run": {"n_points_run": n, "cv": cv, "fold_means": {r["key"]: mean(r["key"]) for r in rows}}}
+    rep["run"].update(run)
+    return rep
+
+
+def _m(n=1000, **kw):
+    return {"n_points": n, "cv": {"n_folds": 5, "block_m": 2000.0, "n_blocks": 23}, **kw}
+
+
+def test_identifiability_fills_the_panel_and_replaces_the_not_yet_tested_notes():
+    folds = _folds()
+    rep = _ident(folds, [_prow("L", ci=(200.0, 420.0), run=256.0, data=270.0, share=0.05),
+                         _prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.4,
+                               psens={"prior": 0.01, "likelihood": 0.2, "diagnosis": "none", "method": "laplace"},
+                               conflict={"z": 1.0, "p": 0.32, "flag": False, "reason": None})])
+    reg = M.evaluate(_m(), folds, _cfg(), identifiability=rep)
+    ib = reg["identifiability"]
+    assert ib["status"] == "used" and ib["source"] == "argument" and ib["not_identified"] == []
+    s = _panel(reg, "s")
+    idn = s["identifiability"]
+    assert idn["class"] == "identified" and idn["ci95"] == [0.15, 0.55] and idn["prior_share_run"] == 0.4
+    assert idn["posterior"]["mean"] == 0.34 and idn["psens"]["likelihood"] == 0.2 and idn["conflict"]["p"] == 0.32
+    assert "identified by the data alone" in idn["text"] and "prior share 0.40" in idn["text"]
+    assert "not yet tested" not in s["prior"]["note"] and "power-scaling" in s["prior"]["note"]
+    assert "W3 profile likelihood (identifiability column)" in s["status_note"]
+    P = reg["panel"]
+    assert P["identifiability_study"] and not P["identifiability"].startswith("not yet tested")
+    assert "23 CV blocks of 2000 m" in P["identifiability"] and "Kallioinen" in P["prior_sensitivity"]
+    assert _panel(reg, "L")["identifiability"]["ci95"] == [200.0, 420.0]
+    assert _panel(reg, "a1").get("identifiability") is None          # not profiled: no columns
+    assert {"raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006"} <= set(reg["references"])
+    assert "Identifiability from the data alone" in _row(reg, "M4a")["context"]
+    # the reference strings are the study's own
+    from sparc.core import identifiability as ID
+
+    assert all(M.REFERENCES[k] == ID.REFERENCES[k] for k in ID.REFERENCES)
+    md = M.mechanisms_markdown(reg)
+    assert "**Identifiability from the data alone (W3).**" in md and "| Canopy shading strength s | 0.34 | 0.34 |" in md
+    assert "| parameter | run (fold mean) | full-data refit |" in md
+    assert "come later" not in md
+
+
+def test_non_identified_s_is_set_by_the_penalty_in_the_register_and_the_lever_statement():
+    folds = _folds()
+    rep = _ident(folds, [_prow("s", cls="structurally_non_identifiable", ci=(None, None), run=0.36, data=0.9,
+                               share=0.83),
+                         _prow("e2", ci=(0.0, 2.9), run=0.5, data=0.6, sides_at_limit=("lower",))])
+    reg = M.evaluate(_m(identifiability=rep), folds, _cfg())         # read from the manifest section
+    assert reg["identifiability"]["status"] == "used" and reg["identifiability"]["source"] == "manifest"
+    assert reg["identifiability"]["not_identified"] == ["s"]
+    lever = reg["gates"]["levers"]["Pct_Canopy"]
+    st = lever["statement"]
+    # the run's own value is its fold mean (0.34); the study's full-data refit (0.36) is labelled as such (review X15)
+    assert ("Canopy shading strength s: not identified by the data alone (flat profile likelihood); its full-data "
+            "refit value 0.36 is set mostly by the penalty (prior share 0.83; the run's own value, its fold mean, is "
+            "0.34).") in st
+    assert lever["identifiability"]["s"]["run_value"] == pytest.approx(0.34)
+    assert lever["identifiability"]["s"]["estimate_run"] == 0.36 and "run value" not in st
+    assert "the data alone do not exclude e₂ = 0" in st
+    assert lever["not_identified"] == ["s"] and set(lever["identifiability"]) == {"s", "e2"}
+    assert "identifiability" not in reg["gates"]["levers"]["Albedo"]                # no parameter of its own
+    imp = reg["gates"]["levers"]["Pct_Impervious"]
+    assert "identifiability" not in imp                                            # a₁, e₃ not profiled
+    m1 = next(m for m in reg["mechanisms"] if m["id"] == "M1")
+    assert m1["identifiability"] == {"keys": ["s"], "not_identified": ["s"]}
+    assert "Canopy shading strength s: not identified" in _row(reg, "M1a")["context"]
+    assert _row(reg, "M1b").get("context") is None                                 # once per mechanism
+    assert [x["key"] for x in _row(reg, "M2a")["identifiability"]] == ["e2"]
+
+
+def test_s_on_its_lower_bound_is_bounded_but_does_not_exclude_zero():
+    folds = _folds()
+    rep = _ident(folds, [_prow("s", ci=(0.0, 0.49), run=0.335, data=1e-9, share=0.93,
+                               at_bound={"side": "lower", "bound": 0.0},
+                               psens={"prior": 0.097, "likelihood": 0.115, "diagnosis": "prior_data_conflict",
+                                      "method": "profile"},
+                               conflict={"z": None, "p": None, "flag": None, "reason": "on a fit bound"})])
+    reg = M.evaluate(_m(), folds, _cfg(), identifiability=rep)
+    p = _panel(reg, "s")["identifiability"]
+    assert p["reaches_zero"] and p["class"] == "identified"
+    assert p["text"] == ("Canopy shading strength s: the data alone do not exclude s = 0 (the data-only fit sits at 0; "
+                         "95% profile interval 0 to 0.49); its full-data refit value 0.335 is set mostly by the "
+                         "penalty (prior share 0.93; the run's own value, its fold mean, is 0.34); power-scaling of "
+                         "its 1-D profile posterior flags a potential prior–data conflict (prior and likelihood "
+                         "sensitivity both 0.05 or more).")
+    assert "| identified; does not exclude 0 |" in M.mechanisms_markdown(reg)
+    assert "not testable" in M.mechanisms_markdown(reg)              # the conflict check at a bound
+
+
+@pytest.mark.parametrize("change, why", [
+    ({"fold_L": 300.0}, "different physics fit"),
+    ({"n": 999}, "999 cells"),
+    ({"cv": {"n_folds": 4, "block_m": 2000.0, "n_blocks": 23}}, "cross-validation design"),
+    ({"input_sha256": "b" * 64}, "different input data"),
+    ({"units": "degC"}, "target units"),
+    ({"window": "night"}, "window"),
+])
+def test_a_study_made_for_another_run_is_ignored_with_a_note(change, why):
+    folds = _folds()
+    rep = _ident(folds, [_prow("s", cls="structurally_non_identifiable", ci=None, run=0.34, data=0.9, share=0.83)],
+                 n=change.get("n", 1000), cv=change.get("cv"), units=change.get("units", "degF"),
+                 window=change.get("window", "day"), input_sha256=change.get("input_sha256"))
+    if "fold_L" in change:
+        rep["run"]["fold_means"]["L"] = change["fold_L"]
+    man = _m(provenance={"input_sha256": "a" * 64})
+    reg = M.evaluate(man, folds, _cfg(), identifiability=rep)
+    ib = reg["identifiability"]
+    assert ib["status"] == "ignored" and why in ib["note"] and "re-run `sparc core identifiability`" in ib["note"]
+    assert all("identifiability" not in r for r in reg["panel"]["rows"])
+    assert "identifiability" not in reg["gates"]["levers"]["Pct_Canopy"]
+    assert reg["panel"]["identifiability"].startswith("not yet tested")
+    assert "*Identifiability (W3):* identifiability study ignored" in M.mechanisms_markdown(reg)
+
+
+def test_a_study_is_ignored_without_an_active_physics_term_and_absent_when_disabled():
+    folds = _folds()
+    rep = _ident(folds, [_prow("s")])
+    off = M.evaluate(_m(), _folds(a_values=(-1.0, -2.0, -3.0)), _cfg(), identifiability=rep)
+    assert off["identifiability"]["status"] == "ignored" and "no active physics term" in off["identifiability"]["note"]
+    assert M.evaluate(_m(identifiability=rep), folds, _cfg(), identifiability=False)["identifiability"] == \
+        {"status": "absent", "source": None, "note": None}
+    assert M.evaluate(_m(), folds, _cfg())["identifiability"]["status"] == "absent"
+    bad = M.evaluate(_m(), folds, _cfg(), identifiability={"schema": 9, "parameters": []})
+    assert bad["identifiability"]["status"] == "ignored" and "known schema" in bad["identifiability"]["note"]
+
+
+def test_a_key_parameter_not_identified_blocks_supported_but_never_makes_contradicted(monkeypatch):
+    folds = _folds()
+    L_bad = _prow("L", cls="practically_non_identifiable", ci=(150.0, None), run=256.0, data=260.0,
+                  open_sides=("upper",))
+    reg = M.evaluate(_m(), folds, _cfg(), identifiability=_ident(folds, [L_bad]))
+    assert _row(reg, "M6a")["status"] == "supported"              # L is M4's key parameter, not M6's
+    assert "stays open on the upper side" in _panel(reg, "L")["identifiability"]["text"]
+    monkeypatch.setitem(M.KEY_PARAMS, "M6", ("a", "L"))
+    reg = M.evaluate(_m(), folds, _cfg(), identifiability=_ident(folds, [L_bad]))
+    r = _row(reg, "M6a")
+    assert r["status"] == "not_testable" and r["label"] == "Not testable with this data" and r["identifiability_gate"]
+    assert "mixing length L is not identified by the data alone" in r["reason"] and r["basis"] is None
+    assert r["statistic"]["value"] == pytest.approx(_panel(reg, "r_a")["value"])     # the statistic is kept
+    assert {m["id"]: m["status"] for m in reg["mechanisms"]}["M6"] == "not_testable"
+    assert "M6a" in reg["summary"]["not_testable"] and "M6a" not in reg["summary"]["supported"]
+    ok = _prow("L", ci=(200.0, 420.0), run=256.0, data=260.0)
+    assert _row(M.evaluate(_m(), folds, _cfg(), identifiability=_ident(folds, [ok])), "M6a")["status"] == "supported"
+    far = _folds(a_values=(1000.0, 1010.0, 990.0))
+    reg = M.evaluate(_m(), far, _cfg(), identifiability=_ident(far, [L_bad]))
+    assert _row(reg, "M6a")["status"] == "contradicted" and not _row(reg, "M6a").get("identifiability_gate")
+
+
+def test_sandwich_se_of_r_a_and_gamma_beside_the_jackknife_with_a_note_beyond_a_factor_of_two():
+    folds = _folds(gammas=[-7.5, -8.0, -8.5, -8.0, -8.0])
+    plain = M.evaluate({}, folds, _cfg())
+    jk, jk_g = _panel(plain, "r_a")["se"], _panel(plain, "gamma")["se"]
+    scale = F_TO_K * RHO_CP / 635.8
+    rep = _ident(folds, [], a_se=3.0 * jk / scale, gamma_se=_gamma_F_per_m(1.5 * jk_g))
+    reg = M.evaluate(_m(), folds, _cfg(), identifiability=rep)
+    ra, g = _panel(reg, "r_a"), _panel(reg, "gamma")
+    sw = ra["sandwich"]
+    assert sw["value"] == pytest.approx(45.0 * scale) and sw["se"] == pytest.approx(3.0 * jk)
+    assert sw["ratio"] == pytest.approx(3.0) and "differ by more than a factor of 2" in sw["note"]
+    assert sw["note"] in ra["status_note"] and sw["note"] in _row(reg, "M6a")["note"]
+    assert _row(reg, "M6a")["status"] == "supported"                 # the verdict stays on the jackknife
+    assert "block sandwich" in _row(reg, "M6a")["context"] and "the verdict uses the jackknife" in _row(reg, "M6a")["context"]
+    assert g["sandwich"]["value"] == pytest.approx(-8.0) and g["sandwich"]["se"] == pytest.approx(1.5 * jk_g)
+    assert g["sandwich"]["ratio"] == pytest.approx(1.5) and g["sandwich"]["note"] is None   # within a factor of 2
+    md = M.mechanisms_markdown(reg)
+    assert "*Aerodynamic resistance r_a:* full-data reference fit" in md and "Note: the block-sandwich SE" in md
+
+
+def test_lever_text_flags_a_conflict_and_a_poor_laplace_approximation():
+    folds = _folds()
+    rep = _ident(folds, [_prow("s", ci=(0.6, 0.9), run=0.5, data=0.75, share=0.2,
+                               psens={"prior": 0.2, "likelihood": 0.01, "diagnosis": "weak_likelihood",
+                                      "method": "laplace"},
+                               conflict={"z": 2.5, "p": 0.012, "flag": True, "reason": None})])
+    rep["posterior"]["laplace_adequate"] = False
+    st = M.evaluate(_m(), folds, _cfg(), identifiability=rep)["gates"]["levers"]["Pct_Canopy"]["statement"]
+    assert "identified by the data alone (data-only estimate 0.75; 95% profile interval 0.6 to 0.9); prior share 0.20" in st
+    # power-scaling of a poor Laplace approximation is not presented as a finding (PHYSICS_PLAN W3 review X10)
+    assert "weak likelihood" not in st
+    assert ("its posterior summaries and power-scaling are not reliable, so they are not reported (they rest on a "
+            "Laplace approximation that is poor") in st
+    assert "the prior–data conflict check finds a conflict (p = 0.012)" in st
+
+
+@pytest.mark.parametrize("used", ["blocks", "neighbours"])
+def test_reports_describe_the_block_sandwich_and_the_adjacent_block_sensitivity(used):
+    """PHYSICS_PLAN W3 review X14: the register, its markdown and the writeups say that the intervals are Chandler &
+    Bate's block sandwich by default, the adjacent-block (Conley-type) variant is a sensitivity, and the class rests
+    on the wider of the two; both intervals are quoted; r_a/γ's sandwich is named after the V the study used."""
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    folds = _folds()
+    L = _prow("L", ci=(200.0, 420.0), run=256.0, data=270.0, share=0.05)
+    L["ci95_neighbours"] = [190.0, 480.0]
+    L["ci95_conservative"] = [190.0, 480.0]
+    s = _prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.4)
+    s["ci95_neighbours"] = [0.15, 0.55]                       # equal: quoted once
+    jk = _panel(M.evaluate({}, folds, _cfg()), "r_a")["se"]
+    rep = _ident(folds, [L, s], a_se=jk / (F_TO_K * RHO_CP / 635.8))
+    rep["covariance"] = {"computed": ["blocks", "neighbours"], "used": used}
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    P = reg["panel"]
+    for text in (P["identifiability"], M.mechanisms_markdown(reg)):
+        assert "Chandler & Bate 2007" in text and "block sandwich" in text and "Conley 1999" in text
+        assert "adjacent blocks" in text and "wider of the two" in text
+    Lp = _panel(reg, "L")["identifiability"]
+    assert Lp["ci95_neighbours"] == [190.0, 480.0] and Lp["ci95_conservative"] == [190.0, 480.0]
+    assert ("95% profile interval 200 to 420 m with the block sandwich, 190 to 480 m with adjacent blocks"
+            in Lp["text"])
+    assert "with adjacent blocks" not in _panel(reg, "s")["identifiability"]["text"]
+    md = M.mechanisms_markdown(reg)
+    assert "| data-only 95% CI (block sandwich) | with adjacent blocks |" in md
+    assert "| 200 to 420 m | 190 to 480 m |" in md
+    sw = _panel(reg, "r_a")["sandwich"]
+    if used == "blocks":
+        assert sw["kind"] == "block sandwich" and "(block sandwich, clusters = the CV blocks" in sw["text"]
+    else:
+        assert sw["kind"] == "adjacent-block sandwich" and "Conley 1999" in sw["text"]
+    sec = methods_markdown(m)
+    sec = sec[sec.index("## Identifiability"):]
+    sec = sec[:sec.index("\n## ", 3)]
+    assert "the block sandwich of Chandler & Bate 2007, the default" in sec and "Conley 1999" in sec
+    assert "wider of the two 95% intervals" in sec
+    assert "mixing length L (200 to 420 m; 190 to 480 m with adjacent blocks)" in sec
+    # r_a's full-data SE is named after the covariance the study used, in the writeups too (review F16)
+    kind = "block sandwich" if used == "blocks" else "adjacent-block sandwich"
+    assert f"({kind}, full-data fit)" in sec
+    if used == "neighbours":
+        assert "(block sandwich, full-data fit)" not in sec
+    card = model_card_markdown(m)
+    csec = card[card.index("## Identifiability"):]
+    assert f"({kind}, full-data fit)" in csec
+    assert "Chandler & Bate 2007's block sandwich" in csec and "Conley 1999" in csec and "wider of the two" in csec
+    # nothing says the intervals are adjusted by the blocks alone
+    assert "as clusters (Chandler & Bate 2007)" not in sec + csec + md
+
+
+def test_a_disabled_study_is_not_written_up_as_profiled():
+    """PHYSICS_PLAN W3 review X16: a study whose data-only fit is anti-physical profiled nothing (status
+    ``disabled``): the register, its markdown and the writeups say so, and nothing reads as if profiles were done
+    (no identifiability columns, no "no parameter is identified", no gate, no method sentence)."""
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    folds = _folds()
+    rep = _ident(folds, [])
+    rep.update(status="disabled", parameters=[], linear=[], derived={},
+               warnings=["the data-only fit is anti-physical (a ≤ 0): the physics term is disabled, nothing to profile"])
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    ib = reg["identifiability"]
+    assert ib["status"] == "disabled" and "profiled nothing" in ib["note"] and "a ≤ 0" in ib["note"]
+    assert ib["parameters"] == {} and ib["not_identified"] == [] and ib["warnings"] == rep["warnings"]
+    P = reg["panel"]
+    assert not P["identifiability_study"] and P["identifiability"].startswith("W3 profile likelihood not done")
+    assert "not done" in P["prior_sensitivity"]
+    assert all("identifiability" not in r for r in P["rows"]) and all("sandwich" not in r for r in P["rows"])
+    assert not any(r.get("identifiability_gate") for r in reg["rows"])
+    assert "identifiability" not in reg["gates"]["levers"]["Pct_Canopy"]
+    md = M.mechanisms_markdown(reg)
+    assert "*Identifiability (W3):* the identifiability study profiled nothing" in md
+    assert "Identifiability from the data alone (W3)" not in md and "come later" not in md
+    for doc in (methods_markdown(m), model_card_markdown(m)):
+        sec = doc[doc.index("## Identifiability"):]
+        sec = sec[:sec.index("\n## ", 3)]
+        assert "Not done. The identifiability study profiled nothing" in sec
+        for claim in ("was tested by profile likelihood", "Profile likelihood on all labelled cells",
+                      "No physics parameter is identified", "No parameter's value is set mostly by the penalty",
+                      "flags no prior–data conflict", "cannot be Supported"):
+            assert claim not in sec, claim
+    # a register written before this fix marked such a study "used" (study_status "disabled"): still "Not done"
+    m["mechanisms"]["identifiability"] = {**ib, "status": "used", "study_status": "disabled", "note": None}
+    for doc in (methods_markdown(m), model_card_markdown(m)):
+        sec = doc[doc.index("## Identifiability"):]
+        assert "Not done. The identifiability study profiled nothing" in sec and "No physics parameter" not in sec
+
+
+def test_study_warnings_appear_in_the_register_and_both_writeups():
+    """PHYSICS_PLAN W3 review X17: the study's warnings (a reference that is not a maximum, a poor Laplace
+    approximation, too few clusters per parameter, …) qualify its numbers, so methods.md and model_card.md carry
+    them, as the register's markdown does."""
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    folds = _folds()
+    rep = _ident(folds, [_prow("L", ci=(200.0, 420.0), run=256.0, data=270.0, share=0.05)])
+    ws = ["after 2 restart(s) a profile point still improves on the data-only optimum by Δl = 0.31 (L = 512): the "
+          "reference is not a maximum and the profiles are approximate",
+          "only 1.6 clusters per parameter: the sandwich covariance is poorly estimated."]
+    rep["warnings"] = ws
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    assert reg["identifiability"]["warnings"] == ws
+    md = M.mechanisms_markdown(reg)
+    assert all(f"*Identifiability warning:* {w}" in md for w in ws)
+    sec = methods_markdown(m)
+    sec = sec[sec.index("## Identifiability"):]
+    sec = sec[:sec.index("\n## ", 3)]
+    assert "The study raised 2 warnings, which qualify these results: " + ws[0] + "; " + ws[1].rstrip(".") + "." in sec
+    card = model_card_markdown(m)
+    csec = card[card.index("## Identifiability"):]
+    csec = csec[:csec.index("\n## ", 3)]
+    assert "- **Warnings.** The study raised 2 warnings" in csec and "not a maximum" in csec
+    # none: no warning sentence
+    rep["warnings"] = []
+    m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    assert "warning" not in methods_markdown(m).split("## Identifiability", 1)[1].split("\n## ", 1)[0]
+    # a disabled study: its warnings too
+    rep.update(status="disabled", parameters=[], linear=[], warnings=ws[:1])
+    m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    assert "The study raised 1 warning, which qualify these results" in methods_markdown(m)
+    assert "- **Warnings.**" in model_card_markdown(m) and ws[0] in M.mechanisms_markdown(m["mechanisms"])
+
+
+@pytest.mark.parametrize("prior, lik, reading, phrase", [
+    (0.20, 0.30, "prior_data_conflict", "power-scaling flags a potential prior–data conflict"),
+    (0.20, 0.01, "weak_likelihood", "power-scaling flags an informative prior with a weak likelihood"),
+    (0.01, 0.02, "likelihood_only_weak", "power-scaling flags a weak likelihood (likelihood sensitivity below 0.05)"),
+    (0.01, 0.30, None, None),
+])
+def test_power_scaling_is_read_as_kallioinen_et_al_do(prior, lik, reading, phrase):
+    """PHYSICS_PLAN W3 review X18: a prior sensitivity ≥ 0.05 marks an informative prior, a likelihood sensitivity
+    BELOW 0.05 a weak likelihood, both ≥ 0.05 a potential prior–data conflict (Kallioinen et al. 2024)."""
+    from sparc.core.identifiability import psens_diagnosis
+    from sparc.core.writeup import methods_markdown
+
+    folds = _folds()
+    ps = {"prior": prior, "likelihood": lik, "diagnosis": psens_diagnosis(prior, lik), "method": "laplace"}
+    rep = _ident(folds, [_prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.2, psens=ps)])
+    m = {"name": "t", "config": _cfg(), **_m()}
+    reg = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    m["mechanisms"] = reg
+    p = _panel(reg, "s")["identifiability"]
+    assert p["psens"]["reading"] == reading
+    assert p["psens"]["prior_informative"] == (prior >= 0.05) and p["psens"]["likelihood_weak"] == (lik < 0.05)
+    md = M.mechanisms_markdown(reg)
+    assert "a likelihood sensitivity below 0.05 marks a weak (non-informative) likelihood" in md
+    assert "≥ 0.05 flags a component" not in md
+    sec = methods_markdown(m).split("## Identifiability", 1)[1].split("\n## ", 1)[0]
+    assert "a likelihood sensitivity below 0.05 a weak likelihood" in sec
+    if phrase:
+        assert phrase in p["text"] and phrase.split(" (")[0] in sec
+    else:
+        assert "power-scaling flags" not in p["text"] and "power-scaling flags" not in sec
+
+
+def test_new_classes_and_unreliable_cells_have_plain_labels():
+    """PHYSICS_PLAN W3 review X18: one_sided and not_assessable get plain labels (and short pill labels), and a
+    posterior or power-scaling that rests on a poor Laplace approximation reads "not reliable", not as a finding."""
+    folds = _folds()
+    one = _prow("L", cls="one_sided", ci=(200.0, None), run=256.0, data=270.0, open_sides=("upper",))
+    one["summary"] = "L ≥ 200 m; upper side open at the end of the search range (2000)"
+    na = _prow("a1", cls="not_assessable", ci=None, run=0.3, data=0.0, at_bound={"side": "lower", "bound": 0.0},
+               open_sides=("lower",))                                   # as the study reports it
+    na.update(ci95_naive=[0.0, 0.18], ci95_naive_label="unadjusted (too narrow under spatial dependence)")
+    bad = _prow("s", ci=(0.15, 0.55), run=0.34, data=0.3, share=0.2,
+                psens={"prior": 0.2, "likelihood": 0.01, "diagnosis": "weak_likelihood", "method": "laplace",
+                       "reliable": False, "reason": "the Laplace approximation is poor"})
+    bad["posterior"].update(reliable=False, reason="the Laplace approximation is poor")
+    rep = _ident(folds, [one, na, bad])
+    reg = M.evaluate(_m(), folds, _cfg(), identifiability=rep)
+    ps = reg["identifiability"]["parameters"]
+    assert ps["L"]["class_label"] == "one-sided: bounded by the data on one side only"
+    assert ps["L"]["class_short"] == "one side only" and ps["a1"]["class_short"] == "not assessable"
+    assert ps["a1"]["class_label"].startswith("not assessable: no adjustment for spatial dependence is computable")
+    assert ps["a1"]["ci95_naive_label"].startswith("unadjusted")
+    assert ps["s"]["posterior"] is None and ps["s"]["psens"] is None and ps["s"]["posterior_unreliable"]
+    assert "weak likelihood" not in ps["s"]["text"] and "not reliable" in ps["s"]["text"]
+    md = M.mechanisms_markdown(reg)
+    md = md[md.index("**Identifiability from the data alone"):]           # the study's table, not the panel
+    line = next(ln for ln in md.splitlines() if ln.startswith("| Canopy shading strength s"))
+    assert line.count("not reliable (Laplace poor)") == 2 and "weak likelihood" not in line
+    line = next(ln for ln in md.splitlines() if ln.startswith("| Mixing length L"))
+    assert "one-sided: bounded by the data on one side only (L ≥ 200 m; upper side open" in line
+    line = next(ln for ln in md.splitlines() if ln.startswith("| Impervious heat storage"))
+    assert "not assessable: no adjustment for spatial dependence" in line and "unadjusted one-sided bound 0 to 0.18" in line
+    assert "(open:" not in line
+
+
+def test_writeups_report_identifiability_from_the_register():
+    from sparc.core.writeup import methods_markdown, model_card_markdown
+
+    folds = _folds()
+    rep = _ident(folds, [_prow("L", ci=(200.0, 420.0), run=256.0, data=270.0, share=0.05),
+                         _prow("s", ci=(0.0, 0.49), run=0.335, data=0.0, share=0.93,
+                               at_bound={"side": "lower", "bound": 0.0},
+                               psens={"prior": 0.1, "likelihood": 0.1, "diagnosis": "prior_data_conflict",
+                                      "method": "profile"}),
+                         _prow("kappa_canopy", cls="structurally_non_identifiable", ci=(None, 20.0), run=2.3,
+                               data=19.5, share=0.99)])
+    m = {"name": "t", "config": _cfg(), **_m()}
+    m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    md = methods_markdown(m)
+    sec = md[md.index("## Identifiability"):]
+    sec = sec[:sec.index("\n## ", 3)]
+    assert "Raue et al. 2009" in sec and "23 cross-validation blocks of 2000 m" in sec
+    assert "Identified by the data alone: mixing length L (200 to 420 m)." in sec
+    assert "not excluded from zero: canopy shading strength s (0 to 0.49)" in sec
+    assert "Not identified by the data alone: shade saturation scale κ (structurally non-identifiable)." in sec
+    assert ("s = 0.335 in the full-data refit (run's fold mean 0.34), prior share 0.93; κ = 2.3 in the full-data "
+            "refit (run's fold mean 2), prior share 0.99") in sec
+    assert "power-scaling flags a potential prior–data conflict for s" in sec
+    assert "key parameters not identified: M1 (κ)" in sec and "against the fold jackknife" in sec
+    card = model_card_markdown(m)
+    csec = card[card.index("## Identifiability"):]
+    assert "- **What the data pin down.**" in csec and "- **What the penalty sets.**" in csec and "- **Conflict.**" in csec
+    # a study made for another fit: one line, no numbers from it
+    rep["run"]["fold_means"]["L"] = 300.0
+    m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=rep)
+    md = methods_markdown(m)
+    assert "## Identifiability\n\nNot used: identifiability study ignored" in md and "200 to 420" not in md
+    # no study: no section; a study the register predates: say so
+    m["mechanisms"] = M.evaluate(m, folds, _cfg(), identifiability=False)
+    assert "## Identifiability" not in methods_markdown(m) and "## Identifiability" not in model_card_markdown(m)
+    m["mechanisms"].pop("identifiability")
+    m["identifiability"] = rep
+    assert "the mechanism register predates it" in methods_markdown(m)
+
+
+# ---------------------------------------------------------------------------
 # integration: a small synthetic run, the results page and the CLI
 # ---------------------------------------------------------------------------
 

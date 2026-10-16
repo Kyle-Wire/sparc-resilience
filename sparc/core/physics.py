@@ -72,6 +72,16 @@ Only training labels enter the loss; q uses every cell's *features*, which
 is legitimate (features are not labels), so held-out predictions come from
 a model fitted on the training fold alone.
 
+Hooks for the identifiability study (:mod:`sparc.core.identifiability`, PHYSICS_PLAN W3)
+---------------------------------------------------------------------------------------
+``fit(..., fixed=, prior_scale=, init=)`` holds parameters at natural values, scales every prior term (0 =
+data-only) and warm-starts from given leaves; with their defaults the fit is unchanged, bit for bit (checked
+against a reference written before they existed).  :class:`FitTerms` (:meth:`PhysicsModel.fit_terms`) exposes
+the fit's objective, penalty and per-point residuals as explicit functions of every parameter, the linear
+coefficients included, for autograd; :meth:`PhysicsModel.to_natural`, :meth:`~PhysicsModel.to_leaf`,
+:meth:`~PhysicsModel.natural_slope` and :meth:`~PhysicsModel.natural_bounds` map the unconstrained leaves to
+natural units and back; :meth:`PhysicsModel.prior_terms` lists the nominal priors behind the penalty.
+
 Marginal effects: :meth:`PhysicsModel.source_points` returns the pointwise,
 uncentred q_raw (finite-differenceable per point) and
 :meth:`PhysicsModel.source_raster` its cell mean minus the fit-frame
@@ -146,6 +156,11 @@ _W_INIT = 50.0                   # W m⁻² water-cell sink
 _W_SCALE = 100.0
 _DEFAULT_ALBEDO = 0.15
 _ROLES = ("albedo", "canopy", "impervious", "ndvi", "elevation", "water_distance")
+#: Natural parameter (a :meth:`PhysicsModel._transform` key) → the fit leaf (``_init_params`` key) it is a
+#: function of.  The drift v = v_max·(ux, uy) has one leaf per axis.
+NATURAL_LEAF = {"L": "uL", "s": "s", "kc": "ukc", "c0": "uc0", "cw": "ucw", "a1": "a1", "a1n": "a1n",
+                "e0": "e0", "e1": "e1", "e2": "e2", "e3": "e3", "w": "w", "vx": "ux", "vy": "uy"}
+LEAF_NATURAL = {v: k for k, v in NATURAL_LEAF.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +259,89 @@ def _varpro(D, y, ridge: float = 1e-10):
     G = Dn.T @ Dn / n + ridge * torch.eye(D.shape[1], dtype=D.dtype)
     c = torch.linalg.solve(G, Dn.T @ y / n)
     return c / scale, Dn @ c
+
+
+class FitTerms:
+    """The physics fit's terms as explicit functions of every parameter (PHYSICS_PLAN W3).
+
+    :meth:`PhysicsModel._fit` minimises :meth:`evaluate`: MSE/var(y) of the variable-projection fit, plus
+    the penalty, plus the a ≥ 0 sign push.  After a fit, :meth:`PhysicsModel.fit_terms` rebuilds the same
+    terms on a label subset so an identifiability study can differentiate them (torch autograd, float64)
+    in the nonlinear leaves (unconstrained, ``_init_params``) *and* the linear coefficients
+    (:attr:`linear_names`: a, b[, γ], βx, βy) as explicit parameters (:meth:`residuals`), instead of
+    profiled out by variable projection.  ``natural`` maps :data:`NATURAL_LEAF` keys to values (floats or
+    tensors) that replace the leaf's natural value, e.g. a parameter held on its fit bound, where its leaf
+    would be infinite; per-call ``natural`` adds to the constructor's.  The source centring constant is
+    recomputed from the parameters at every call, as in the fit.
+    """
+
+    def __init__(self, model: "PhysicsModel", tf: dict, lin: np.ndarray, y: np.ndarray, idx: np.ndarray,
+                 has_elevation: bool, natural: dict | None = None):
+        import torch
+
+        self.model = model
+        self.tf = tf
+        self.idx = idx
+        self.lin_t = torch.as_tensor(lin[idx], dtype=torch.float64)
+        self.ones = torch.ones(idx.size, dtype=torch.float64)
+        self.yt = torch.as_tensor(y[idx], dtype=torch.float64)
+        var_y = float(self.yt.var()) if idx.size > 1 else 1.0
+        self.var_y = var_y if var_y > 0 else 1.0
+        self.cells = torch.as_tensor(model.grid.cell_index[idx])
+        self.natural = {k: torch.as_tensor(v, dtype=torch.float64) for k, v in (natural or {}).items()}
+        self.leaf_names = model._active_leaf_names(tf)
+        self.linear_names = ["a", "b"] + (["gamma"] if has_elevation else []) + ["beta_x", "beta_y"]
+        self.n = int(idx.size)
+
+    def transform(self, P: dict, natural: dict | None = None) -> dict:
+        """``_transform(P)`` with the natural overrides applied."""
+        import torch
+
+        T = self.model._transform(P)
+        if natural:
+            over = {**self.natural, **{k: torch.as_tensor(v, dtype=torch.float64) for k, v in natural.items()}}
+        else:
+            over = self.natural
+        if over:
+            T = {**T, **over}
+        return T
+
+    def phi(self, T: dict, solver=None):
+        """(φ = G⊛q at the labelled points, the centring constant used)."""
+        q, q_mean = self.model._q_raster_torch(self.tf, T)
+        solver = self.model._solver if solver is None else solver
+        return solver(q, T["L"], T["vx"], T["vy"]).reshape(-1)[self.cells], q_mean
+
+    def design(self, phi):
+        """Design matrix [φ, 1, (elev_c,) x_c, y_c] of the linear coefficients."""
+        import torch
+
+        return torch.cat([phi[:, None], self.ones[:, None], self.lin_t], dim=1)
+
+    def evaluate(self, P: dict, solver=None, prior_scale: float | None = None, natural: dict | None = None):
+        """The fit objective: (loss, linear coefficients, mse, T, q_mean) with the linear coefficients by
+        variable projection.  ``prior_scale`` scales the prior terms (0: data-only; the sign push and the
+        drift penalty stay)."""
+        import torch
+
+        T = self.transform(P, natural)
+        phi, q_mean = self.phi(T, solver)
+        D = self.design(phi)
+        coef, fit = _varpro(D, self.yt)
+        mse = torch.mean((fit - self.yt) ** 2)
+        # Physical sign: more absorbed/sensible heat must warm the air
+        # (a ≥ 0).  Push the search away from anti-physical optima.
+        neg = torch.clamp(-coef[0] * phi.detach().std(), min=0.0) ** 2 / self.var_y
+        return mse / self.var_y + self.model._penalty(P, T, self.tf, prior_scale) + 10.0 * neg, coef, mse, T, q_mean
+
+    def residuals(self, P: dict, coef, natural: dict | None = None):
+        """Per-point residuals y − D(θ)·coef for explicit linear coefficients ``coef`` (:attr:`linear_names`)."""
+        phi, _ = self.phi(self.transform(P, natural))
+        return self.yt - self.design(phi) @ coef
+
+    def penalty(self, P: dict, prior_scale: float | None = None, natural: dict | None = None):
+        """The fit's penalty term (:meth:`PhysicsModel._penalty`) at these parameters."""
+        return self.model._penalty(P, self.transform(P, natural), self.tf, prior_scale)
 
 
 def _lbfgs(params: list, objective: Callable, max_iter: int) -> float:
@@ -655,7 +753,8 @@ class PhysicsModel:
             "w": p(_inv_softplus(_W_INIT / _W_SCALE)),
         }
 
-    def _active_leaves(self, P: dict, feats: dict) -> list:
+    def _active_leaf_names(self, feats: dict) -> list[str]:
+        """Names of the fitted leaves (``_init_params`` keys) for these role features, in fit order."""
         names = ["uL", "e0"]
         if self.fit_advection:
             names += ["ux", "uy"]
@@ -666,7 +765,10 @@ class PhysicsModel:
         names += [e for e, r in (("e1", "ndvi"), ("e2", "canopy"), ("e3", "impervious")) if r in feats]
         if "water" in feats:
             names.append("w")
-        return [P[n] for n in names]
+        return names
+
+    def _active_leaves(self, P: dict, feats: dict) -> list:
+        return [P[n] for n in self._active_leaf_names(feats)]
 
     def _transform(self, P: dict) -> dict:
         import torch
@@ -692,7 +794,9 @@ class PhysicsModel:
             "w": _W_SCALE * F.softplus(P["w"]),
         }
 
-    def _penalty(self, P: dict, T: dict, feats: dict):
+    def _penalty(self, P: dict, T: dict, feats: dict, prior_scale: float | None = None):
+        """``prior_weight``·Σ z² over the source priors (× ``prior_scale`` when given: 0 switches every prior
+        term off, the EF and κ terms included) plus the drift penalty ``v_penalty``·|u|² (never scaled)."""
         import torch
 
         pen = 0.0
@@ -709,10 +813,130 @@ class PhysicsModel:
         for e, r in (("e1", "ndvi"), ("e2", "canopy"), ("e3", "impervious")):
             if r in feats:
                 pen = pen + ((T[e] - _EF_INIT[e]) / _EF_PRIOR_SD) ** 2
-        out = float(self.cfg["prior_weight"]) * pen
+        w = float(self.cfg["prior_weight"])
+        if prior_scale is not None:
+            w = w * float(prior_scale)
+        out = w * pen
         if self.fit_advection:
             out = out + float(self.cfg["v_penalty"]) * (P["ux"] ** 2 + P["uy"] ** 2)
         return out
+
+    def prior_terms(self, feats: dict) -> list[tuple[str, str, float, float]]:
+        """The nominal priors behind :meth:`_penalty` for these role features: ``(key, scale, mean, sd)`` with
+        ``key`` a :data:`NATURAL_LEAF` key and the prior N(mean, sd²) on the natural value (``scale`` "lin") or
+        on its logarithm ("log").  ``_penalty`` adds ``prior_weight``·Σ ((x − mean)/sd)² over exactly these
+        terms (a test checks it), so ``prior_weight`` scales them all; the drift penalty is not a prior here."""
+        out: list[tuple[str, str, float, float]] = []
+        if self.window == "day" and "canopy" in feats:
+            out.append(("s", "lin", *self.priors["s"]))
+            if self.shade_form == "sigmoid":
+                out += [("c0", "lin", 0.4, 0.3), ("cw", "log", math.log(0.1), 1.5)]
+            else:
+                out.append(("kc", "log", float(KAPPA_PRIOR[0]), float(KAPPA_PRIOR[1])))
+        if "impervious" in feats:
+            k = "a1" if self.window == "day" else "a1n"
+            out.append((k, "lin", *self.priors[k]))
+        out.append(("e0", "lin", _logit(_EF0), _EF_PRIOR_SD))
+        for e, r in (("e1", "ndvi"), ("e2", "canopy"), ("e3", "impervious")):
+            if r in feats:
+                out.append((e, "lin", float(_EF_INIT[e]), _EF_PRIOR_SD))
+        return out
+
+    # ------------------------------------------------ natural ↔ fit coordinates
+    def natural_bounds(self, key: str) -> tuple[float | None, float | None, str]:
+        """(low, high, kind) of a natural parameter (:data:`NATURAL_LEAF` key) as ``_transform`` maps its leaf:
+        "lin" a sigmoid onto [low, high], "log" a sigmoid onto [log low, log high], "floor" a scaled softplus
+        (≥ low, no upper bound), "free" a scaled identity."""
+        if key == "L":
+            return math.exp(self.L_lo), math.exp(self.L_hi), "log"
+        if key == "kc":
+            return float(KAPPA_BOUNDS[0]), float(KAPPA_BOUNDS[1]), "log"
+        if key == "cw":
+            return float(CW_BOUNDS[0]), float(CW_BOUNDS[1]), "log"
+        if key == "c0":
+            return float(C0_BOUNDS[0]), float(C0_BOUNDS[1]), "lin"
+        if key in ("s", "a1", "a1n"):
+            return 0.0, 1.0, "lin"
+        if key in ("e1", "e2", "e3", "w"):
+            return 0.0, None, "floor"
+        if key in ("e0", "vx", "vy"):
+            return None, None, "free"
+        raise KeyError(f"unknown physics parameter {key!r}")
+
+    def _leaf_scale(self, key: str) -> float:
+        return {"w": _W_SCALE, "vx": self.v_max, "vy": self.v_max}.get(key, 1.0)
+
+    def to_natural(self, key: str, u):
+        """Natural value of parameter ``key`` at leaf value ``u`` (a float, or a tensor: torch ops, so it stays
+        differentiable); the same map as :meth:`_transform`."""
+        import torch
+
+        lo, hi, kind = self.natural_bounds(key)
+        sc = self._leaf_scale(key)
+        if isinstance(u, torch.Tensor):
+            if kind == "lin":
+                return lo + (hi - lo) * torch.sigmoid(u)
+            if kind == "log":
+                return torch.exp(math.log(lo) + (math.log(hi) - math.log(lo)) * torch.sigmoid(u))
+            if kind == "floor":
+                return sc * torch.nn.functional.softplus(u)
+            return sc * u
+        u = float(u)
+        sig = 1.0 / (1.0 + math.exp(-u)) if u >= 0 else math.exp(u) / (1.0 + math.exp(u))
+        if kind == "lin":
+            return lo + (hi - lo) * sig
+        if kind == "log":
+            return math.exp(math.log(lo) + (math.log(hi) - math.log(lo)) * sig)
+        if kind == "floor":
+            return sc * (max(u, 0.0) + math.log1p(math.exp(-abs(u))))
+        return sc * u
+
+    def natural_slope(self, key: str, u: float) -> float:
+        """d natural / d leaf at leaf value ``u`` (the delta method's Jacobian)."""
+        lo, hi, kind = self.natural_bounds(key)
+        u = float(u)
+        sig = 1.0 / (1.0 + math.exp(-u)) if u >= 0 else math.exp(u) / (1.0 + math.exp(u))
+        if kind == "lin":
+            return (hi - lo) * sig * (1.0 - sig)
+        if kind == "log":
+            return self.to_natural(key, u) * (math.log(hi) - math.log(lo)) * sig * (1.0 - sig)
+        if kind == "floor":
+            return self._leaf_scale(key) * sig
+        return self._leaf_scale(key)
+
+    def to_leaf(self, key: str, x: float) -> float:
+        """Leaf value whose natural value is ``x`` (inverse of :meth:`to_natural`).  A value on or beyond a fit
+        bound maps to the leaf of a point 10⁻¹² (relative) inside it, where the leaf is still finite."""
+        lo, hi, kind = self.natural_bounds(key)
+        x = float(x)
+        if kind in ("lin", "log"):
+            a, b, v = (lo, hi, x) if kind == "lin" else (math.log(lo), math.log(hi), math.log(max(x, 1e-300)))
+            f = min(max((v - a) / (b - a), 1e-12), 1.0 - 1e-12)
+            return math.log(f / (1.0 - f))
+        sc = self._leaf_scale(key)
+        if kind == "floor":
+            return _inv_softplus(max(x / sc, 1e-12))
+        return x / sc
+
+    @property
+    def leaves(self) -> dict[str, float]:
+        """The fitted leaves (unconstrained, ``_init_params`` keys): a warm start for :meth:`fit` (``init``)."""
+        self._require_fit()
+        return {k: float(v) for k, v in self._P.items()}
+
+    def fit_terms(self, frame: pd.DataFrame, y: np.ndarray, idx: np.ndarray, coords: np.ndarray,
+                  natural: dict | None = None) -> "FitTerms":
+        """:class:`FitTerms` of this fitted model on the labels at ``idx`` (int indices or a boolean mask; the
+        feature constants, centring and solver are the fitted model's)."""
+        self._require_fit()
+        coords = np.asarray(coords, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64)
+        tr = np.asarray(idx)
+        tr = np.flatnonzero(tr) if tr.dtype == bool else tr.astype(np.int64)
+        tr = tr[np.isfinite(y[tr])]
+        feats = self._raw_features(frame)
+        return FitTerms(self, self._torch_features(feats), self._linear_columns(feats, coords), y, tr,
+                        "elevation" in feats, natural=natural)
 
     # -------------------------------------------------------------- source
     def _q_points_torch(self, tf: dict, T: dict):
@@ -788,13 +1012,23 @@ class PhysicsModel:
         cols.append(coords[:, 1] - self._xy_mean[1])
         return np.column_stack(cols)
 
-    def fit(self, frame: pd.DataFrame, y: np.ndarray, train_idx: np.ndarray, coords: np.ndarray) -> "PhysicsModel":
+    def fit(self, frame: pd.DataFrame, y: np.ndarray, train_idx: np.ndarray, coords: np.ndarray, *,
+            fixed: dict | None = None, prior_scale: float | None = None,
+            init: dict | None = None) -> "PhysicsModel":
         """Fit on the labels at ``train_idx`` (int indices or boolean mask);
-        the source uses every point's features."""
-        with _torch_threads(self.cfg.get("num_threads")):
-            return self._fit(frame, y, train_idx, coords)
+        the source uses every point's features.
 
-    def _fit(self, frame: pd.DataFrame, y: np.ndarray, train_idx: np.ndarray, coords: np.ndarray) -> "PhysicsModel":
+        Hooks for the identifiability study (PHYSICS_PLAN W3; all default to the plain fit, which they leave
+        bit-identical): ``fixed`` holds parameters at natural values (:data:`NATURAL_LEAF` keys, e.g.
+        ``{"s": 0.3}``; a value on a fit bound is allowed) and fits the rest; ``prior_scale`` multiplies every
+        prior term of the penalty (0 = data-only, 1 = the run's objective; the drift penalty and the a ≥ 0
+        sign push stay); ``init`` gives leaf values (``_init_params`` keys, e.g. :attr:`leaves` of another
+        fit) as the single start, replacing the multi-start over the drift."""
+        with _torch_threads(self.cfg.get("num_threads")):
+            return self._fit(frame, y, train_idx, coords, fixed=fixed, prior_scale=prior_scale, init=init)
+
+    def _fit(self, frame: pd.DataFrame, y: np.ndarray, train_idx: np.ndarray, coords: np.ndarray,
+             fixed: dict | None = None, prior_scale: float | None = None, init: dict | None = None) -> "PhysicsModel":
         import torch
 
         t0 = time.perf_counter()
@@ -819,45 +1053,52 @@ class PhysicsModel:
         self._prepare_grid_tensors()
         tf = self._torch_features(feats)
 
-        lin = self._linear_columns(feats, coords)[tr]
-        lin_t = torch.as_tensor(lin, dtype=torch.float64)
-        ones = torch.ones(tr.size, dtype=torch.float64)
-        yt = torch.as_tensor(y[tr], dtype=torch.float64)
-        var_y = float(yt.var()) if tr.size > 1 else 1.0
-        var_y = var_y if var_y > 0 else 1.0
-        tr_cells = torch.as_tensor(self.grid.cell_index[tr])
+        fixed_nat = self._check_fixed(fixed, tf)
+        terms = FitTerms(self, tf, self._linear_columns(feats, coords), y, tr, "elevation" in feats,
+                         natural=fixed_nat)
+        lin_t, ones, yt, var_y = terms.lin_t, terms.ones, terms.yt, terms.var_y
         solver = self._solver
 
         def evaluate(P, solver=solver):
-            T = self._transform(P)
-            q, q_mean = self._q_raster_torch(tf, T)
-            phi = solver(q, T["L"], T["vx"], T["vy"]).reshape(-1)[tr_cells]
-            D = torch.cat([phi[:, None], ones[:, None], lin_t], dim=1)
-            coef, fit = _varpro(D, yt)
-            mse = torch.mean((fit - yt) ** 2)
-            # Physical sign: more absorbed/sensible heat must warm the air
-            # (a ≥ 0).  Push the search away from anti-physical optima.
-            neg = torch.clamp(-coef[0] * phi.detach().std(), min=0.0) ** 2 / var_y
-            return mse / var_y + self._penalty(P, T, tf) + 10.0 * neg, coef, mse, T, q_mean
+            return terms.evaluate(P, solver, prior_scale)
 
         max_iter = int(self.cfg["max_iter"])
         starts = _v_starts(self.v_max, self.v_init, self.fit_advection)
+        make_params = self._init_params
+        held = {NATURAL_LEAF[k] for k in fixed_nat}
+        if init:
+            starts = [(float(init.get("ux", 0.0)) * self.v_max, float(init.get("uy", 0.0)) * self.v_max)]
+
+            def make_params(v0):
+                P0 = self._init_params(v0)
+                for k, v in init.items():
+                    if k in P0 and k not in held:
+                        P0[k] = torch.tensor(float(v), dtype=torch.float64, requires_grad=P0[k].requires_grad)
+                return P0
+
+        def free_leaves(P):
+            if not held:
+                return self._active_leaves(P, tf)
+            return [P[n] for n in self._active_leaf_names(tf) if n not in held]
+
         # Start on the central operator (the same as the hybrid one wherever every cell Péclet number < 1)
         # and continue on the model's own where they differ: _warm_solver.
         warm = _warm_solver(solver, self.fit_advection)
         loss, P, losses = _multistart(
-            starts, self._init_params, lambda P: self._active_leaves(P, tf), lambda P: evaluate(P, warm)[0], max_iter,
+            starts, make_params, free_leaves, lambda P: evaluate(P, warm)[0], max_iter,
             int(self.cfg.get("start_iter") or 0))
         continued = False
         if warm is not solver:
             with torch.no_grad():
-                T0 = self._transform(P)
+                T0 = terms.transform(P)
             continued = _continue_on_scheme(self._scheme(), float(T0["L"]), float(T0["vx"]), float(T0["vy"]), self.dx)
             if continued:
-                loss = _lbfgs(self._active_leaves(P, tf), lambda: evaluate(P)[0], max_iter)
+                loss = _lbfgs(free_leaves(P), lambda: evaluate(P)[0], max_iter)
         with torch.no_grad():
             _, coef, mse, T, q_mean = evaluate(P)
         self._P = {k: v.detach().clone() for k, v in P.items()}
+        for k, v in fixed_nat.items():             # the held leaves at their natural values (inside the bound)
+            self._P[NATURAL_LEAF[k]] = torch.tensor(self.to_leaf(k, float(v)), dtype=torch.float64)
         self._T = {k: float(v.detach()) for k, v in T.items()}
         self._q_mean = float(q_mean)
         c = coef.numpy()
@@ -900,9 +1141,24 @@ class PhysicsModel:
         self.fit_info = {"loss": float(loss), "start_losses": losses, "starts": starts,
                          "continued_on_scheme": bool(continued),
                          "n_train": int(tr.size), "seconds": time.perf_counter() - t0, "pad_cells": int(self.pad)}
+        if fixed_nat or prior_scale is not None or init:
+            self.fit_info["hooks"] = {"fixed": {k: float(v) for k, v in fixed_nat.items()},
+                                      "prior_scale": None if prior_scale is None else float(prior_scale),
+                                      "init": bool(init)}
         log.info("physics: L=%.0f m v=(%.0f, %.0f) m a=%.3g train RMSE %.3f (%.1f s)", self._T["L"],
                  self._T["vx"], self._T["vy"], self.a, self.train_rmse, self.fit_info["seconds"])
         return self
+
+    def _check_fixed(self, fixed: dict | None, tf: dict) -> dict:
+        """``fit(fixed=...)`` as {natural key: float}; every key must be an active parameter of this fit."""
+        if not fixed:
+            return {}
+        active = {LEAF_NATURAL[n] for n in self._active_leaf_names(tf)}
+        bad = sorted(set(fixed) - active)
+        if bad:
+            raise ValueError(f"PhysicsModel.fit(fixed=...): {bad} are not fitted parameters of this model "
+                             f"(active: {sorted(active)})")
+        return {k: float(v) for k, v in fixed.items()}
 
     def _require_fit(self) -> None:
         if not self._fitted:

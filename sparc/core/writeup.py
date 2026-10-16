@@ -93,6 +93,169 @@ def _mechanism_facts(m: dict) -> dict | None:
             "panel": {r["key"]: r for r in ((reg.get("panel") or {}).get("rows") or [])}}
 
 
+def _sig(v, unit: str = "") -> str:
+    from sparc.core.mechanisms import _sig as sig
+
+    return sig(v, unit)
+
+
+def _span(p: dict) -> str:
+    """The block-sandwich 95% interval, and the adjacent-block one when it differs (the class rests on the wider)."""
+    ci = p.get("ci95") or [None, None]
+    u = f" {p['unit']}" if p.get("unit") in ("m", "W/m²") else ""
+
+    def one(c):
+        return f"{_sig(c[0]) if c[0] is not None else 'open'} to {_sig(c[1]) if c[1] is not None else 'open'}{u}"
+
+    nb = p.get("ci95_neighbours")
+    if isinstance(nb, (list, tuple)) and len(nb) == 2 and list(nb) != list(ci):
+        return f"{one(ci)}; {one(nb)} with adjacent blocks"
+    return one(ci)
+
+
+def _identifiability_facts(m: dict) -> dict | None:
+    """What the run's identifiability study (PHYSICS_PLAN W3) says, from the mechanism register's
+    ``identifiability`` block, which uses the study only when it belongs to the run.  None without a study."""
+    reg = m.get("mechanisms") if isinstance(m.get("mechanisms"), dict) else {}
+    ib = reg.get("identifiability") if isinstance(reg.get("identifiability"), dict) else None
+    if not ib or ib.get("status") == "absent":
+        if isinstance(m.get("identifiability"), dict) and m["identifiability"]:
+            return {"status": "unregistered"}
+        return None
+    if ib.get("status") == "used" and ib.get("study_status") == "disabled":
+        # a register written before PHYSICS_PLAN W3 review X16 marked a study that profiled nothing as used
+        from sparc.core.mechanisms import DISABLED_NOTE
+
+        ib = {**ib, "status": "disabled", "note": DISABLED_NOTE}
+    if ib.get("status") != "used":
+        return {"status": ib.get("status"), "note": ib.get("note"),
+                "warnings": [str(w) for w in ib.get("warnings") or []] if ib.get("status") == "disabled" else []}
+    from sparc.core.mechanisms import _SYM, post_tag
+
+    ps = [p for p in (ib.get("parameters") or {}).values() if p.get("in_model")]
+
+    def sym(p):
+        return _SYM.get(p["key"], p["key"])
+
+    def item(p):
+        return f"{_lc(p['label'])} ({_span(p)})"
+
+    out = {"status": "used", "block": ib,
+           "identified": [item(p) for p in ps if p["class"] == "identified" and not p.get("reaches_zero")],
+           "zero": [item(p) for p in ps if p["class"] in ("identified", "one_sided") and p.get("reaches_zero")],
+           "not_identified": [f"{_lc(p['label'])} ("
+                              + (f"one-sided: {p['summary']}" if p["class"] == "one_sided" and p.get("summary")
+                                 else p["class_label"]) + ")" for p in ps
+                              if p["class"] in ("practically_non_identifiable", "structurally_non_identifiable",
+                                                "not_assessable")
+                              or (p["class"] == "one_sided" and not p.get("reaches_zero"))],
+           # the prior share describes the study's full-data refit of the run's objective, not the run's own fold
+           # mean: both are named (PHYSICS_PLAN W3 review X15)
+           "penalty": [f"{sym(p)} = {_sig(p['estimate_run'])} in the full-data refit"
+                       + (f" (run's fold mean {_sig(p['run_value'])})" if p.get("run_value") is not None else "")
+                       + f", prior share {float(p['prior_share_run']):.2f}"
+                       for p in ps if p.get("prior_share_run") is not None and float(p["prior_share_run"]) > 0.5
+                       and p.get("estimate_run") is not None],
+           "conflict": [f"{sym(p)} (p = {float(p['conflict']['p']):.2g})" for p in ps
+                        if (p.get("conflict") or {}).get("flag") and p["conflict"].get("p") is not None],
+           # Kallioinen et al. (2024)'s reading (mechanisms._psens_reading); unreliable ones are not findings
+           # a non-Laplace posterior (1-D profile, or the prior of a parameter without information) is tagged
+           "psens": {d: [sym(p) + post_tag((p.get("psens") or {}).get("method")) for p in ps
+                         if ((p.get("psens") or {}).get("reading") or (p.get("psens") or {}).get("diagnosis")) == d]
+                     for d in ("prior_data_conflict", "weak_likelihood", "likelihood_only_weak")},
+           "psens_unreliable": [sym(p) for p in ps if p.get("posterior_unreliable")],
+           "laplace_poor": ib.get("laplace_adequate") is False,
+           "gated": [r["id"] for r in reg.get("rows") or [] if r.get("identifiability_gate")],
+           "blocked": [f"{mm['id']} ({', '.join(_SYM.get(k, k) for k in mm['identifiability']['not_identified'])})"
+                       for mm in reg.get("mechanisms") or []
+                       if (mm.get("identifiability") or {}).get("not_identified")],
+           "sandwich": [(r["label"], r["sandwich"], r) for r in ((reg.get("panel") or {}).get("rows") or [])
+                        if r.get("sandwich")],
+           "warnings": [str(w) for w in ib.get("warnings") or []]}
+    return out
+
+
+def _warnings_text(ws: list[str]) -> str | None:
+    """The study's warnings as one sentence (PHYSICS_PLAN W3 review X17: they qualify its numbers)."""
+    ws = [w.strip().rstrip(".") for w in ws or [] if str(w).strip()]
+    if not ws:
+        return None
+    return (f"The study raised {len(ws)} warning{'s' if len(ws) > 1 else ''}, which qualify these results: "
+            + "; ".join(ws) + ".")
+
+
+def _cap(text) -> str:
+    text = str(text or "")
+    return text[:1].upper() + text[1:]
+
+
+def _lc(label: str) -> str:
+    return label[:1].lower() + label[1:] if label else label
+
+
+def _identifiability_text(f: dict) -> list[str]:
+    """Sentences of the methods section (also the model card's bullets)."""
+    from sparc.core.mechanisms import covariance_text, posterior_text
+
+    ib = f["block"]
+    out = {"method": (f"Which physics parameters this map pins down was tested by profile likelihood (Raue et al. 2009) "
+                      f"on all {int(ib['n']):,} labelled cells" if ib.get("n") else
+                      "Which physics parameters this map pins down was tested by profile likelihood (Raue et al. 2009)")
+           + (f" ({_sig(ib['coarse_m'])} m cells)" if ib.get("coarse_m") else "")
+           + " with every prior off, " + covariance_text(ib) + "; 95% intervals are where the adjusted profile "
+             "statistic stays below 3.84 (2.71 for a one-sided bound from an estimate on its fit bound, Self & Liang "
+             "1987). The priors' influence on the run is the penalty's share of the run "
+             "objective's curvature in each parameter (prior share), power-scaling sensitivity of the calibrated "
+             "posterior (" + posterior_text(ib, short=True) + "), read as Kallioinen et al. "
+             "(2024) do (a prior sensitivity of 0.05 or more marks an informative prior, a likelihood sensitivity "
+             "below 0.05 a weak likelihood, both at 0.05 or more a potential prior–data conflict), and the Evans & "
+             "Moshonov (2006) prior–data conflict check."}
+    out["pinned"] = ("Identified by the data alone: " + "; ".join(f["identified"]) + "." if f["identified"] else
+                     "No physics parameter is identified away from its limits by the data alone.")
+    if f["zero"]:
+        out["pinned"] += " Bounded by the data but not excluded from zero: " + "; ".join(f["zero"]) + "."
+    if f["not_identified"]:
+        out["pinned"] += " Not identified by the data alone: " + "; ".join(f["not_identified"]) + "."
+    out["penalty"] = ("Set mostly by the penalty (prior share above one half: the penalty supplies most of the "
+                      "curvature of the run's objective, refitted on all labelled cells): " + "; ".join(f["penalty"])
+                      + "." if f["penalty"] else "No parameter's value is set mostly by the penalty.")
+    cf = []
+    if f["conflict"]:
+        cf.append("the Evans–Moshonov check flags a prior–data conflict for " + ", ".join(f["conflict"]))
+    else:
+        cf.append("the Evans–Moshonov check flags no prior–data conflict (it cannot test a parameter for which the "
+                  "data give no interior estimate, on a fit bound or not identified, or that they bound on one side "
+                  "only)")
+    if f["psens"]["prior_data_conflict"]:
+        cf.append("power-scaling flags a potential prior–data conflict for " + ", ".join(f["psens"]["prior_data_conflict"]))
+    if f["psens"]["weak_likelihood"]:
+        cf.append("power-scaling flags an informative prior with a weak likelihood (prior sensitivity 0.05 or more, "
+                  "likelihood sensitivity below 0.05) for " + ", ".join(f["psens"]["weak_likelihood"]))
+    if f["psens"]["likelihood_only_weak"]:
+        cf.append("power-scaling flags a weak likelihood (likelihood sensitivity below 0.05) for "
+                  + ", ".join(f["psens"]["likelihood_only_weak"]))
+    # power-scaling that rests on a poor Laplace approximation is not in the register (flagged unreliable by the
+    # study), so the flags listed here are reliable ones (e.g. a 1-D profile posterior's); say what was left out
+    out["conflict"] = "Conflict: " + "; ".join(cf) + (
+        " (power-scaling of the Laplace posterior is not reliable and not reported"
+        + (f" for {', '.join(f['psens_unreliable'])}" if f["psens_unreliable"] else "")
+        + ": the Laplace approximation is poor for this run; the profile intervals do not rely on it)"
+        if f["laplace_poor"] else "") + "."
+    gate = ("A mechanism signature cannot be Supported while a key parameter is not identified by the data alone"
+            + (f" (key parameters not identified: {', '.join(f['blocked'])})" if f["blocked"] else "")
+            + (f"; downgraded to Not testable: {', '.join(f['gated'])}" if f["gated"] else "") + ".")
+    out["gate"] = gate
+    sw = []
+    for label, s, r in f["sandwich"]:
+        sw.append(f"{_lc(label)} {_sig(s['value'])} ± {_sig(s['se'])} {r['unit']} ({s.get('kind') or 'block sandwich'}, "
+                  "full-data fit) "
+                  f"against the fold jackknife {_sig(r.get('value'))} ± {_sig(r.get('se'))} {r['unit']}"
+                  + (" — they differ by more than a factor of 2" if s.get("note") else ""))
+    out["sandwich"] = ("Uncertainty of the physical quantities: " + "; ".join(sw) + "; the range tests use the "
+                       "jackknife." if sw else "")
+    return out
+
+
 def _panel_value(row: dict | None, nd: int = 1) -> str | None:
     if not row or row.get("value") is None:
         return None
@@ -172,6 +335,21 @@ def methods_markdown(m: dict) -> str:
               + (f" Not testable with this data: {mf['not_testable']}." if mf["not_testable"] else "")
               + (f" Not yet tested (workstreams {', '.join(mf['workstreams'])} of the physics plan): "
                  f"{mf['not_yet_tested']}." if mf["not_yet_tested"] else "")]
+    idf = _identifiability_facts(m)
+    if idf:
+        L += ["", "## Identifiability", ""]
+        if idf["status"] == "used":
+            t = _identifiability_text(idf)
+            L += [" ".join(x for x in (t["method"], t["pinned"], t["penalty"], t["conflict"], t["gate"], t["sandwich"],
+                                       _warnings_text(idf["warnings"])) if x) + " Details: `identifiability.json`."]
+        elif idf["status"] == "unregistered":
+            L += ["An identifiability study (`identifiability.json`) exists, but the mechanism register predates it: "
+                  "re-run `sparc core mechanisms` to use it."]
+        elif idf["status"] == "disabled":
+            L += [" ".join(x for x in (f"Not done. {_cap(idf.get('note'))}.", _warnings_text(idf.get("warnings")))
+                           if x)]
+        else:
+            L += [f"Not used: {idf.get('note')}."]
     if cv:
         L += ["", "## Validation", "",
               f"Spatial-block cross-validation (Roberts et al. 2017): {cv.get('n_blocks')} square blocks of "
@@ -321,6 +499,30 @@ def model_card_markdown(m: dict) -> str:
             L += [f"- Not testable with this data: {mf['not_testable']}."]
         if mf["not_yet_tested"]:
             L += [f"- Not yet tested: {mf['not_yet_tested']} (workstreams {', '.join(mf['workstreams'])})."]
+    idf = _identifiability_facts(m)
+    if idf:
+        L += ["", "## Identifiability", ""]
+        if idf["status"] == "used":
+            t = _identifiability_text(idf)
+            from sparc.core.mechanisms import covariance_text
+
+            L += ["Profile likelihood on all labelled cells with the priors off, "
+                  + covariance_text(idf["block"], short=True) + " (`identifiability.json`).", "",
+                  f"- **What the data pin down.** {t['pinned']}", f"- **What the penalty sets.** {t['penalty']}",
+                  f"- **{t['conflict'].split(':', 1)[0]}.**{t['conflict'].split(':', 1)[1]}", f"- {t['gate']}"]
+            if t["sandwich"]:
+                L += [f"- {t['sandwich']}"]
+            if idf["warnings"]:
+                L += [f"- **Warnings.** {_warnings_text(idf['warnings'])}"]
+        elif idf["status"] == "unregistered":
+            L += ["- An identifiability study exists, but the mechanism register predates it: re-run "
+                  "`sparc core mechanisms`."]
+        elif idf["status"] == "disabled":
+            L += [f"- Not done. {_cap(idf.get('note'))}."]
+            if idf.get("warnings"):
+                L += [f"- **Warnings.** {_warnings_text(idf['warnings'])}"]
+        else:
+            L += [f"- Not used: {idf.get('note')}."]
     L += ["", "## Noise floor", "",
           f"- Target rounding noise ≈ {_f(qa.get('target_rounding_noise_sd'))} {u} "
           f"({_f(100 * (qa.get('target_fraction_integer_valued') or 0), 0)}% whole-degree values)."]

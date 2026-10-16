@@ -238,7 +238,7 @@ def views_label(kind: str) -> str:
     return {"placebo": "Placebo study", "simcheck": "Simulation check", "multiverse": "Multiverse",
             "reproduce": "Reproduction", "benchmark": "Effect benchmark", "baselines": "Reference baselines",
             "planner": "Planner pack", "emulator": "Scenario emulator", "uncertainty": "Uncertainty report",
-            "writeup": "Methods & model card"}.get(kind, kind)
+            "writeup": "Methods & model card", "identifiability": "Physics identifiability"}.get(kind, kind)
 
 
 # ---------------------------------------------------------------------------

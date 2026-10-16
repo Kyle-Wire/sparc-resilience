@@ -62,10 +62,40 @@ list gives no night-time range).  So both tests need a day window inside the aft
 from the forcing's local hours), and r_a needs the campaign's SW↓: with the generic default forcing,
 r_a ∝ 1/SW↓_assumed says nothing about the air.
 
+Identifiability from the data alone (W3)
+----------------------------------------
+When the run has an identifiability study (:mod:`sparc.core.identifiability`: ``identifiability.json`` / the
+manifest's ``identifiability`` section; ``sparc core identifiability -r RUN_DIR``), the register uses it:
+
+* **It must belong to the run** (:func:`_ident_mismatch`): the same number of cells, CV design, input data (when
+  both record its SHA-256), target units and window, and the same physics fit — the fold means of the profiled
+  parameters the study recorded equal this run's.  Otherwise it is ignored, with the reason in
+  ``reg["identifiability"]["note"]`` (a re-run that refits the physics leaves an earlier study behind).
+* **Panel rows** of profiled parameters gain the data-only 95% profile intervals (Raue et al. 2009) adjusted for
+  spatial dependence two ways: Chandler & Bate (2007)'s block sandwich with the CV blocks as independent clusters
+  (the default, ``ci95``), and, as a sensitivity, the same with the score cross-products of adjacent blocks
+  added (a block-level spatial HAC in the manner of Conley 1999, ``ci95_neighbours``).  The identifiability
+  class rests on the wider of the two per side.  They also gain the prior's share of the run objective's curvature,
+  the pull, the calibrated posterior (Ribatet, Cooley & Davison 2012), power-scaling sensitivity with its
+  diagnosis (Kallioinen et al. 2024) and the prior–data conflict p (Evans & Moshonov 2006).
+* **Verdict rule** (plan W3): a signature cannot be Supported when a key parameter of its mechanism
+  (:data:`KEY_PARAMS`) is practically or structurally non-identifiable from the data alone, whatever its point
+  estimate; it becomes Not testable, with the reason.  The rule never makes a signature Contradicted.
+* **r_a and γ** show the sandwich SE of the full-data reference fit (the block sandwich unless the study was run
+  with ``score_covariance: neighbours``) beside the fold jackknife.  The verdict
+  stays on the jackknife; a note is added when the two SEs differ by more than :data:`SANDWICH_FACTOR` (an
+  operational threshold of the W3 task, not a published one).
+* **Lever statements** cite, in plain words, the identifiability of the parameters their role acts through
+  (:data:`ROLE_PARAMS`): whether the data alone pin the parameter down or do not exclude zero, and whether the
+  study's full-data refit of the run's objective is set mostly by the penalty (prior share above one half: the
+  penalty supplies most of the run objective's curvature in it).  The run's own value is its fold mean
+  (``run_value``, as the panel shows); the refit (``estimate_run``) is always labelled "full-data refit".
+
 Everything here is a pure function of plain dicts — the manifest, the per-fold physics parameters
-(``physics.json``) and the config — so old run directories can be re-evaluated (``sparc core mechanisms
--r RUN_DIR``; :func:`mechanisms_for_run` is the only function that touches files).  Ranges and citations
-come from the verified reference list of ``docs/roadmap/PHYSICS_PLAN.md``; never add a range without one.
+(``physics.json``), the config and the identifiability report — so old run directories can be re-evaluated
+(``sparc core mechanisms -r RUN_DIR``; :func:`mechanisms_for_run` is the only function that touches files).
+Ranges and citations come from the verified reference list of ``docs/roadmap/PHYSICS_PLAN.md``; never add a
+range without one.
 """
 
 from __future__ import annotations
@@ -76,8 +106,9 @@ import math
 from pathlib import Path
 
 __all__ = ["VERDICTS", "VERDICT_LABELS", "TARGET_KINDS", "REGISTER", "REFERENCES", "RA_RANGE", "LAPSE_BAND",
-           "AFTERNOON_LOCAL", "to_kelvin_factor", "rho_cp", "forcing_norm", "physical_parameters", "evaluate",
-           "mechanisms_markdown", "forcing_t2m_K", "mechanisms_for_run"]
+           "AFTERNOON_LOCAL", "KEY_PARAMS", "ROLE_PARAMS", "NOT_IDENTIFIED", "IDENT_LABELS", "SANDWICH_FACTOR",
+           "to_kelvin_factor", "rho_cp", "forcing_norm", "physical_parameters", "evaluate", "mechanisms_markdown",
+           "identifiability_markdown_table", "forcing_t2m_K", "mechanisms_for_run", "run_identifiability"]
 
 SCHEMA = 1
 
@@ -171,7 +202,82 @@ REFERENCES = {
                    "doi:10.1126/science.263.5147.641",
     "mooij2013": "Mooij, J.M., Janzing, D. & Schölkopf, B. (2013). From ordinary differential equations to "
                  "structural causal models: the deterministic case. Proc. UAI 29, 440–448. arXiv:1304.7920",
+    # W3 identifiability study (sparc.core.identifiability.REFERENCES; a test checks they agree)
+    "raue2009": "Raue, A., Kreutz, C., Maiwald, T., Bachmann, J., Schilling, M., Klingmüller, U. & Timmer, J. "
+                "(2009). Structural and practical identifiability analysis of partially observed dynamical models "
+                "by exploiting the profile likelihood. Bioinformatics 25(15), 1923–1929. "
+                "doi:10.1093/bioinformatics/btp358",
+    "chandler2007": "Chandler, R.E. & Bate, S. (2007). Inference for clustered data using the independence "
+                    "loglikelihood. Biometrika 94(1), 167–183. doi:10.1093/biomet/asm015",
+    "ribatet2012": "Ribatet, M., Cooley, D. & Davison, A.C. (2012). Bayesian inference from composite likelihoods, "
+                   "with an application to spatial extremes. Statistica Sinica 22, 813–845. "
+                   "doi:10.5705/ss.2009.248",
+    "kallioinen2024": "Kallioinen, N., Paananen, T., Bürkner, P.-C. & Vehtari, A. (2024). Detecting and diagnosing "
+                      "prior and likelihood sensitivity with power-scaling. Statistics and Computing 34, 57. "
+                      "doi:10.1007/s11222-023-10366-5",
+    "evans2006": "Evans, M. & Moshonov, H. (2006). Checking for prior-data conflict. Bayesian Analysis 1(4), "
+                 "893–914. doi:10.1214/06-BA129",
+    "conley1999": "Conley, T.G. (1999). GMM estimation with cross sectional dependence. Journal of Econometrics "
+                  "92(1), 1–45. doi:10.1016/S0304-4076(98)00084-0",
+    "selfliang1987": "Self, S.G. & Liang, K.-Y. (1987). Asymptotic properties of maximum likelihood estimators and "
+                     "likelihood ratio tests under nonstandard conditions. Journal of the American Statistical "
+                     "Association 82(398), 605–610",
 }
+_IDENT_REFS = ("raue2009", "chandler2007", "ribatet2012", "kallioinen2024", "evans2006", "conley1999",
+               "selfliang1987")
+
+# --------------------------------------------------------------------------- W3 identifiability (constants)
+#: The key parameters of each mechanism, as keys of the identifiability report.  A signature cannot be Supported
+#: while one of its mechanism's nonlinear key parameters is not identified by the data alone (plan W3).  The linear
+#: coefficients ``a`` (M6, r_a) and ``gamma`` (M7) have no profile class: the study gives their block-sandwich SE,
+#: shown beside the fold jackknife, which keeps the verdict.
+KEY_PARAMS = {"M1": ("s", "kappa_canopy", "shade_c0", "shade_width"), "M2": ("e0", "e1", "e2", "e3"),
+              "M3": ("a1", "a1n"), "M4": ("L",), "M5": ("v",), "M6": ("a",), "M7": ("gamma",), "M8": ("w",)}
+#: The source parameters each lever's physics role acts through; its lever statement cites their identifiability.
+#: Albedo has none of its own: it enters through absorbed sunlight, scaled by the gain a and spread by L.
+ROLE_PARAMS = {"canopy": ("s", "kappa_canopy", "shade_c0", "shade_width", "e2"), "impervious": ("a1", "a1n", "e3"),
+               "ndvi": ("e1",), "water_distance": ("w",)}
+#: Raue et al. (2009)'s classes that block Supported: a parameter bounded on one side only is practically
+#: non-identifiable on the other (``one_sided``), and one whose adjustment is not computable is not assessable
+NOT_IDENTIFIED = ("practically_non_identifiable", "structurally_non_identifiable", "not_assessable", "one_sided")
+IDENT_LABELS = {"identified": "identified", "practically_non_identifiable": "practically non-identifiable",
+                "one_sided": "one-sided: bounded by the data on one side only",
+                "not_assessable": "not assessable: no adjustment for spatial dependence is computable (an estimate "
+                                  "on its fit bound, or fewer CV blocks than parameters)",
+                "structurally_non_identifiable": "structurally non-identifiable", "not_fitted": "not fitted"}
+#: Short plain-language labels (the results card's pills)
+IDENT_SHORT = {"identified": "identified", "one_sided": "one side only", "practically_non_identifiable": "not identified",
+               "structurally_non_identifiable": "not identified (flat)", "not_assessable": "not assessable",
+               "not_fitted": "not fitted"}
+#: Kallioinen et al. (2024)'s reading of power-scaling sensitivity (threshold 0.05, as ArviZ / priorsense): a prior
+#: sensitivity ≥ 0.05 marks an informative prior, a likelihood sensitivity < 0.05 a weak (non-informative)
+#: likelihood, and both ≥ 0.05 a potential prior–data conflict.
+PSENS_THRESHOLD = 0.05
+PSENS_READING = ("a prior sensitivity of 0.05 or more marks an informative prior; a likelihood sensitivity below "
+                 "0.05 marks a weak (non-informative) likelihood; both at 0.05 or more is a potential prior–data "
+                 "conflict (Kallioinen et al. 2024)")
+#: Parameters whose physical lower limit is 0 (a fraction, a non-negative slope, sink or drift;
+#: ``identifiability.PHYSICAL_LIMITS``): an interval that reaches 0 means the data do not exclude "no effect".
+_ZERO_LIMIT = ("s", "a1", "a1n", "e1", "e2", "e3", "w", "v")
+_SYM = {"L": "L", "v": "|v|", "s": "s", "kappa_canopy": "κ", "shade_c0": "c₀", "shade_width": "the shade width",
+        "a1": "a₁", "a1n": "a₁ₙ", "e0": "e₀", "e1": "e₁", "e2": "e₂", "e3": "e₃", "w": "w"}
+#: report key → parameter-panel row key, where they differ (the panel shows σ(e₀), the report e₀ itself)
+_PANEL_KEY = {"e0": "ef0"}
+_PSENS_TEXT = {"prior_data_conflict": "power-scaling flags a potential prior–data conflict (prior and likelihood "
+                                      "sensitivity both 0.05 or more)",
+               "weak_likelihood": "power-scaling flags an informative prior with a weak likelihood (prior sensitivity "
+                                  "0.05 or more, likelihood sensitivity below 0.05)",
+               "likelihood_only_weak": "power-scaling flags a weak likelihood (likelihood sensitivity below 0.05)"}
+_PSENS_SHORT = {"prior_data_conflict": "potential prior–data conflict",
+                "weak_likelihood": "informative prior, weak likelihood",
+                "likelihood_only_weak": "weak likelihood"}
+#: The register's note on a study that profiled nothing (``status: "disabled"``)
+DISABLED_NOTE = ("the identifiability study profiled nothing: its data-only physics fit (every prior off) is "
+                 "anti-physical (gain a ≤ 0), so no parameter's identifiability, prior share or prior sensitivity was "
+                 "assessed (re-run `sparc core identifiability` after the physics fit changes)")
+#: r_a and γ: the block-sandwich SE of the full-data reference and the fold jackknife SE are noted when they differ
+#: by more than this factor (an operational threshold of the W3 task, not a published one).
+SANDWICH_FACTOR = 2.0
 
 # --------------------------------------------------------------------------- the register (plan §4)
 _ONE_WINDOW = "one time window; needs the multi-window fit (W6)"
@@ -842,23 +948,28 @@ def _panel(ctx: dict) -> dict:
     if pinned:
         notes.append(f"At a fit bound in at least one fold: {', '.join(pinned)}. A value stopped by a fit bound is "
                      "not an estimate, so these parameters are not identified by this run whatever their SE (plan F6); "
-                     "the W3 profile likelihood will test identifiability properly.")
+                     + ("the W3 profile likelihood (identifiability columns) tests what the data alone pin down."
+                        if ctx.get("ident") else "the W3 profile likelihood will test identifiability properly."))
     ra_row = next((r for r in rows if r["key"] == "r_a"), None)
-    return {"rows": rows, "physics_status": status, "n_folds": F.n, "n_active": F.n_active, "source": F.source,
-            "window": window, "units": ctx["units"], "to_kelvin": fK, "t2m_K": t_K, "t2m_note": t_note,
-            "t2m_known": t_known, "rho_cp": rcp, "pressure_Pa": P_STD, "norm": norm, "norm_label": norm_label,
-            "basis": basis, "target_kind": kind, "forcing_known": forcing_ok, "forcing_note": forcing_note,
-            "afternoon": afternoon,
-            "timescales": _timescales(ra_row, v, ph, None if forcing_ok else f"the generic default {norm_label}"),
-            "identified_products": "One afternoon map identifies r_a = τ/h and L² = Kτ, not τ, h and K separately "
-                                   "(F4); the panel does not split them.",
-            "identifiability": "not yet tested: W3 profile likelihood",
-            "prior_sensitivity": "not yet tested: W3 power-scaling",
-            "uncertainty": "mean ± delete-a-group jackknife SE over the fold models (SE = sd·√(K−1) = s·(K−1)/√K; "
-                           "with folds disabled, s is the sample sd of the remaining folds and K stays the run's "
-                           "number of folds)",
-            "at_bound": [r["key"] for r in rows if r.get("at_bound")],
-            "notes": notes}
+    P = {"rows": rows, "physics_status": status, "n_folds": F.n, "n_active": F.n_active, "source": F.source,
+         "window": window, "units": ctx["units"], "to_kelvin": fK, "t2m_K": t_K, "t2m_note": t_note,
+         "t2m_known": t_known, "rho_cp": rcp, "pressure_Pa": P_STD, "norm": norm, "norm_label": norm_label,
+         "basis": basis, "target_kind": kind, "forcing_known": forcing_ok, "forcing_note": forcing_note,
+         "afternoon": afternoon,
+         "timescales": _timescales(ra_row, v, ph, None if forcing_ok else f"the generic default {norm_label}"),
+         "identified_products": "One afternoon map identifies r_a = τ/h and L² = Kτ, not τ, h and K separately "
+                                "(F4); the panel does not split them.",
+         "identifiability": "not yet tested: W3 profile likelihood",
+         "prior_sensitivity": "not yet tested: W3 power-scaling",
+         "identifiability_study": False,
+         "uncertainty": "mean ± delete-a-group jackknife SE over the fold models (SE = sd·√(K−1) = s·(K−1)/√K; "
+                        "with folds disabled, s is the sample sd of the remaining folds and K stays the run's "
+                        "number of folds)",
+         "at_bound": [r["key"] for r in rows if r.get("at_bound")],
+         "notes": notes}
+    if ctx.get("ident"):
+        _ident_panel(P, ctx["ident"])
+    return P
 
 
 def _ra_pinned(ra: dict) -> str | None:
@@ -916,6 +1027,451 @@ def _timescales(ra: dict | None, v: dict | None, ph: dict, forcing_assumed: str 
     return out
 
 
+# --------------------------------------------------------------------------- W3 identifiability (the study)
+def _sig(v, unit: str = "") -> str:
+    """Three significant digits (none after the point from 100 up), 0 for |v| < 5·10⁻⁴ (a value on a softplus
+    floor), a true minus sign."""
+    if not _num(v):
+        return "—"
+    x = float(v)
+    s = "0" if abs(x) < 5e-4 else (f"{x:.0f}" if abs(x) >= 100 else f"{x:.3g}")
+    return s.replace("-", "−") + (f" {unit}" if unit else "")
+
+
+def _lc(label: str) -> str:
+    return label[:1].lower() + label[1:] if label else label
+
+
+def _fold_mean(F: "_Folds", key: str) -> float | None:
+    """This run's fold mean of a report parameter over the folds with the physics term on (as the study records
+    it, ``identifiability._folds_mean``); from the manifest summary only when every fold is on."""
+    pk = {"L": "L_m", "v": "v_norm_m"}.get(key, key)
+    if F.params:
+        vals = [float(p[pk]) for p in F.active if _num(p.get(pk))]
+        return sum(vals) / len(vals) if vals else None
+    s = (F.summary or {}).get(pk)
+    if F.summary and F.n_active == F.n and isinstance(s, dict) and _num(s.get("mean")):
+        return float(s["mean"])
+    return None
+
+
+#: The sandwich behind the r_a / γ SEs of the full-data fit, by the study's ``score_covariance``
+_COV_SE = {"blocks": ("block sandwich", "block-sandwich", "clusters = the CV blocks; Chandler & Bate 2007"),
+           "neighbours": ("adjacent-block sandwich", "adjacent-block sandwich",
+                          "the CV blocks' scores with adjacent blocks' cross-products added; Chandler & Bate 2007, "
+                          "Conley 1999")}
+
+
+#: How a non-Laplace posterior is tagged wherever its numbers are shown (review F14)
+POST_TAGS = {"profile": "1-D profile posterior", "prior": "prior (no information in the data)"}
+
+
+def post_tag(method) -> str:
+    """" (1-D profile posterior)" / " (prior (…))" for a non-Laplace posterior method, else ""."""
+    return f" ({POST_TAGS[method]})" if method in POST_TAGS else ""
+
+
+def posterior_text(block: dict, short: bool = False) -> str:
+    """Which posterior the summaries and power-scaling describe, by kind of parameter (the register, the writeups
+    and the results page say the same): the Laplace approximation of the block-adjusted likelihood with the nominal
+    priors (Ribatet, Cooley & Davison 2012) for the Laplace rows only, conditional on the parameters it holds fixed;
+    the 1-D profile posterior of a parameter on its fit bound; the prior of a parameter without information."""
+    def names(keys):
+        return ", ".join(_SYM.get(k, k) for k in keys)
+
+    lap, prof, pri = (list(block.get(k) or []) for k in ("posterior_laplace", "posterior_profile", "posterior_prior"))
+    cond = list(block.get("posterior_conditional_on") or [])
+    poor = block.get("laplace_adequate") is False
+    parts = []
+    if lap or not (prof or pri):
+        parts.append((f"for {names(lap)}, " if lap and (prof or pri) else "")
+                     + "a Laplace approximation of the block-adjusted likelihood with the nominal priors (Ribatet, "
+                       "Cooley & Davison 2012)"
+                     + (f", conditional on {names(cond)} held fixed" if cond else "")
+                     + (", poor for this run, so its summaries and power-scaling are not reported (the profile "
+                        "intervals do not rely on it)" if poor else ""))
+    if prof:
+        parts.append(f"for {names(prof)} (on {'its' if len(prof) == 1 else 'their'} fit bound), a 1-D profile "
+                     "posterior" + ("" if short else ", exp(−Λ_A/2) × prior along its own adjusted profile (the other "
+                                    "parameters maximised, not integrated), marked \"1-D profile posterior\""))
+    if pri:
+        parts.append(f"for {names(pri)} (no information in the data), the nominal prior itself"
+                     + ("" if short else ", marked \"prior\""))
+    return "; ".join(parts)
+
+
+def covariance_text(block: dict, short: bool = False) -> str:
+    """How the identifiability study adjusts the likelihood for spatial dependence, in words (the register, the
+    writeups and the results page say the same): Chandler & Bate (2007)'s block sandwich with the run's CV blocks as
+    independent clusters by default, the Conley (1999)-type adjacent-block variant as a sensitivity, and the class
+    from the wider of the two intervals.  ``block``: the register's ``identifiability`` block (``n_clusters``,
+    ``block_m``)."""
+    bm = f" of {_sig(block['block_m'])} m" if _num(block.get("block_m")) else ""
+    n = block.get("n_clusters")
+    if short:
+        return (f"adjusted for spatial dependence with the run's {n} CV blocks{bm} as independent clusters (Chandler & "
+                "Bate 2007's block sandwich) and, as a sensitivity, with adjacent blocks' score cross-products added "
+                "(Conley 1999); the class rests on the wider of the two intervals")
+    return (f"its curvature adjusted for spatial dependence with the run's {n} cross-validation blocks{bm} as "
+            "independent clusters (the block sandwich of Chandler & Bate 2007, the default) and, as a sensitivity, "
+            "with the score cross-products of adjacent blocks added (a block-level spatial HAC in the manner of "
+            "Conley 1999, which allows for dependence across block edges); the identifiability class rests on the "
+            "wider of the two 95% intervals on each side")
+
+
+def _ident_mismatch(ident: dict, ctx: dict) -> str | None:
+    """Why an identifiability report does not belong to this run (None when it does): not a report, no active
+    physics term here, or a different number of cells, CV design, input data, target units, window or physics fit
+    (the fold means of the profiled parameters it recorded against this run's)."""
+    if not isinstance(ident.get("parameters"), list) or ident.get("schema") != 1:
+        return "not an identifiability report of a known schema"
+    if ctx["physics_off"]:
+        return f"this run fits no physics model ({ctx['physics_off']})"
+    F = ctx["folds"]
+    if not F.present or F.n_active == 0:
+        return "this run has no active physics term"
+    m = ctx["manifest"] or {}
+    run = ident.get("run") or {}
+    n_i = run.get("n_points_run")
+    if n_i is None and not ident.get("coarse_m"):
+        n_i = ident.get("n")
+    n_m = m.get("n_points")
+    if _num(n_i) and _num(n_m) and int(n_i) != int(n_m):
+        return f"it was made for a run of {int(n_i):,} cells, and this run has {int(n_m):,}"
+    cv_i, cv_m = run.get("cv") or {}, m.get("cv") or {}
+    for k in ("n_folds", "n_blocks", "block_m"):
+        a, b = cv_i.get(k), cv_m.get(k)
+        if _num(a) and _num(b) and not math.isclose(float(a), float(b), rel_tol=1e-9):
+            return f"its cross-validation design differs ({k} {a:g} against this run's {b:g})"
+    sha_i, sha_m = run.get("input_sha256"), (m.get("provenance") or {}).get("input_sha256")
+    if sha_i and sha_m and sha_i != sha_m:
+        return "it was made from different input data (the input SHA-256 differs)"
+    for what, a, b in (("target units", ident.get("units"), ctx["units"]), ("window", ident.get("window"),
+                                                                          ctx["window"])):
+        if a and b and str(a).lower() != str(b).lower():
+            return f"its {what} ({a}) differ from this run's ({b})"
+    for key, v in (run.get("fold_means") or {}).items():
+        cur = _fold_mean(F, key)
+        if _num(v) and cur is not None and not math.isclose(float(v), cur, rel_tol=1e-6, abs_tol=1e-9):
+            return (f"it was made for a different physics fit (fold mean of {key} {_sig(v)} in the study, {_sig(cur)} "
+                    "in this run)")
+    return None
+
+
+def _ident_param(p: dict, laplace_ok, run_value: float | None = None) -> dict:
+    """A report parameter row in the register's compact form, with its plain-words sentence.  ``run_value``: the
+    run's own value of the parameter, the mean over its folds with the physics term on (``physics.json``, as the
+    parameter panel shows it; default the fold mean the study recorded).  ``estimate_run`` is the study's full-data
+    refit with the run's objective (penalty on), which is what the prior share and the pull describe: it is labelled
+    "full-data refit" wherever it is shown, never "run value"."""
+    cls = p.get("identifiability")
+    ci = p.get("ci95") if isinstance(p.get("ci95"), (list, tuple)) and len(p["ci95"]) == 2 else None
+    ab = p.get("at_bound") if isinstance(p.get("at_bound"), dict) else None
+    zero = p.get("key") in _ZERO_LIMIT and cls in ("identified", "one_sided") and (
+        (ci is not None and _num(ci[0]) and float(ci[0]) <= 0.0) or "lower" in (p.get("sides_at_limit") or [])
+        or (ab is not None and ab.get("side") == "lower" and _num(ab.get("bound")) and float(ab["bound"]) <= 0.0))
+    post, ps, cf = p.get("posterior") or {}, p.get("psens") or {}, p.get("conflict") or {}
+
+    def unreliable(d: dict):
+        # the study flags a Laplace posterior that its own adequacy check calls poor (``reliable: false``); a report
+        # without the flag: a Laplace-method summary of a study whose Laplace approximation is poor
+        if d.get("reliable") is False:
+            return d.get("reason") or "the Laplace approximation it rests on is poor for this run"
+        if "reliable" not in d and d.get("method") == "laplace" and laplace_ok is False:
+            return "the Laplace approximation it rests on is poor for this run"
+        return None
+
+    post_bad, ps_bad = (unreliable(post) if post else None), (unreliable(ps) if ps else None)
+    out = {"key": p.get("key"), "label": p.get("label") or p.get("key"), "unit": p.get("unit") or "",
+           "class": cls, "class_label": IDENT_LABELS.get(cls, cls), "class_short": IDENT_SHORT.get(cls, cls),
+           "identified": cls == "identified",
+           "in_model": p.get("estimate_data") is not None,
+           "run_value": run_value if _num(run_value) else (p.get("estimate_run_folds")
+                                                           if _num(p.get("estimate_run_folds")) else None),
+           "estimate_run": p.get("estimate_run"), "estimate_data": p.get("estimate_data"),
+           "ci95": list(ci) if ci else None, "ci95_neighbours": p.get("ci95_neighbours"),
+           "ci95_conservative": p.get("ci95_conservative"), "class_by_covariance": p.get("class_by_covariance"),
+           "threshold": p.get("threshold"),
+           "ci95_naive": p.get("ci95_naive"), "ci95_naive_label": p.get("ci95_naive_label"),
+           "open_sides": list(p.get("open_sides") or []), "sides_at_limit": list(p.get("sides_at_limit") or []),
+           "summary": p.get("summary"), "not_assessable_reason": p.get("not_assessable_reason"),
+           "at_bound": ab, "held": p.get("held"), "reaches_zero": bool(zero),
+           "se_robust": p.get("se_robust"), "adjust_factor": p.get("adjust_factor"), "prior": p.get("prior"),
+           "prior_share_run": p.get("prior_share_run"), "pull": p.get("pull"),
+           # unreliable posterior summaries and power-scaling are not presented (the study's JSON keeps them, flagged)
+           # the method (laplace, a 1-D profile posterior, or the prior of a parameter without information), its
+           # description and what a Laplace posterior is conditional on travel with the numbers (review F14)
+           "posterior": ({k: post.get(k) for k in ("mean", "sd", "q025", "q975", "method", "description",
+                                                   "conditional_on")}
+                         if post.get("mean") is not None and not post_bad else None),
+           "psens": ({k: ps.get(k) for k in ("prior", "likelihood", "diagnosis", "method", "description")}
+                     if ps and not ps_bad else None),
+           "posterior_unreliable": post_bad or ps_bad,
+           "conflict": ({k: cf.get(k) for k in ("p", "z", "flag", "reason")} if cf else None)}
+    if out["psens"] is not None:
+        out["psens"]["laplace_poor"] = False
+        out["psens"].update(_psens_reading(out["psens"]))
+    out["text"] = _ident_sentence(out)
+    return out
+
+
+def _psens_reading(ps: dict) -> dict:
+    """Kallioinen et al. (2024)'s reading of one parameter's power-scaling sensitivities (:data:`PSENS_READING`):
+    ``prior_informative`` (prior ≥ 0.05), ``likelihood_weak`` (likelihood < 0.05) and ``reading``, the flag to
+    report: the study's diagnosis (``prior_data_conflict``, ``weak_likelihood`` = informative prior with a weak
+    likelihood), else ``likelihood_only_weak`` when the likelihood alone is below 0.05, else None."""
+    pr, lk = ps.get("prior"), ps.get("likelihood")
+    pi = bool(_num(pr) and float(pr) >= PSENS_THRESHOLD)
+    lw = bool(_num(lk) and float(lk) < PSENS_THRESHOLD)
+    reading = ps.get("diagnosis") if ps.get("diagnosis") in ("prior_data_conflict", "weak_likelihood") else (
+        "likelihood_only_weak" if lw else None)
+    return {"prior_informative": pi if _num(pr) else None, "likelihood_weak": lw if _num(lk) else None,
+            "reading": reading}
+
+
+def _ident_sentence(p: dict) -> str:
+    """One parameter's identifiability in plain words: what the data alone say, what the penalty sets, and any
+    sensitivity or conflict flag."""
+    sym = _SYM.get(p["key"], p["key"])
+    u = f" {p['unit']}" if p["unit"] in ("m", "W/m²") else ""
+    ci = p.get("ci95") or [None, None]
+    span = f"{_sig(ci[0]) if ci[0] is not None else 'open'} to {_sig(ci[1]) if ci[1] is not None else 'open'}{u}"
+    nb = p.get("ci95_neighbours")
+    if isinstance(nb, (list, tuple)) and len(nb) == 2 and list(nb) != list(ci):
+        # the class rests on the wider of the two adjusted intervals: quote both (block sandwich first)
+        span += (f" with the block sandwich, {_sig(nb[0]) if nb[0] is not None else 'open'} to "
+                 f"{_sig(nb[1]) if nb[1] is not None else 'open'}{u} with adjacent blocks")
+    cls = p["class"]
+    if cls == "not_fitted":
+        return f"{p['label']}: not fitted in this run."
+    if cls == "structurally_non_identifiable":
+        core = "not identified by the data alone (flat profile likelihood)"
+    elif cls == "one_sided":
+        what = p.get("summary") or f"95% profile interval {span}"
+        core = (f"the data alone do not exclude {sym} = 0 ({what})" if p["reaches_zero"] else
+                f"bounded by the data alone on one side only ({what})")
+    elif cls == "not_assessable":
+        nv = p.get("ci95_naive") or [None, None]
+        why = p.get("not_assessable_reason") or ("its data-only estimate sits on a fit bound, where no adjustment "
+                                                 "for spatial dependence is computable")
+        what = "one-sided bound" if p.get("at_bound") else "interval"
+        core = (f"not assessable from the data alone ({why}; the unadjusted {what}, "
+                f"{_sig(nv[0]) if nv[0] is not None else 'open'} to {_sig(nv[1]) if nv[1] is not None else 'open'}{u}, "
+                "is too narrow)")
+    elif cls == "practically_non_identifiable":
+        if p["open_sides"]:
+            core = (f"not identified by the data alone (its 95% profile interval, {span}, stays open on the "
+                    f"{' and '.join(p['open_sides'])} side)")
+        elif p.get("held") == "flat":
+            core = "not identified by the data alone (no local curvature, and a profile that is not smooth)"
+        else:
+            core = f"not identified by the data alone (its 95% profile interval, {span}, spans its whole physical range)"
+    elif p["reaches_zero"]:
+        at0 = (p.get("at_bound") or {}).get("side") == "lower"
+        core = (f"the data alone do not exclude {sym} = 0 ("
+                + ("the data-only fit sits at 0" if at0 else f"data-only estimate {_sig(p['estimate_data'])}{u}")
+                + f"; 95% profile interval {span})")
+    elif cls == "identified":
+        core = f"identified by the data alone (data-only estimate {_sig(p['estimate_data'])}{u}; 95% profile interval {span})"
+    else:
+        core = f"identifiability {cls}"
+    parts = [core]
+    sh = p.get("prior_share_run")
+    if _num(sh) and p.get("estimate_run") is not None:
+        # the prior share is the penalty's share of the run objective's curvature at the full-data refit
+        rv = p.get("run_value")
+        run = f"; the run's own value, its fold mean, is {_sig(rv)}{u}" if _num(rv) else ""
+        parts.append(f"its full-data refit value {_sig(p['estimate_run'])}{u} is set mostly by the penalty (prior "
+                     f"share {float(sh):.2f}{run})" if float(sh) > 0.5 else f"prior share {float(sh):.2f}")
+    ps = p.get("psens") or {}
+    if ps.get("reading") in _PSENS_TEXT:
+        txt = _PSENS_TEXT[ps["reading"]]
+        if ps.get("method") in POST_TAGS:          # not the Laplace posterior: say which posterior it scales
+            txt = txt.replace("power-scaling flags", f"power-scaling of its {POST_TAGS[ps['method']]} flags", 1)
+        parts.append(txt)
+    elif p.get("posterior_unreliable"):
+        parts.append("its posterior summaries and power-scaling are not reliable, so they are not reported (they rest "
+                     "on a Laplace approximation that is poor for this run)")
+    cf = p.get("conflict") or {}
+    if cf.get("flag") and _num(cf.get("p")):
+        parts.append(f"the prior–data conflict check finds a conflict (p = {float(cf['p']):.2g})")
+    return f"{p['label']}: " + "; ".join(parts) + "."
+
+
+def _ident_info(ident, ctx: dict, source: str | None) -> tuple[dict | None, dict]:
+    """(the study in the register's form or None, the register's ``identifiability`` block)."""
+    block = {"status": "absent", "source": None, "note": None}
+    if not isinstance(ident, dict) or not ident:
+        return None, block
+    block["source"] = source
+    why = _ident_mismatch(ident, ctx)
+    if why:
+        block.update(status="ignored", note=f"identifiability study ignored: {why}; re-run `sparc core identifiability` "
+                                            "for this run")
+        return None, block
+    cl = ident.get("cluster") or {}
+    if ident.get("status") == "disabled":
+        # the study stopped before any profile (its data-only fit has a ≤ 0): nothing it could say about any
+        # parameter, so nothing is reported as profiled, identified or gated (PHYSICS_PLAN W3 review X16)
+        block.update(status="disabled", study_status="disabled", n=ident.get("n"),
+                     n_clusters=ident.get("n_clusters"), block_m=cl.get("block_m"), coarse_m=ident.get("coarse_m"),
+                     warnings=[str(w) for w in ident.get("warnings") or []], parameters={}, linear={},
+                     not_identified=[], refs=[],
+                     note=DISABLED_NOTE)
+        return None, block
+    post = ident.get("posterior") or {}
+    laplace_ok = post.get("laplace_adequate") if post else None
+    params = {}
+    for p in ident.get("parameters") or []:
+        if isinstance(p, dict) and p.get("key"):
+            params[p["key"]] = _ident_param(p, laplace_ok, run_value=_fold_mean(ctx["folds"], p["key"]))
+    linear = {}
+    for r in ident.get("linear") or []:
+        if isinstance(r, dict) and r.get("key"):
+            linear[r["key"]] = {k: r.get(k) for k in ("label", "unit", "estimate_run", "se_robust_run", "se_naive_run",
+                                                       "estimate_data", "se_robust_data", "se_naive_data",
+                                                       "adjust_factor")}
+    info = {"params": params, "linear": linear, "n": ident.get("n"), "n_clusters": ident.get("n_clusters"),
+            "block_m": cl.get("block_m"), "coarse_m": ident.get("coarse_m"),
+            "score_covariance": ((ident.get("covariance") or {}).get("used")
+                                 or (ident.get("settings") or {}).get("score_covariance") or "blocks"),
+            "laplace_adequate": laplace_ok, "study_status": ident.get("status"),
+            "warnings": [str(w) for w in ident.get("warnings") or []]}
+    by_method = {mm: [k for k, p in params.items() if ((p.get("posterior") or {}).get("method")
+                                                        or (p.get("psens") or {}).get("method")) == mm]
+                 for mm in ("laplace", "profile", "prior")}
+    block.update(status="used", study_status=ident.get("status"), n=info["n"], n_clusters=info["n_clusters"],
+                 block_m=info["block_m"], coarse_m=info["coarse_m"], score_covariance=info["score_covariance"],
+                 laplace_adequate=laplace_ok, warnings=info["warnings"], parameters=params, linear=linear,
+                 # which posterior each parameter's summary and power-scaling come from (the study's lists; from the
+                 # rows for an older study), and what the Laplace posterior is conditional on
+                 posterior_conditional_on=list(post.get("conditional_on") or []),
+                 posterior_laplace=list(post.get("laplace_parameters") or by_method["laplace"]),
+                 posterior_profile=list(post.get("profile_parameters") or by_method["profile"]),
+                 posterior_prior=list(post.get("prior_parameters") or by_method["prior"]),
+                 not_identified=[k for k, p in params.items() if p["in_model"] and p["class"] in NOT_IDENTIFIED],
+                 refs=list(_IDENT_REFS))
+    return info, block
+
+
+def _sandwich(row: dict, lin: dict | None, scale: float, sym: str, unit: str, nd: int = 1,
+              cov: str | None = "blocks") -> None:
+    """r_a / γ: the sandwich SE of the full-data reference fit (the run's objective; the block sandwich unless the
+    study used ``score_covariance: neighbours``, ``cov``) beside the fold jackknife; a note when the two SEs differ
+    by more than :data:`SANDWICH_FACTOR`.  The verdict is not changed."""
+    name, adj, how = _COV_SE.get(cov or "blocks", _COV_SE["blocks"])
+    if not lin or row.get("value") is None or not (_num(lin.get("estimate_run")) and _num(lin.get("se_robust_run"))):
+        return
+    s = abs(scale)
+    sw = {"value": float(lin["estimate_run"]) * scale, "se": float(lin["se_robust_run"]) * s,
+          "se_naive": float(lin["se_naive_run"]) * s if _num(lin.get("se_naive_run")) else None,
+          "data_only": ({"value": float(lin["estimate_data"]) * scale, "se": float(lin["se_robust_data"]) * s}
+                        if _num(lin.get("estimate_data")) and _num(lin.get("se_robust_data")) else None),
+          "jackknife_se": row.get("se"), "ratio": None, "note": None, "covariance": cov or "blocks", "kind": name}
+    sw["text"] = (f"full-data reference fit: {sym} = {_fmt(sw['value'], nd)} ± {_fmt(sw['se'], nd)} {unit} ({name}, "
+                  f"{how}"
+                  + (f"; naive ± {_fmt(sw['se_naive'], nd + 1)}" if sw["se_naive"] is not None else "") + ")")
+    jk = row.get("se")
+    if _num(jk) and float(jk) > 0 and sw["se"] > 0:
+        sw["ratio"] = sw["se"] / float(jk)
+        if not (1.0 / SANDWICH_FACTOR <= sw["ratio"] <= SANDWICH_FACTOR):
+            sw["note"] = (f"the {adj} SE of the full-data fit ({_fmt(sw['se'], nd)} {unit}) and the fold "
+                          f"jackknife SE ({_fmt(jk, nd)} {unit}) differ by more than a factor of {SANDWICH_FACTOR:g}: "
+                          "the verdict uses the jackknife, whose ±2 SE interval is then itself uncertain")
+    row["sandwich"] = sw
+    if sw["note"]:
+        row["status_note"] = "; ".join(x for x in (row.get("status_note"), sw["note"]) if x)
+
+
+def _ident_panel(P: dict, info: dict) -> None:
+    """The study's columns on the parameter panel (module docstring)."""
+    P["identifiability_study"] = True
+    P["identifiability"] = ("W3 profile likelihood on all labelled cells (Raue et al. 2009), "
+                            + covariance_text(info, short=True))
+    P["prior_sensitivity"] = ("W3: the prior's share of the run objective's curvature and its pull; power-scaling of "
+                              "the calibrated posterior (Kallioinen et al. 2024; Ribatet, Cooley & Davison 2012); "
+                              "prior–data conflict (Evans & Moshonov 2006)")
+    back = {v: k for k, v in _PANEL_KEY.items()}
+    for r in P["rows"]:
+        p = info["params"].get(back.get(r["key"], r["key"]))
+        if not p or not p["in_model"]:
+            continue
+        r["identifiability"] = p
+        pr = r.get("prior")
+        if pr and "not yet tested" in str(pr.get("note") or ""):
+            r["prior"] = {**pr, "note": "information; its influence is the W3 prior share and pull (at the study's "
+                                        "full-data refit of the run's objective) and power-scaling"}
+        if r.get("status_note"):
+            r["status_note"] = r["status_note"].replace(
+                "whether this map identifies s is the profile-likelihood test (W3)",
+                "whether the data alone identify s is the W3 profile likelihood (identifiability column)")
+    fK = P.get("to_kelvin")
+    if fK is None:
+        return
+    for r in P["rows"]:
+        if r["key"] == "r_a":
+            _sandwich(r, info["linear"].get("a"), fK * P["rho_cp"] / P["norm"], "r_a", "s/m",
+                      cov=info.get("score_covariance"))
+        elif r["key"] == "gamma":
+            _sandwich(r, info["linear"].get("gamma"), fK * 1000.0, "γ", "K/km", cov=info.get("score_covariance"))
+
+
+def _ident_rows(rows: list[dict], info: dict, by_key: dict) -> None:
+    """The verdict rule (a key parameter not identified by the data alone blocks Supported) and the identifiability
+    context of each mechanism's first signature row."""
+    seen = set()
+    for r in rows:
+        keys = KEY_PARAMS.get(r["mechanism"], ())
+        params = [info["params"][k] for k in keys if k in info["params"] and info["params"][k]["in_model"]]
+        if params:
+            r["identifiability"] = [{k: p.get(k) for k in ("key", "class", "ci95", "prior_share_run", "reaches_zero")}
+                                    for p in params]
+        bad = [p for p in params if p["class"] in NOT_IDENTIFIED]
+        if r["status"] == "supported" and bad:
+            names = ", ".join(_lc(p["label"]) for p in bad)
+            r.update(status="not_testable", label=VERDICT_LABELS["not_testable"], basis=None, identifiability_gate=True,
+                     reason=(f"{names} {'is' if len(bad) == 1 else 'are'} not identified by the data alone (W3 "
+                             "profile likelihood adjusted for spatial dependence; the class rests on the wider of the "
+                             "block and adjacent-block intervals): a mechanism whose key parameter the data cannot pin "
+                             "down cannot be Supported, whatever its point estimate (its own test alone would give "
+                             "Supported)"))
+        if r["mechanism"] in seen:
+            continue
+        seen.add(r["mechanism"])
+        extra = []
+        if params:
+            extra.append("Identifiability from the data alone (W3): " + " ".join(p["text"] for p in params))
+        prow = by_key.get({"M6": "r_a", "M7": "gamma"}.get(r["mechanism"], ""))
+        if prow and prow.get("sandwich"):
+            sw = prow["sandwich"]
+            extra.append(f"Uncertainty check (W3): {sw['text']}, beside the fold jackknife ± "
+                         f"{_fmt(prow.get('se'), 1)} {prow['unit']}; the verdict uses the jackknife.")
+            if sw.get("note"):
+                r["note"] = "; ".join(x for x in (r.get("note"), sw["note"]) if x)
+        if extra:
+            r["context"] = " ".join(x for x in (r.get("context"), *extra) if x)
+
+
+def run_identifiability(run_dir, manifest: dict | None = None) -> tuple[dict | None, str | None]:
+    """A run's identifiability study and where it came from: the manifest's ``identifiability`` section, else
+    ``identifiability.json`` (None, None when it has neither).  Whether it belongs to the run is checked by
+    :func:`evaluate`."""
+    m = manifest
+    if m is None:
+        try:
+            m = json.loads((Path(run_dir) / "manifest.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            m = {}
+    sec = (m or {}).get("identifiability")
+    if isinstance(sec, dict) and sec:
+        return sec, "manifest"
+    try:
+        blob = json.loads((Path(run_dir) / "identifiability.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    return (blob, "identifiability.json") if isinstance(blob, dict) and blob else (None, None)
+
+
 # --------------------------------------------------------------------------- the register for a run
 def _row(mech: dict, sig: dict, status: str, **kw) -> dict:
     return {"id": f"{mech['id']}{sig['sig']}", "mechanism": mech["id"], "sig": sig["sig"], "name": mech["name"],
@@ -952,16 +1508,28 @@ def _physics_block(ctx: dict) -> str | None:
 
 
 def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, config: dict | None = None, *,
-             units: str | None = None) -> dict:
+             units: str | None = None, identifiability=None, identifiability_source: str | None = None) -> dict:
     """The mechanism register of a run: one row per mechanism signature with status, statistic, interval,
     basis and note; the W3 parameter panel; gates for scenario text.
 
-    ``manifest``: the run's manifest (``physics_advection``, ``influence``, ``cv`` and, without
-    ``fold_params``, the ``physics`` mean/sd summary are read from it); ``fold_params``: the per-fold
+    ``manifest``: the run's manifest (``physics_advection``, ``influence``, ``cv``, ``identifiability`` and,
+    without ``fold_params``, the ``physics`` mean/sd summary are read from it); ``fold_params``: the per-fold
     ``PhysicsModel.params`` (``physics.json``); ``config``: the raw config dict (default: the manifest's);
-    ``units``: the target units (default: ``data.target_units``)."""
+    ``units``: the target units (default: ``data.target_units``); ``identifiability``: the run's identifiability
+    report (default: the manifest's section; ``False``: none), used only when it belongs to this run (module
+    docstring, "Identifiability from the data alone")."""
     ctx = _context(manifest, fold_params, config, units)
+    if identifiability is None:
+        identifiability = (ctx["manifest"] or {}).get("identifiability")
+        identifiability_source = identifiability_source or "manifest"
+    elif identifiability is False:
+        identifiability = None
+    ident, ident_block = _ident_info(identifiability, ctx, identifiability_source or "argument")
+    ctx["ident"] = ident
     panel = _panel(ctx)
+    if ident_block.get("status") == "disabled":
+        panel["identifiability"] = f"W3 profile likelihood not done; {ident_block['note']}"
+        panel["prior_sensitivity"] = "W3 prior sensitivity not done: the identifiability study profiled nothing"
     kind, basis = _basis(ctx["target_kind"])
     by_key = {r["key"]: r for r in panel["rows"]}
     block = _physics_block(ctx)
@@ -1005,24 +1573,34 @@ def evaluate(manifest: dict | None, fold_params: list[dict] | None = None, confi
                 r["note"] = (r["note"] + " " if r["note"] else "") + \
                     f"No {', '.join(ROLE_LABELS.get(x, x) for x in missing)} layer in this run's physics."
             rows.append(r)
+    if ident:
+        _ident_rows(rows, ident, by_key)
     mechs = []
     for mech in REGISTER:
         mr = [r for r in rows if r["mechanism"] == mech["id"]]
         st = next(s for s in _PRECEDENCE if any(r["status"] == s for r in mr))
         chain = mech["chain"].replace(_NORM_TEXT, panel["norm_label"])      # the run's normaliser of q
-        mechs.append({"id": mech["id"], "name": mech["name"], "terms": mech["terms"], "chain": chain,
-                      "in_model": mech["in_model"], "roles": list(mech["roles"]), "status": st,
-                      "shortwave": bool(mech.get("shortwave")),
-                      "acts_in_run": bool(mech["in_model"] and (ctx["shortwave"] or not mech.get("shortwave"))),
-                      "label": VERDICT_LABELS[st], "signatures": [r["id"] for r in mr], "refs": list(mech["refs"])})
-    used = sorted({k for m in REGISTER for k in m["refs"]} | {"oreskes1994", "mooij2013", "shandas2019"})
+        entry = {"id": mech["id"], "name": mech["name"], "terms": mech["terms"], "chain": chain,
+                 "in_model": mech["in_model"], "roles": list(mech["roles"]), "status": st,
+                 "shortwave": bool(mech.get("shortwave")),
+                 "acts_in_run": bool(mech["in_model"] and (ctx["shortwave"] or not mech.get("shortwave"))),
+                 "label": VERDICT_LABELS[st], "signatures": [r["id"] for r in mr], "refs": list(mech["refs"])}
+        if ident:
+            keys = [k for k in KEY_PARAMS.get(mech["id"], ()) if k in ident["params"] and ident["params"][k]["in_model"]]
+            entry["identifiability"] = {"keys": keys, "not_identified": [k for k in keys if ident["params"][k]["class"]
+                                                                         in NOT_IDENTIFIED]}
+        mechs.append(entry)
+    used = {k for m in REGISTER for k in m["refs"]} | {"oreskes1994", "mooij2013", "shandas2019"}
+    if ident:
+        used |= set(_IDENT_REFS)
     summary = {s: [r["id"] for r in rows if r["status"] == s] for s in VERDICTS}
     return {
         "schema": SCHEMA, "verdicts": dict(VERDICT_LABELS), "window": ctx["window"], "units": ctx["units"],
         "target_kind": kind, "basis": basis, "physics_status": panel["physics_status"],
         "rows": rows, "mechanisms": mechs, "summary": summary, "panel": panel,
         "gates": _gates(rows, mechs, ctx, panel["physics_status"]),
-        "references": {k: REFERENCES[k] for k in used},
+        "identifiability": ident_block,
+        "references": {k: REFERENCES[k] for k in sorted(used)},
         "inputs": {"source": F.source, "n_folds": F.n, "n_active": F.n_active, "fit_warnings": F.warnings,
                    "advection": adv},
     }
@@ -1134,6 +1712,17 @@ def _gates(rows: list[dict], mechs: list[dict], ctx: dict, physics_status: str) 
                 s += (" None of its own mechanisms is supported yet, so the explanation is a hypothesis, not a tested "
                       "mechanism" + (" (the shared checks test the overall gain, not this lever's pathway)."
                                      if any(m["status"] == "supported" for m in shared) else "."))
+            ident = ctx.get("ident")
+            if ident:
+                params = [ident["params"][k] for k in ROLE_PARAMS.get(role, ())
+                          if k in ident["params"] and ident["params"][k]["in_model"]]
+                if params:
+                    entry["identifiability"] = {p["key"]: {k: p.get(k) for k in ("class", "ci95", "prior_share_run",
+                                                                                   "reaches_zero", "run_value",
+                                                                                   "estimate_run")}
+                                                for p in params}
+                    entry["not_identified"] = [p["key"] for p in params if p["class"] in NOT_IDENTIFIED]
+                    s += " Identifiability from the data alone (W3): " + " ".join(p["text"] for p in params)
             entry["statement"] = s
         levers[col] = entry
     return {"statements": statements, "plain": plain, "contradicted": [m["id"] for m in contradicted],
@@ -1152,6 +1741,72 @@ def _tau_text(t: dict) -> str:
     if tr and wr:
         s += f" (±2 SE: τ {tr[0]:.0f}–{tr[1]:.0f} min, ωτ {wr[0]:.2f}–{wr[1]:.2f})"
     return s
+
+
+def _ci_text(ci, unit: str = "") -> str:
+    if not ci:
+        return "—"
+    lo, hi = ci
+    return f"{_sig(lo) if lo is not None else 'open'} to {_sig(hi) if hi is not None else 'open'}" + (
+        f" {unit}" if unit else "")
+
+
+def identifiability_markdown_table(block: dict, reg: dict | None = None) -> str:
+    """The register's identifiability block (``reg["identifiability"]``, status ``used``) as a markdown table, with
+    the r_a / γ uncertainty check from the panel of ``reg``."""
+    L = [f"**Identifiability from the data alone (W3).** Profile likelihood of each physics parameter refitted on all "
+         f"labelled cells with every prior off (Raue et al. 2009; n = {int(block['n']) if _num(block.get('n')) else '—'}"
+         + (f", {_sig(block['coarse_m'])} m cells" if _num(block.get("coarse_m")) else "") + "), "
+         + covariance_text(block) + ". 95% interval: Λ_A ≤ 3.84 (2.71 one-sided for an estimate on its fit bound, "
+         "Self & Liang 1987). Run: the run's own value (mean over its folds, as in the parameter panel). Full-data "
+         "refit: the study's refit of the run's objective (penalty on) on all labelled cells, the value the prior "
+         "share and the pull describe. Prior share: the penalty's share of the run objective's curvature in the "
+         "parameter. Pull: (full-data refit − data-only estimate) / block-sandwich SE. Posterior: "
+         + posterior_text(block)
+         + ". Power-scaling: " + PSENS_READING + "; \"not reliable\" where it rests on a poor Laplace "
+         "approximation. Conflict: Evans & Moshonov (2006) tail probability.", "",
+         "| parameter | run (fold mean) | full-data refit | data-only 95% CI (block sandwich) | with adjacent blocks | "
+         "class | prior share | pull | posterior mean ± sd | power-scaling prior / likelihood | conflict p |",
+         "|---|---|---|---|---|---|---|---|---|---|---|"]
+    for p in (block.get("parameters") or {}).values():
+        if not p.get("in_model"):
+            continue
+        u = p["unit"] if p["unit"] in ("m", "W/m²") else ""
+        cls = p.get("class_label") or "—"
+        if p.get("class") == "not_assessable":
+            if p.get("ci95_naive"):
+                cls += (f" (unadjusted {'one-sided bound' if p.get('at_bound') else 'interval'} "
+                        f"{_ci_text(p['ci95_naive'], u)}, too narrow under spatial dependence)")
+        elif p.get("class") == "one_sided" and p.get("summary"):
+            cls += f" ({p['summary']})"
+        elif p.get("open_sides") and p.get("class") != "structurally_non_identifiable":
+            cls += f" (open: {', '.join(p['open_sides'])})"
+        if p.get("reaches_zero"):
+            cls += "; does not exclude 0"
+        post = p.get("posterior") or {}
+        bad = "not reliable (Laplace poor)" if p.get("posterior_unreliable") else "—"
+        pm = (f"{_sig(post.get('mean'))} ± {_sig(post.get('sd'))}{post_tag(post.get('method'))}"
+              if post.get("mean") is not None else bad)
+        ps = p.get("psens") or {}
+        pss = (f"{_fmt(ps.get('prior'), 3)} / {_fmt(ps.get('likelihood'), 3)}"
+               + (f": {_PSENS_SHORT[ps['reading']]}" if ps.get("reading") in _PSENS_SHORT else "")
+               + post_tag(ps.get("method"))) if ps else bad
+        cf = p.get("conflict") or {}
+        cfs = (f"{float(cf['p']):.2g}" + (" (conflict)" if cf.get("flag") else "") if _num(cf.get("p")) else
+               "not testable" if cf else "—")
+        L.append(f"| {_md(p['label'])} | {_sig(p.get('run_value'), u)} | {_sig(p.get('estimate_run'), u)} | "
+                 f"{_ci_text(p.get('ci95'), u)} | "
+                 f"{_ci_text(p.get('ci95_neighbours'), u)} | {cls} | "
+                 f"{_fmt(p.get('prior_share_run'), 2)} | {_fmt(p.get('pull'), 2)} | {pm} | {_md(pss)} | {cfs} |")
+    for r in ((reg or {}).get("panel") or {}).get("rows") or []:
+        sw = r.get("sandwich")
+        if sw:
+            L += ["", f"*{r['label']}:* {sw['text']}; fold jackknife {_fmt(r.get('value'), 1)} ± "
+                      f"{_fmt(r.get('se'), 1)} {r['unit']} (the verdict uses the jackknife)"
+                  + (f". Note: {sw['note']}" if sw.get("note") else "") + "."]
+    for w in block.get("warnings") or []:
+        L += ["", f"*Identifiability warning:* {w}"]
+    return "\n".join(L)
 
 
 def mechanisms_markdown(reg: dict | None) -> str:
@@ -1183,11 +1838,16 @@ def mechanisms_markdown(reg: dict | None) -> str:
             L += ["", f"*{r['mechanism']} context:* {r['context']}"]
             seen.add(r["mechanism"])
     P = reg.get("panel") or {}
+    ib_status = (reg.get("identifiability") or {}).get("status")
     if P.get("rows"):
+        later = ("Identifiability from the data alone and the priors' influence: the table after this one."
+                 if P.get("identifiability_study") else
+                 f"Identifiability: {P.get('identifiability')}." if ib_status == "disabled" else
+                 f"Identifiability ({P.get('identifiability')}) and prior sensitivity ({P.get('prior_sensitivity')}) "
+                 "come later.")
         L += ["", f"**Fitted physics in physical units** ({P.get('uncertainty')}; {P.get('n_active')} of "
                   f"{P.get('n_folds')} folds with the physics term on; {P.get('window')} window). "
-                  f"{P.get('identified_products')} Identifiability ({P.get('identifiability')}) and prior "
-                  f"sensitivity ({P.get('prior_sensitivity')}) come later.", "",
+                  f"{P.get('identified_products')} {later}", "",
               "| quantity | value ± SE | published range | source | status | note |", "|---|---|---|---|---|---|"]
         for r in P["rows"]:
             val = _value_text(r, bound=False)            # the status and note columns carry the fit bound
@@ -1209,6 +1869,14 @@ def mechanisms_markdown(reg: dict | None) -> str:
                   + (f" {ts['advection_note']}." if ts.get("advection_note") else "")]
         for n in P.get("notes") or []:
             L += ["", f"*Note:* {n}"]
+    ib = reg.get("identifiability") or {}
+    if ib.get("status") == "used":
+        L += ["", identifiability_markdown_table(ib, reg)]
+    elif ib.get("status") in ("ignored", "disabled"):
+        L += ["", f"*Identifiability (W3):* {ib.get('note')}."]
+        if ib.get("status") == "disabled":
+            for w in ib.get("warnings") or []:
+                L += ["", f"*Identifiability warning:* {w}"]
     G = reg.get("gates") or {}
     if G.get("statements"):
         L += ["", "**Gates:** " + " ".join(G["statements"])]
@@ -1281,15 +1949,22 @@ def _run_physics_params(run_dir: Path, m: dict) -> tuple[list | None, str | None
     return params, None
 
 
-def mechanisms_for_run(run_dir, config: dict | None = None, *, write: bool = True) -> dict:
-    """Recompute the register of a finished run from ``manifest.json`` + ``physics.json``; with ``write``,
-    store ``mechanisms.json`` and the manifest's ``mechanisms`` section (``runio.update_manifest``).
-    ``config``: a raw config dict to use instead of the manifest's (e.g. one that sets ``data.target_kind``).
-    ``physics.json`` is used only when it belongs to this run (:func:`_run_physics_params`)."""
+def mechanisms_for_run(run_dir, config: dict | None = None, *, write: bool = True, identifiability=None,
+                       identifiability_source: str = "argument", source: str = "mechanisms") -> dict:
+    """Recompute the register of a finished run from ``manifest.json`` + ``physics.json`` and its identifiability
+    study (:func:`run_identifiability`, or ``identifiability`` when given; used only when it belongs to the run);
+    with ``write``, store ``mechanisms.json`` and the manifest's ``mechanisms`` section (``runio.update_manifest``,
+    recorded with ``source``).  ``config``: a raw config dict to use instead of the manifest's (e.g. one that sets
+    ``data.target_kind``).  ``physics.json`` is used only when it belongs to this run (:func:`_run_physics_params`)."""
     from sparc.core import progress, runio
 
     run_dir = Path(run_dir)
     m = json.loads((run_dir / "manifest.json").read_text(encoding="utf-8"))
+    if identifiability is None:
+        identifiability, id_source = run_identifiability(run_dir, m)
+        identifiability = identifiability or False
+    else:
+        id_source = identifiability_source
     params, params_note = _run_physics_params(run_dir, m)
     cfg = copy.deepcopy(config if config is not None else (m.get("config") or {}))
     ph = cfg.setdefault("physics", {})
@@ -1304,13 +1979,13 @@ def mechanisms_for_run(run_dir, config: dict | None = None, *, write: bool = Tru
         if not fi.get("hours_local"):
             fi["hours_local"] = (_forcing_blob(ph, cdir) or {}).get("hours_local")
         ph["forcing_info"] = fi
-    reg = evaluate(m, params, cfg)
+    reg = evaluate(m, params, cfg, identifiability=identifiability, identifiability_source=id_source)
     if params_note:
         reg["inputs"]["note"] = params_note
     if write:
         with progress.run_dir_scope(run_dir):
             runio.write_json_atomic(run_dir / "mechanisms.json", reg, indent=1)
             progress.artifact(run_dir / "mechanisms.json", role="mechanisms")
-            runio.update_manifest(run_dir, {"mechanisms": reg}, source="mechanisms")
+            runio.update_manifest(run_dir, {"mechanisms": reg}, source=source)
             progress.artifact(run_dir / "manifest.json", role="manifest")
     return reg

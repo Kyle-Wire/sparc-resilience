@@ -118,6 +118,22 @@ def fake_uncertainty_report(run_dir, multiverse_dir=None, simcheck_dirs=(), plac
     return out
 
 
+def fake_identifiability_report(run_dir, cfg=None, *, params=None, coarse=None, max_points=None, draws=None, seed=0,
+                                settings=None, posterior=True, write=True, refresh_register=True) -> dict:
+    from sparc.core import runio
+
+    record("identifiability_report", run_dir=run_dir, cfg=_cfg(cfg) if cfg is not None else None, params=params,
+           coarse=coarse, max_points=max_points, draws=draws, seed=seed, settings=settings)
+    rep = {"schema": 1, "status": "ok", "n": 1120, "n_clusters": 16, "warnings": ["few clusters"],
+           "parameters": [{"key": "L", "identifiability": "identified"},
+                          {"key": "s", "identifiability": "structurally_non_identifiable"}],
+           "register": {"refreshed": True, "identifiability": "used", "note": None}}
+    if write:
+        runio.write_json_atomic(Path(run_dir) / "identifiability.json", rep, indent=1)
+        runio.update_manifest(run_dir, {"identifiability": rep}, source="identifiability")
+    return rep
+
+
 # ---------------------------------------------------------------------------
 # studies
 # ---------------------------------------------------------------------------
@@ -252,6 +268,7 @@ def install() -> None:
     import sparc.core.baselines as baselines
     import sparc.core.diagnostics as diagnostics
     import sparc.core.emulator as emulator
+    import sparc.core.identifiability as identifiability
     import sparc.core.multiverse as multiverse
     import sparc.core.placebo as placebo
     import sparc.core.planner as planner
@@ -263,6 +280,7 @@ def install() -> None:
     planner.planner_pack = fake_planner_pack
     emulator.emulator_for_run = fake_emulator_for_run
     uncertainty.uncertainty_report = fake_uncertainty_report
+    identifiability.identifiability_report = fake_identifiability_report
     placebo.run_placebo_suite = fake_run_placebo_suite
     simcheck.run_simcheck = fake_run_simcheck
     multiverse.run_multiverse = fake_run_multiverse
