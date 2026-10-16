@@ -1133,7 +1133,7 @@ def test_new_classes_and_unreliable_cells_have_plain_labels():
     ps = reg["identifiability"]["parameters"]
     assert ps["L"]["class_label"] == "one-sided: bounded by the data on one side only"
     assert ps["L"]["class_short"] == "one side only" and ps["a1"]["class_short"] == "not assessable"
-    assert ps["a1"]["class_label"].startswith("not assessable: on its fit bound")
+    assert ps["a1"]["class_label"].startswith("not assessable: no adjustment for spatial dependence is computable")
     assert ps["a1"]["ci95_naive_label"].startswith("unadjusted")
     assert ps["s"]["posterior"] is None and ps["s"]["psens"] is None and ps["s"]["posterior_unreliable"]
     assert "weak likelihood" not in ps["s"]["text"] and "not reliable" in ps["s"]["text"]
@@ -1144,7 +1144,7 @@ def test_new_classes_and_unreliable_cells_have_plain_labels():
     line = next(ln for ln in md.splitlines() if ln.startswith("| Mixing length L"))
     assert "one-sided: bounded by the data on one side only (L ≥ 200 m; upper side open" in line
     line = next(ln for ln in md.splitlines() if ln.startswith("| Impervious heat storage"))
-    assert "not assessable: on its fit bound" in line and "unadjusted one-sided bound 0 to 0.18" in line
+    assert "not assessable: no adjustment for spatial dependence" in line and "unadjusted one-sided bound 0 to 0.18" in line
     assert "(open:" not in line
 
 
