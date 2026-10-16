@@ -1650,8 +1650,9 @@ def _quadratic_start(st: _Study, space: _Space, C: dict, th_hat: np.ndarray, psi
             nat = min(max(nat, lo + 1e-9 * (hi - lo)), hi - 1e-9 * (hi - lo))
         out[NATURAL_LEAF[k]] = m.to_leaf(k, nat)
     if clipped and not C.get("neg_def", True):
-        st.warn("H_I is not negative definite, so the quadratic profile path left the fit bounds; those profile "
-                "starts were clipped to the bounds (the best start of each profile point is kept)")
+        st.warn("H_I is not negative definite at the data-only optimum, so the quadratic profile path left the fit "
+                "bounds; those profile starts were clipped to the bounds (the best start of each profile point is "
+                "kept)")
     out["_coef"] = (th[space.nl:] / st.col).tolist()
     return out
 
@@ -1784,7 +1785,9 @@ def _point(st: _Study, r: dict, value: float, warms, dat: dict, cache: dict) -> 
             # the l_I-profile point is one of the starts and the best value seen is kept, so Λ_A ≤ Λ_A at the
             # l_I-profile point (the design's value) without taking a minimum over different paths
             starts = [leaves] + [(w.get("_adj") or {}).get(mode) for w in warms] + [ref]
-            if not drift:
+            if not drift and not r["held"]:
+                # not for a held-flat ψ: its curvature (the main one extended by a parameter without information) is
+                # singular by construction, so the quadratic path is undefined there
                 starts.append(_quadratic_start(st, sp, C, th_hat, nat, value, dat["leaves"]))
             lA, adj, _ = st.max_adj(sp, C, th_hat, "v" if drift else nat, value, starts,
                                     vspec=(float(value), float(alpha.detach())) if drift else None)

@@ -664,6 +664,21 @@ def test_indefinite_or_singular_curvature_does_not_crash(case):
         assert r["identifiability"] is not None, r["key"]
 
 
+def test_a_held_flat_parameter_does_not_report_the_main_curvature_as_degenerate():
+    """Albedo, water and elevation roles: e₀ is flat at θ̂ (confounded with a and w) while the main H_I is negative
+    definite.  The profile of e₀ works in the main coordinates extended by e₀, which are singular by construction:
+    no quadratic start is built from them, and no warning says the study's H_I is not negative definite (it used to,
+    on the results card and in methods.md)."""
+    grid, frame, y, coords, cl, cfg = city_world(roles={"albedo": "albedo", "water_distance": "water_distance",
+                                                        "elevation": "elevation"})
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=90.0, params=["e0"], posterior=False,
+                     settings={**QUICK, "max_points": 2, "profile_iter": 15, "adj_iter": 15, "refine": 0,
+                               "block_m": 270.0})
+    assert rep["hessian"]["held_flat"] == ["e0"] and rep["hessian"]["negative_definite"] is True
+    assert not any("not negative definite" in w for w in rep["warnings"]), rep["warnings"]
+    assert _row(rep, "e0")["identifiability"] in ("structurally_non_identifiable", "practically_non_identifiable")
+
+
 def test_an_estimate_beyond_its_walk_limit_is_not_walked_backwards():
     """Night world: the data-only evaporative fraction saturates and e₀ lands far below its walk limit
     (logit −30).  The lower side must not be "walked" by clamping to −30, a point *above* the estimate (that
