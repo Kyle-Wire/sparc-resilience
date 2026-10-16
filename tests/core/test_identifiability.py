@@ -60,6 +60,50 @@ def albedo_world(n=60, dx=30.0, L=L_TRUE, noise=0.5, noise_range=None, seed=0, b
     return grid, frame, t, coords, block_ids(coords, block_m), cfg
 
 
+def city_world(n=36, dx=30.0, roles=None, seed=5, noise_seed=1, block_m=270.0, **cfg_extra):
+    """A small multi-role world (albedo, canopy, impervious, NDVI, elevation, water distance), the physics
+    operator on a source with canopy cooling and impervious warming plus an elevation term and independent
+    noise: (grid, frame, y, coords, clusters, cfg).  ``roles``: the roles given to the model (default all)."""
+    r = np.random.default_rng(seed)
+
+    def g(s):
+        return gaussian_random_field((n, n), s, r).ravel()
+
+    alb = 0.15 + 0.04 * g(2.0)
+    can = np.clip(35 + 25 * g(2.5), 0, 100)
+    imp = np.clip(50 - 0.8 * (can - 35) + 15 * g(3.0), 0, 100)
+    ndvi = np.clip(0.4 + 0.004 * (can - 35) + 0.05 * g(2.0), -0.1, 0.95)
+    elev = 20 + 10 * g(8.0)
+    wd = np.abs(30 * g(6.0)) * 10
+    yy, xx = np.mgrid[0:n, 0:n]
+    x, y = (xx * dx).ravel().astype(float), (yy * dx).ravel().astype(float)
+    grid = Grid.from_points(x, y, cell=dx)
+    q = -(alb - alb.mean()) - 0.002 * (can - can.mean()) + 0.001 * (imp - imp.mean())
+    phi = grid.sample(ops.solve(np.nan_to_num(grid.rasterize(q)), 90.0, (0.0, 0.0), dx=dx,
+                                pad=PhysicsModel(grid, {}).pad))
+    t = phi / phi.std() - 0.01 * (elev - elev.mean()) + 0.5 * np.random.default_rng(noise_seed).standard_normal(n * n)
+    frame = pd.DataFrame({"albedo": alb, "canopy": can, "impervious": imp, "ndvi": ndvi, "elevation": elev,
+                          "water_distance": wd})
+    coords = np.column_stack([x, y])
+    roles = roles if roles is not None else {k: k for k in frame.columns}
+    cfg = {"fit_advection": False, "max_iter": 40, "sw_down": 800.0, "lw_net": -100.0, "window": "day",
+           "roles": dict(roles), **cfg_extra}
+    return grid, frame, t, coords, block_ids(coords, block_m), cfg
+
+
+def _finite_or_none(rep):
+    """Every number in the report is finite (or None)."""
+    def walk(o):
+        if isinstance(o, dict):
+            return all(walk(v) for v in o.values())
+        if isinstance(o, (list, tuple)):
+            return all(walk(v) for v in o)
+        if isinstance(o, float):
+            return math.isfinite(o)
+        return True
+    return walk(rep)
+
+
 def _row(rep, key):
     return next(r for r in rep["parameters"] if r["key"] == key)
 
@@ -304,6 +348,33 @@ def test_coverage_of_the_adjusted_profile_interval_for_L():
     iid_a, iid_n, iid_c = _coverage(R, None, "neighbours")
     print(f"independent noise, neighbours V: adjusted {iid_a:.3f}, naive {iid_n:.3f}, median c {iid_c:.3f}")
     assert iid_a >= 0.85 and iid_n >= 0.85
+
+
+QUICK = {"max_points": 3, "ref_starts": 1, "polish_iter": 30}
+
+
+@pytest.mark.parametrize("case", ["sigmoid_shade", "no_elevation", "four_clusters"])
+def test_indefinite_or_singular_curvature_does_not_crash(case):
+    """H_I indefinite (sigmoid shade form), singular (no elevation role) or V of rank < p (4 clusters for ~12
+    parameters): the study completes with a warning instead of raising (it used to overflow in the quadratic
+    profile start, ``math.exp`` of a coordinate far outside the fit bounds)."""
+    kw = {"sigmoid_shade": dict(shade_form="sigmoid"),
+          "no_elevation": dict(roles={k: k for k in ("albedo", "canopy", "impervious", "ndvi")}),
+          "four_clusters": dict(block_m=540.0)}[case]
+    grid, frame, y, coords, cl, cfg = city_world(**kw)
+    block_m = kw.get("block_m", 270.0)
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=90.0, draws=100, units="degC",
+                     settings={"max_points": 2, "ref_starts": 1, "polish_iter": 20, "profile_iter": 15,
+                               "adj_iter": 15, "refine": 0, "block_m": block_m},
+                     context={"block_m": block_m, "physics": cfg, "window": "day"})
+    assert rep["status"] == "ok" and rep["parameters"] and _finite_or_none(rep)
+    assert rep["warnings"]                                       # the degenerate curvature is reported
+    if case == "sigmoid_shade":
+        assert any("H_I is not negative definite" in w for w in rep["warnings"])
+    if case == "four_clusters":
+        assert rep["n_clusters"] == 4 and any("clusters for" in w for w in rep["warnings"])
+    for r in rep["parameters"]:
+        assert r["identifiability"] is not None, r["key"]
 
 
 def test_advection_drift_profile_runs_on_its_own_coordinates():

@@ -1276,26 +1276,56 @@ def _quadratic_start(st: _Study, space: _Space, C: dict, th_hat: np.ndarray, psi
     from sparc.core.physics import NATURAL_LEAF
 
     j = space.index(psi)
-    if j is None or not C["Sr"][j, j] > 0:
+    if j is None or not (math.isfinite(C["Sr"][j, j]) and C["Sr"][j, j] > 0):
         return None
     m = st.model
     th = th_hat + (space.coord(psi, value) - th_hat[j]) * C["Sr"][:, j] / C["Sr"][j, j]
+    if not np.all(np.isfinite(th)):
+        return None
     out = dict(base)
+    clipped = False
     for i, k in enumerate(space.keys):
         if k == psi:
             continue
+        x = float(th[i])
+        lo_x, hi_x = _coord_limits(st, space, k)
+        if (lo_x is not None and x < lo_x) or (hi_x is not None and x > hi_x):
+            # an indefinite or singular H_I (eigenvalues floored) sends the quadratic path far outside the fit
+            # bounds: clip it there instead of overflowing (the start is only a candidate; the best one is kept)
+            x = min(max(x, lo_x if lo_x is not None else x), hi_x if hi_x is not None else x)
+            clipped = True
         if k in ("vx", "vy"):
-            out[NATURAL_LEAF[k]] = float(th[i])
+            out[NATURAL_LEAF[k]] = x
             continue
-        nat = space.natural(k, th[i])
+        nat = space.natural(k, x)
         lo, hi, kind = m.natural_bounds(k)
         if kind == "floor":
             nat = max(nat, 1e-9 * m._leaf_scale(k))
         elif kind in ("lin", "log"):
             nat = min(max(nat, lo + 1e-9 * (hi - lo)), hi - 1e-9 * (hi - lo))
         out[NATURAL_LEAF[k]] = m.to_leaf(k, nat)
+    if clipped and not C.get("neg_def", True):
+        st.warn("H_I is not negative definite, so the quadratic profile path left the fit bounds; those profile "
+                "starts were clipped to the bounds (the best start of each profile point is kept)")
     out["_coef"] = (th[space.nl:] / st.col).tolist()
     return out
+
+
+def _coord_limits(st: _Study, space: _Space, k: str) -> tuple[float | None, float | None]:
+    """Finite limits of parameter ``k``'s coordinate in ``space``: its fit bounds (on the log scale for L, κ and
+    the width), the evaporative-fraction walk limit for e₀ and the slopes (:func:`_ef_walk_limit`), |u| ≤ 1 for the
+    drift's leaves (|v| ≤ v_max)."""
+    if k in ("vx", "vy"):
+        return -1.0, 1.0
+    lo, hi, kind = st.model.natural_bounds(k)
+    if kind == "log":
+        return math.log(lo), math.log(hi)
+    if kind == "lin":
+        return space.coord(k, lo), space.coord(k, hi)
+    ef = _ef_walk_limit(st, k) if k in ("e0", "e1", "e2", "e3") else None
+    if kind == "floor":
+        return space.coord(k, lo), (space.coord(k, ef) if ef is not None else None)
+    return (-ef, ef) if ef is not None else (None, None)
 
 
 def _point(st: _Study, r: dict, value: float, warm: dict, dat: dict, cache: dict) -> dict:
