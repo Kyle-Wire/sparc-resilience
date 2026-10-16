@@ -849,7 +849,8 @@ def test_s_on_its_lower_bound_is_bounded_but_does_not_exclude_zero():
     assert p["reaches_zero"] and p["class"] == "identified"
     assert p["text"] == ("Canopy shading strength s: the data alone do not exclude s = 0 (the data-only fit sits at 0; "
                          "95% profile interval 0 to 0.49); its full-data refit value 0.335 is set mostly by the "
-                         "penalty (prior share 0.93; the run's own value, its fold mean, is 0.34); power-scaling flags a potential prior–data conflict (prior and likelihood "
+                         "penalty (prior share 0.93; the run's own value, its fold mean, is 0.34); power-scaling of "
+                         "its 1-D profile posterior flags a potential prior–data conflict (prior and likelihood "
                          "sensitivity both 0.05 or more).")
     assert "| identified; does not exclude 0 |" in M.mechanisms_markdown(reg)
     assert "not testable" in M.mechanisms_markdown(reg)              # the conflict check at a bound
