@@ -481,6 +481,44 @@ def test_a_parameter_on_its_fit_bound_gets_a_one_sided_profile_and_no_conflict_t
     assert "at lower bound" in md and "Canopy shading strength" in md
 
 
+def test_a_poor_laplace_approximation_flags_its_summaries_unreliable(monkeypatch):
+    """When the module's own adequacy check calls the Laplace approximation poor, the Laplace rows' posterior and
+    power-scaling carry ``reliable: false`` with the reason (and are not shown as numbers in the markdown), while a
+    parameter on its bound keeps its 1-D profile posterior, described as such and not caveated as Laplace; the
+    Laplace posterior states which parameters it is conditional on.  The check is forced to fail by raising its
+    threshold above 1 (an ESS share can never reach it)."""
+    monkeypatch.setattr(ID, "LAPLACE_MIN_ESS_FRAC", 1.01)
+    grid, frame, y, coords, cl, cfg = albedo_world(noise=0.3, seed=2, canopy_effect=1.0,
+                                                   roles={"albedo": "albedo", "canopy": "canopy"})
+    rep = ID.analyse(grid, frame, y, coords, cl, cfg, L_init=L_TRUE, params=["L", "s", "e0"], draws=200,
+                     settings={**FAST, "max_points": 4, "block_m": BLOCK_M})
+    post = rep["posterior"]
+    assert post["laplace_adequate"] is False and post["reliable"] is False and "poor" in post["reason"]
+    assert "s" in post["conditional_on"] and post["profile_parameters"] == ["s"] and "L" in post["laplace_parameters"]
+    L, s = _row(rep, "L"), _row(rep, "s")
+    for part in ("posterior", "psens"):
+        assert L[part]["method"] == "laplace" and L[part]["reliable"] is False and "poor" in L[part]["reason"]
+        assert s[part]["method"] == "profile" and s[part]["reliable"] is True and s[part]["reason"] is None
+        assert "1-D profile posterior" in s[part]["description"] and "Laplace adequacy check does not apply" in \
+            s[part]["description"]
+    desc = L["posterior"]["description"]
+    assert "conditional on" in desc and "held fixed" in desc and " s" in desc and L["posterior"]["conditional_on"] == \
+        post["conditional_on"]
+    md = ID.identifiability_markdown(rep)
+    line = next(ln for ln in md.splitlines() if ln.startswith("| Mixing length"))
+    assert line.count("unreliable (Laplace poor)") == 2
+    assert "(1-D profile)" in next(ln for ln in md.splitlines() if ln.startswith("| Canopy shading"))
+    w = next(x for x in rep["warnings"] if "Laplace approximation" in x)
+    assert "1-D profile posteriors of s do not use it" in w and "flagged unreliable" in w
+    # the register does not present them (posterior / psens left out, the reason given in words)
+    from sparc.core import mechanisms as M
+
+    reg_row = M._ident_param(L, False)
+    assert reg_row["posterior"] is None and reg_row["psens"] is None and reg_row["posterior_unreliable"]
+    assert "not reported" in reg_row["text"]
+    assert M._ident_param(s, False)["psens"]["method"] == "profile"
+
+
 # ---------------------------------------------------------------------------
 # (f) the CLI on a small synthetic run directory
 # ---------------------------------------------------------------------------

@@ -1070,6 +1070,17 @@ def _ident_param(p: dict, laplace_ok) -> dict:
         (ci is not None and _num(ci[0]) and float(ci[0]) <= 0.0)
         or (ab is not None and ab.get("side") == "lower" and _num(ab.get("bound")) and float(ab["bound"]) <= 0.0))
     post, ps, cf = p.get("posterior") or {}, p.get("psens") or {}, p.get("conflict") or {}
+
+    def unreliable(d: dict):
+        # the study flags a Laplace posterior that its own adequacy check calls poor (``reliable: false``); a report
+        # without the flag: a Laplace-method summary of a study whose Laplace approximation is poor
+        if d.get("reliable") is False:
+            return d.get("reason") or "the Laplace approximation it rests on is poor for this run"
+        if "reliable" not in d and d.get("method") == "laplace" and laplace_ok is False:
+            return "the Laplace approximation it rests on is poor for this run"
+        return None
+
+    post_bad, ps_bad = (unreliable(post) if post else None), (unreliable(ps) if ps else None)
     out = {"key": p.get("key"), "label": p.get("label") or p.get("key"), "unit": p.get("unit") or "",
            "class": cls, "class_label": IDENT_LABELS.get(cls, cls), "identified": cls == "identified",
            "in_model": p.get("estimate_data") is not None,
@@ -1079,12 +1090,15 @@ def _ident_param(p: dict, laplace_ok) -> dict:
            "at_bound": ab, "held": p.get("held"), "reaches_zero": bool(zero),
            "se_robust": p.get("se_robust"), "adjust_factor": p.get("adjust_factor"), "prior": p.get("prior"),
            "prior_share_run": p.get("prior_share_run"), "pull": p.get("pull"),
+           # unreliable posterior summaries and power-scaling are not presented (the study's JSON keeps them, flagged)
            "posterior": ({k: post.get(k) for k in ("mean", "sd", "q025", "q975", "method")}
-                         if post.get("mean") is not None else None),
-           "psens": ({k: ps.get(k) for k in ("prior", "likelihood", "diagnosis", "method")} if ps else None),
+                         if post.get("mean") is not None and not post_bad else None),
+           "psens": ({k: ps.get(k) for k in ("prior", "likelihood", "diagnosis", "method")} if ps and not ps_bad
+                     else None),
+           "posterior_unreliable": post_bad or ps_bad,
            "conflict": ({k: cf.get(k) for k in ("p", "z", "flag", "reason")} if cf else None)}
     if out["psens"] is not None:
-        out["psens"]["laplace_poor"] = bool(ps.get("method") == "laplace" and laplace_ok is False)
+        out["psens"]["laplace_poor"] = False
     out["text"] = _ident_sentence(out)
     return out
 
@@ -1125,8 +1139,10 @@ def _ident_sentence(p: dict) -> str:
                      f"{float(sh):.2f})" if float(sh) > 0.5 else f"prior share {float(sh):.2f}")
     ps = p.get("psens") or {}
     if ps.get("diagnosis") in _PSENS_TEXT:
-        parts.append(_PSENS_TEXT[ps["diagnosis"]]
-                     + (" — of the Laplace approximation, which is poor for this run" if ps.get("laplace_poor") else ""))
+        parts.append(_PSENS_TEXT[ps["diagnosis"]])
+    elif p.get("posterior_unreliable"):
+        parts.append("its posterior summaries and power-scaling are not reported (they rest on a Laplace "
+                     "approximation that is poor for this run)")
     cf = p.get("conflict") or {}
     if cf.get("flag") and _num(cf.get("p")):
         parts.append(f"the prior–data conflict check finds a conflict (p = {float(cf['p']):.2g})")

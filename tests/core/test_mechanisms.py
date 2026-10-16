@@ -938,7 +938,9 @@ def test_lever_text_flags_a_conflict_and_a_poor_laplace_approximation():
     rep["posterior"]["laplace_adequate"] = False
     st = M.evaluate(_m(), folds, _cfg(), identifiability=rep)["gates"]["levers"]["Pct_Canopy"]["statement"]
     assert "identified by the data alone (data-only estimate 0.75; 95% profile interval 0.6 to 0.9); prior share 0.20" in st
-    assert "strong prior with a weak likelihood (prior sensitive only) — of the Laplace approximation, which is poor" in st
+    # power-scaling of a poor Laplace approximation is not presented as a finding (PHYSICS_PLAN W3 review X10)
+    assert "weak likelihood" not in st
+    assert "its posterior summaries and power-scaling are not reported (they rest on a Laplace approximation that is poor" in st
     assert "the prior–data conflict check finds a conflict (p = 0.012)" in st
 
 

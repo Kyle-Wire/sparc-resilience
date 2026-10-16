@@ -184,10 +184,11 @@ def _identifiability_text(f: dict) -> list[str]:
         cf.append("power-scaling flags a potential prior–data conflict for " + ", ".join(f["psens"]["prior_data_conflict"]))
     if f["psens"]["weak_likelihood"]:
         cf.append("power-scaling flags a strong prior with a weak likelihood for " + ", ".join(f["psens"]["weak_likelihood"]))
+    # power-scaling that rests on a poor Laplace approximation is not in the register (flagged unreliable by the
+    # study), so the flags listed here are reliable ones (e.g. a 1-D profile posterior's); say what was left out
     out["conflict"] = "Conflict: " + "; ".join(cf) + (
-        " (power-scaling describes the Laplace approximation, which is poor for this run; the profile intervals do "
-        "not rely on it)" if f["laplace_poor"] and (f["psens"]["prior_data_conflict"] or f["psens"]["weak_likelihood"])
-        else "") + "."
+        " (power-scaling of the Laplace posterior is not reported: the Laplace approximation is poor for this run; "
+        "the profile intervals do not rely on it)" if f["laplace_poor"] else "") + "."
     gate = ("A mechanism signature cannot be Supported while a key parameter is not identified by the data alone"
             + (f" (key parameters not identified: {', '.join(f['blocked'])})" if f["blocked"] else "")
             + (f"; downgraded to Not testable: {', '.join(f['gated'])}" if f["gated"] else "") + ".")

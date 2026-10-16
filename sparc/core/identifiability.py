@@ -58,7 +58,13 @@ Method
    ``SOURCE_PRIORS`` for s, a₁, a₁ₙ), κ's log-normal, the EF and shade-sigmoid priors as coded
    (:meth:`PhysicsModel.prior_terms`) — not the ``prior_weight``-scaled penalty the run minimises.  L, w, the
    drift and the linear coefficients have flat priors.  Laplace approximation at the posterior mode (L-BFGS
-   from θ̂), covariance −(H_A + prior Hessian)⁻¹.  **This is a Laplace approximation, not MCMC.**
+   from θ̂), covariance −(H_A + prior Hessian)⁻¹.  **This is a Laplace approximation, not MCMC**, and it is
+   conditional on the parameters it holds fixed (those on a fit bound, and flat ones without a nominal prior:
+   ``posterior.conditional_on``, repeated in each row's ``description``).  Its adequacy is checked (the
+   importance-sampling ESS of its draws for exp(l_A + log prior), below); when the check fails, every Laplace
+   row's ``posterior`` and ``psens`` carry ``reliable: false`` with the reason, the markdown and the register do
+   not show them, and they are not findings.  A parameter on its bound with a nominal prior has a 1-D *profile*
+   posterior instead (``method: profile``, its own ``description``; the Laplace check does not apply to it).
 7. **Power-scaling sensitivity** (Kallioinen et al. 2024), computed as ArviZ 0.20.0's ``psens`` does:
    ``draws`` draws from the Laplace posterior, importance log-weights (α − 1)·(component log value) for
    α = 1/1.01 and 1.01, Pareto-smoothed as ArviZ's ``_powerscale_lw`` does (:func:`psislw`, a port of ArviZ's
@@ -187,6 +193,10 @@ FLAT_LAMBDA = 0.1
 PSENS_DELTA = 0.01                 # power-scaling perturbation (ArviZ psens default)
 PSENS_THRESHOLD = 0.05             # Kallioinen et al. (2024) / ArviZ
 CONFLICT_ALPHA = 0.05
+#: The Laplace approximation is called adequate when the importance-sampling ESS of its draws for
+#: exp(l_A + log prior) is at least this share of the draws (an operational threshold of this module); below it
+#: the Laplace posterior summaries and power-scaling are flagged ``reliable: false``.
+LAPLACE_MIN_ESS_FRAC = 0.1
 #: Diagonal of −H_I below this fraction of the intercept's information n/σ²: the coordinate carries no
 #: information (an operational tolerance of this module, not a published threshold).
 FLAT_INFO = 1e-10
@@ -1878,6 +1888,18 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
     w /= w.sum()
     is_ess = _ess(w)
     gap = (lA - st.l_hat) - lq
+    adequate = bool(is_ess / Dk >= LAPLACE_MIN_ESS_FRAC)
+    # the Laplace step holds the parameters on a fit bound at their bound, and the flat ones without a nominal
+    # prior at their data-only values: its posterior is conditional on them
+    cond = sorted([_NAT_KEY.get(k, k) for k in held_bound] + [_NAT_KEY.get(k, k) for k in held_flat
+                                                               if k not in prior_spec])
+    why_poor = None if adequate else (
+        f"the Laplace approximation of the calibrated posterior is poor (importance-sampling ESS {is_ess:.0f} of {Dk} "
+        f"draws for exp(l_A + log prior), below {LAPLACE_MIN_ESS_FRAC:.0%}): its mean, sd and power-scaling describe "
+        "the Gaussian approximation, not the posterior")
+    laplace_desc = ("Laplace (Gaussian) approximation of l_A + log nominal prior at its mode"
+                    + (f", conditional on {', '.join(cond)} held fixed" if cond else ""))
+    laplace_keys = []
     for r in rows:
         if not r["_in_model"]:
             continue
@@ -1899,17 +1921,21 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
                                   "note": "held at its fit bound, no nominal prior" if r["at_bound"] else
                                   "held (no information and no nominal prior)"}
             continue
+        laplace_keys.append(r["key"])
         r["posterior"] = {"method": "laplace", "mean": float(np.mean(x)), "sd": float(np.std(x, ddof=1)),
                           "mode": float(xm), "q025": float(np.quantile(x, 0.025)),
                           "q975": float(np.quantile(x, 0.975)), "mean_is": float(np.sum(w * x)),
-                          "sd_is": float(math.sqrt(max(np.sum(w * (x - np.sum(w * x)) ** 2), 0.0)))}
+                          "sd_is": float(math.sqrt(max(np.sum(w * (x - np.sum(w * x)) ** 2), 0.0))),
+                          "reliable": adequate, "reason": why_poor, "description": laplace_desc,
+                          "conditional_on": cond}
         ps = power_scaling_sensitivity(x, log_prior=lp, log_lik=lq, delta=float(st.S["delta"]))
         ps_a = power_scaling_sensitivity(x, log_lik=lA, delta=float(st.S["delta"]))
         r["psens"] = {"prior": ps["prior"], "likelihood": ps["likelihood"], "diagnosis": ps["diagnosis"],
                       "ess": {"prior": ps["ess_prior"], "likelihood": ps["ess_likelihood"]},
                       "khat": {"prior": ps["khat_prior"], "likelihood": ps["khat_likelihood"]},
                       "likelihood_lA": ps_a["likelihood"], "ess_likelihood_lA": ps_a["ess_likelihood"],
-                      "method": "laplace"}
+                      "method": "laplace", "reliable": adequate, "reason": why_poor,
+                      "description": "power-scaling of the draws of the " + laplace_desc}
     st.posterior_info = {
         "method": "Laplace approximation at the mode of l_A + log nominal prior in the coordinates of H_A (not "
                   "MCMC); draws outside the fit bounds discarded",
@@ -1920,14 +1946,20 @@ def _posterior(st: _Study, rows: list[dict], dat: dict, prior_spec: dict, held_b
         "is_ess": is_ess, "is_ess_frac": is_ess / Dk,
         "lA_minus_quadratic": {"q10": float(np.quantile(gap, 0.1)), "median": float(np.median(gap)),
                                "q90": float(np.quantile(gap, 0.9))},
-        "laplace_adequate": bool(is_ess / Dk >= 0.1),
+        "laplace_adequate": adequate, "reliable": adequate, "reason": why_poor, "conditional_on": cond,
+        "laplace_parameters": laplace_keys,
+        "profile_parameters": [r["key"] for r in rows if (r.get("posterior") or {}).get("method") == "profile"],
         "psens_components": "prior: the nominal log prior as stated; likelihood: the Laplace posterior's own "
                             "likelihood term ½δᵀH_Aδ (likelihood_lA: l_A at each draw, as a comparison)"}
-    if is_ess / Dk < 0.1:
+    if not adequate:
+        prof = st.posterior_info["profile_parameters"]
         st.warn(f"the Laplace approximation of the calibrated posterior is poor (importance-sampling ESS {is_ess:.0f} "
                 f"of {Dk} draws; median l_A − quadratic {np.median(gap):.3g}): l_I is far from quadratic on the "
-                "scale of the block-adjusted uncertainty, so the posterior mean/sd and power-scaling describe the "
-                "Laplace (Gaussian) approximation; the profile intervals do not rely on it")
+                "scale of the block-adjusted uncertainty, so the posterior mean/sd and power-scaling of "
+                f"{', '.join(laplace_keys) or 'no parameter'} (the Laplace step) are flagged unreliable "
+                "(reliable: false) and are not findings"
+                + (f"; the 1-D profile posteriors of {', '.join(prof)} do not use it" if prof else "")
+                + "; the profile intervals do not rely on it")
 
 
 def _profile_posterior(st: _Study, r: dict, spec: tuple, rng) -> None:
@@ -1969,15 +2001,18 @@ def _profile_posterior(st: _Study, r: dict, spec: tuple, rng) -> None:
     x = np.interp(rng.random(D), cdf, grid)
     lam_x = np.interp(x, xs, rs) ** 2
     lp = _log_prior_nat(x, spec)
+    desc = ("1-D profile posterior exp(−Λ_A/2) × nominal prior along this parameter's adjusted profile (the other "
+            "parameters maximised, not integrated; no Laplace step, so the Laplace adequacy check does not apply)")
     r["posterior"] = {"method": "profile", "mean": float(np.mean(x)), "sd": float(np.std(x, ddof=1)),
                       "mode": float(grid[int(np.argmax(pdf))]), "q025": float(np.quantile(x, 0.025)),
-                      "q975": float(np.quantile(x, 0.975)),
+                      "q975": float(np.quantile(x, 0.975)), "reliable": True, "reason": None, "description": desc,
                       "note": "on its fit bound: the posterior is exp(−Λ_A/2) × nominal prior along its adjusted "
                               "profile (1-D, no Laplace step)"}
     ps = power_scaling_sensitivity(x, log_prior=lp, log_lik=-0.5 * lam_x, delta=float(st.S["delta"]))
     r["psens"] = {"prior": ps["prior"], "likelihood": ps["likelihood"], "diagnosis": ps["diagnosis"],
                   "ess": {"prior": ps["ess_prior"], "likelihood": ps["ess_likelihood"]},
-                  "khat": {"prior": ps["khat_prior"], "likelihood": ps["khat_likelihood"]}, "method": "profile"}
+                  "khat": {"prior": ps["khat_prior"], "likelihood": ps["khat_likelihood"]}, "method": "profile",
+                  "reliable": True, "reason": None, "description": "power-scaling of the draws of the " + desc}
 
 
 def _conflict(r: dict, prior_spec: dict) -> None:
@@ -2181,11 +2216,22 @@ def identifiability_markdown(rep: dict | None) -> str:
         if r.get("at_bound"):
             cls += f"; at {r['at_bound']['side']} bound"
         post = r.get("posterior") or {}
-        pm = f"{_g(post.get('mean'))} ± {_g(post.get('sd'))}" if post.get("mean") is not None else "—"
+        tag = " (1-D profile)" if post.get("method") == "profile" else ""
+        if post.get("mean") is None:
+            pm = "—"
+        elif post.get("reliable") is False:
+            pm = "unreliable (Laplace poor)"          # flagged in the JSON, not a finding
+        else:
+            pm = f"{_g(post.get('mean'))} ± {_g(post.get('sd'))}{tag}"
         ps = r.get("psens") or {}
-        pss = (f"{_g(ps.get('prior'), 2)} / {_g(ps.get('likelihood'), 2)}"
-               + (f" ({DIAGNOSIS_TEXT.get(ps.get('diagnosis'), ps.get('diagnosis'))})"
-                  if ps.get("diagnosis") not in (None, "none") else "")) if ps else "—"
+        if not ps:
+            pss = "—"
+        elif ps.get("reliable") is False:
+            pss = "unreliable (Laplace poor)"
+        else:
+            pss = (f"{_g(ps.get('prior'), 2)} / {_g(ps.get('likelihood'), 2)}"
+                   + (f" ({DIAGNOSIS_TEXT.get(ps.get('diagnosis'), ps.get('diagnosis'))})"
+                      if ps.get("diagnosis") not in (None, "none") else "") + tag)
         cf = r.get("conflict") or {}
         cfs = ("—" if not cf else f"{_g(cf['p'], 2)}" + (" **conflict**" if cf.get("flag") else "")
                if cf.get("p") is not None else "not testable")
@@ -2212,11 +2258,17 @@ def identifiability_markdown(rep: dict | None) -> str:
               + (f"; fold jackknife {_g(fj['value'])} ± {_g(fj['se'])}" if fj else "") + "."]
     post = rep.get("posterior") or {}
     if post:
+        lk, pk = post.get("laplace_parameters"), post.get("profile_parameters")
         L += ["", f"*Laplace adequacy:* importance-sampling ESS {_g(post.get('is_ess'))} of {post.get('n_draws')} "
                   f"draws for exp(l_A + log prior)" + ("" if post.get("laplace_adequate") else
-                                                       " — poor: the posterior summaries describe the Gaussian "
-                                                       "approximation; the profile intervals do not rely on it")
-              + "."]
+                                                       " — poor: the Laplace posterior summaries and power-scaling"
+                                                       + (f" ({', '.join(lk)})" if lk else "")
+                                                       + " are flagged unreliable and not reported; the profile "
+                                                         "intervals do not rely on it")
+              + (f". The Laplace step is conditional on {', '.join(post['conditional_on'])} held fixed"
+                 if post.get("conditional_on") else "")
+              + (f". The posteriors of {', '.join(pk)} are 1-D profile posteriors (exp(−Λ_A/2) × prior), not the "
+                 "Laplace step" if pk else "") + "."]
     for w in rep.get("warnings") or []:
         L += ["", f"*Warning:* {w}"]
     return "\n".join(L)
