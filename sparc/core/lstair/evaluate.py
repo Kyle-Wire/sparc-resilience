@@ -74,7 +74,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from sparc.core.lstair import RUN_ORDER
+from sparc.core.lstair import RUN_ORDER, to_json
 from sparc.core.lstair.dataset import FEATURES, FOCAL_FEATURES, FOCAL_RADII, LST_RADII, CityData, load_dataset
 
 log = logging.getLogger(__name__)
@@ -497,7 +497,7 @@ def physics_fits(cities: list[CityData], run: str, use_lst: bool, s: Settings, c
         if path is not None:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_name(path.name + ".part")
-            tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+            tmp.write_text(to_json(rec), encoding="utf-8")
             tmp.replace(path)
         out[c.slug] = rec
     return out
@@ -861,21 +861,11 @@ def run_evaluation(data_dir: str | Path, out_dir: str | Path, s: Settings | None
         raise ValueError(f"{len(cities)} finished cities under {data_dir}: leave-one-city-out needs {MIN_CITIES}")
     res, pred = evaluate(cities, s, cache=out)
     res["data"] = str(data_dir)
-    (out / "results.json").write_text(json.dumps(res, indent=1, default=_json), encoding="utf-8")
+    (out / "results.json").write_text(to_json(res), encoding="utf-8")
     (out / "results.md").write_text(results_markdown(res), encoding="utf-8")
     if len(pred):
         pred.to_parquet(out / "predictions.parquet", index=False)
     return res
-
-
-def _json(o):
-    if isinstance(o, (np.integer,)):
-        return int(o)
-    if isinstance(o, (np.floating,)):
-        return float(o) if np.isfinite(o) else None
-    if isinstance(o, np.ndarray):
-        return o.tolist()
-    return str(o)
 
 
 __all__ = ["Settings", "design", "A_COLS", "B_COLS", "LST_COLS", "city_metrics", "paired", "sign_flip", "centre",

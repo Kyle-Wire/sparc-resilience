@@ -337,3 +337,28 @@ def test_the_physics_regime_is_fixed_per_window_and_transfer_never_mixes_regimes
     tp = E.transfer_params(fits, False)
     assert tp["regime"] == "night" and tp["cities"] == ["n1", "n2"] and tp["a_phys"] == pytest.approx(1.5)
     assert tp["natural"]["a1n"] == pytest.approx(0.5) and {"s", "kc", "a1"} <= set(tp["unused_keys"])
+
+
+def _strict(text: str):
+    def bad(c):
+        raise ValueError(f"non-standard JSON token {c}")
+    return json.loads(text, parse_constant=bad)
+
+
+def test_every_json_file_is_strict_json(tmp_path, monkeypatch):
+    """R24: city_metrics returns NaN r / R² by design, and json.dumps wrote bare NaN (invalid JSON for browsers,
+    jq --strict and Studio); the files are now written as the core's runio does (NaN → null)."""
+    from sparc.core.lstair import to_json
+
+    assert _strict(to_json({"r": float("nan"), "x": np.float64("inf"), "a": np.array([1.0, np.nan])})) == \
+        {"r": None, "x": None, "a": [1.0, None]}
+    orig = E.city_metrics
+    monkeypatch.setattr(E, "city_metrics", lambda y, p: {**orig(y, p), "r": float("nan")})
+    for k in range(4):
+        write_city(toy_city(k, n=32), tmp_path / "data")
+    E.run_evaluation(tmp_path / "data", tmp_path / "res", E.Settings(**{**FAST.__dict__, "physics_iter": 5,
+                                                                         "within_city": False}))
+    res = _strict((tmp_path / "res" / "results.json").read_text())
+    assert res["windows"]["af"]["per_city"][0]["A"]["r"] is None
+    for f in (tmp_path / "res" / "physics").glob("*.json"):
+        _strict(f.read_text())

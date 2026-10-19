@@ -34,4 +34,15 @@ from __future__ import annotations
 RUN_CODE = {"morning": "am", "midday": "af", "evening": "pm", "night": "ni"}
 RUN_ORDER = ("af", "am", "pm", "ni")
 
-__all__ = ["RUN_CODE", "RUN_ORDER"]
+
+def to_json(obj, indent: int | None = 1) -> str:
+    """Strict JSON as the core writes it (:mod:`sparc.core.runio`): NaN/Inf → null, ``allow_nan=False``, numpy and
+    pandas values as Python ones, so browsers, ``jq`` and Studio can read every file the pilot writes."""
+    import json
+
+    from sparc.core.runio import _jsonable
+
+    return json.dumps(_jsonable(obj), indent=indent, allow_nan=False, default=str)
+
+
+__all__ = ["RUN_CODE", "RUN_ORDER", "to_json"]

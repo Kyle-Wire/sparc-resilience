@@ -64,7 +64,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from sparc.core.lstair import RUN_CODE
+from sparc.core.lstair import RUN_CODE, to_json
 
 log = logging.getLogger(__name__)
 
@@ -724,8 +724,7 @@ class _Partial:
             buf = io.BytesIO()
             np.savez(buf, **{k: np.asarray(v) for k, v in arrays.items()})
             _write_atomic(self.dir / f"{name}.npz", buf.getvalue())
-        _write_atomic(self.dir / f"{name}.json", json.dumps({"key": key, "value": value},
-                                                            default=_json_default).encode())
+        _write_atomic(self.dir / f"{name}.json", to_json({"key": key, "value": value}, indent=None).encode())
 
     def clear(self) -> None:
         import shutil
@@ -960,7 +959,7 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
             "n_rows": int(len(table)), "rasters": sorted(rasters), "warnings": warnings,
             "seconds": round(time.perf_counter() - t0, 1),
             "built_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
-    _write_atomic(out / "meta.json", json.dumps(meta, indent=1, default=_json_default).encode())
+    _write_atomic(out / "meta.json", to_json(meta).encode())
     partial.clear()
     return meta
 
@@ -1139,10 +1138,10 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
             msg = str(exc).splitlines()[0][:300] if str(exc) else repr(exc)[:300]
             log.warning("lstair: %s failed: %s", s.name, msg)
             cdir.mkdir(parents=True, exist_ok=True)
-            _write_atomic(cdir / "meta.json", json.dumps({"schema": SCHEMA, "status": "failed", "city": s.name,
-                                                          "slug": s.slug, "error": msg}, indent=1).encode())
+            _write_atomic(cdir / "meta.json", to_json({"schema": SCHEMA, "status": "failed", "city": s.name,
+                                                          "slug": s.slug, "error": msg}).encode())
             summary["cities"][s.name] = {"slug": s.slug, "status": "failed", "error": msg}
-    _write_atomic(out / "dataset.json", json.dumps(summary, indent=1, default=_json_default).encode())
+    _write_atomic(out / "dataset.json", to_json(summary).encode())
     return summary
 
 

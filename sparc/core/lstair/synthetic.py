@@ -39,7 +39,6 @@ look informative.  The ``redundant`` world uses an LST that A can represent.
 
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +47,7 @@ import numpy as np
 import pandas as pd
 
 from sparc.core import operators as ops
+from sparc.core.lstair import to_json
 from sparc.core.lstair.dataset import CityData, CityGrid, derived_rasters
 from sparc.core.synthetic import canopy_shape, gaussian_random_field
 
@@ -160,7 +160,7 @@ def write_world(cities: list[CityData], root: str | Path) -> Path:
         d.mkdir(parents=True, exist_ok=True)
         c.table.to_parquet(d / "table.parquet", index=False)
         np.savez_compressed(d / "rasters.npz", **c.rasters)
-        (d / "meta.json").write_text(json.dumps(c.meta, indent=1), encoding="utf-8")
+        (d / "meta.json").write_text(to_json(c.meta), encoding="utf-8")
     return root
 
 
@@ -274,7 +274,7 @@ def validate(scenarios=SCENARIOS, n_cities: int = 8, seeds=(0,), settings=None, 
     if out is not None:
         o = Path(out)
         o.mkdir(parents=True, exist_ok=True)
-        (o / "validation.json").write_text(json.dumps(out_d, indent=1, default=str), encoding="utf-8")
+        (o / "validation.json").write_text(to_json(out_d), encoding="utf-8")
         (o / "validation.md").write_text(validation_markdown(out_d), encoding="utf-8")
     return out_d
 
