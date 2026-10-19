@@ -124,6 +124,7 @@ def _parse_frame(df: pd.DataFrame, source: str, timezone: str | None) -> pd.Data
                                  window_hint=_window_hint_from_name(source))
         t["source_file"] = source
         t["vehicle_key"] = f"{source}:{key}" if key is not None else source
+        t["vehicle_id"] = None if key is None else str(key)       # the id as published (same in every copy of a file)
         out.append(t)
     return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
 
@@ -143,12 +144,22 @@ def _read_any(f: Path) -> pd.DataFrame:
     return gpd.read_file(f)
 
 
-def _walk(root: Path, tmp: Path, depth: int = 0):
-    """Every readable file under ``root`` (zips unpacked into ``tmp``), as (path, display name)."""
+def _excluded(name: str, exclude: tuple[str, ...]) -> str | None:
+    low = name.lower()
+    return next((p for p in exclude if p and p.lower() in low), None)
+
+
+def _walk(root: Path, tmp: Path, depth: int = 0, exclude: tuple[str, ...] = ()):
+    """Every readable file under ``root`` (zips unpacked into ``tmp``), as (path, display name, error); files and
+    archives whose display name contains a pattern of ``exclude`` are yielded with the reason, not unpacked."""
     files = sorted(q for q in root.rglob("*") if q.is_file()) if root.is_dir() else [root]
     for f in files:
         name = f.relative_to(root).as_posix() if root.is_dir() else f.name
         if f.name.startswith(".") or "__macosx" in name.lower():
+            continue
+        pat = _excluded(name, exclude)
+        if pat is not None:
+            yield f, name, f"excluded (name contains {pat!r})"
             continue
         if f.suffix.lower() == ".zip" and depth < 4:
             dest = tmp / f"z{depth}_{abs(hash(str(f))) % 10**8}"
@@ -158,23 +169,30 @@ def _walk(root: Path, tmp: Path, depth: int = 0):
             except (zipfile.BadZipFile, OSError) as exc:
                 yield f, name, f"unreadable zip ({exc})"
                 continue
-            for sub, sub_name, err in _walk(dest, tmp, depth + 1):
+            for sub, sub_name, err in _walk(dest, tmp, depth + 1, exclude):
                 yield sub, f"{name}/{sub_name}", err
         else:
             yield f, name, None
 
 
-def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | None = None
-                   ) -> tuple[pd.DataFrame, list[dict]]:
+def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | None = None,
+                   exclude: tuple[str, ...] = ()) -> tuple[pd.DataFrame, list[dict]]:
     """Every traverse point under ``path`` (a file, an archive, or a folder of them) and a report of each
     file: ``{"file", "status": "read"|"skipped", "rows"|"reason", "columns"}``.  ``utc_to``: the
-    timestamps are UTC without saying so; convert them to this local time zone."""
+    timestamps are UTC without saying so; convert them to this local time zone.  ``exclude``: name patterns
+    (case-insensitive substrings of the path, archives included) of files not to read, e.g. ``("appendix",)``.
+
+    **Duplicates.**  A campaign folder can hold the same readings twice (Providence's OSF node ships the
+    afternoon and evening traverses in its main archive and again in an appendix archive).  A time-stamped
+    reading of a vehicle id at a position (5 decimals of a degree, ~1 m) that an earlier file already holds is
+    dropped, the first copy (in path order) kept; without an id column the key is the time and the position.
+    Each file's report entry gets ``duplicates``, the number of its readings dropped."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"{p} does not exist")
     frames, report = [], []
     with tempfile.TemporaryDirectory() as tmp:
-        for f, name, err in _walk(p, Path(tmp)):
+        for f, name, err in _walk(p, Path(tmp), exclude=tuple(exclude or ())):
             low = f.name.lower()
             if err:
                 report.append({"file": name, "status": "skipped", "reason": err})
@@ -196,7 +214,8 @@ def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | 
                            "columns": [str(c) for c in list(raw.columns)[:30]]})
             frames.append(t)
     if not frames:
-        return pd.DataFrame(columns=["time", "lat", "lon", "temp_f", "window", "source_file", "vehicle_key"]), report
+        return pd.DataFrame(columns=["time", "lat", "lon", "temp_f", "window", "source_file", "vehicle_key",
+                                     "vehicle_id"]), report
     out = pd.concat(frames, ignore_index=True)
     out["time"] = pd.to_datetime(out["time"], errors="coerce")
     if utc_to:
@@ -204,7 +223,29 @@ def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | 
         if getattr(t.dt, "tz", None) is None:
             t = t.dt.tz_localize("UTC")
         out["time"] = t.dt.tz_convert(utc_to).dt.tz_localize(None)
+    out = _drop_duplicates(out, report)
     return assign_runs(out), report
+
+
+def _drop_duplicates(pts: pd.DataFrame, report: list[dict]) -> pd.DataFrame:
+    """The readings without the copies of an earlier file's readings (see :func:`scan_traverses`)."""
+    have = pts["time"].notna().to_numpy()
+    if not have.any() or pts["source_file"].nunique() < 2:
+        return pts
+    vid = pts["vehicle_id"] if "vehicle_id" in pts else pd.Series(None, index=pts.index)
+    key = pd.DataFrame({"v": vid.astype(object).where(vid.notna(), ""), "t": pts["time"],
+                        "la": pts["lat"].round(5), "lo": pts["lon"].round(5)})
+    src = pts["source_file"].astype(str)
+    first = src.groupby([key["v"], key["t"], key["la"], key["lo"]], sort=False, dropna=False).transform("first")
+    dup = (key.duplicated(keep="first") & (src != first)).to_numpy() & have          # copies in another file only
+    if not dup.any():
+        return pts
+    counts = pts.loc[dup, "source_file"].value_counts()
+    for r in report:
+        if r.get("status") == "read" and r["file"] in counts.index:
+            r["duplicates"] = int(counts[r["file"]])
+    log.info("traverses: dropped %d readings that repeat an earlier file's", int(dup.sum()))
+    return pts.loc[~dup].reset_index(drop=True)
 
 
 def read_traverses(path: str | Path, timezone: str | None = None, utc_to: str | None = None) -> pd.DataFrame:

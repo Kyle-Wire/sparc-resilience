@@ -71,6 +71,9 @@ LST_RADII = (100, 300)
 MAX_CELLS = 6_000_000                  # ~70 km square at 30 m: larger grids are refused
 STUDY_BUFFER_M = 300.0                 # LST clear fraction is measured within this distance of the traverses
 TARGET_COLUMNS = ("Ta", "dTa", "ta_background", "n_readings", "n_visits")
+#: File-name patterns not read by default: CAPA's appendix archives repeat the main traverses (Providence wu9v7:
+#: the afternoon and evening runs again, plus three more sensors far outside the study area).
+SKIP_FILES = ("appendix",)
 SCHEMA = 1
 
 #: IANA zone by state (for converting the traverses' local clock to UTC hours for ERA5), with city overrides.
@@ -553,20 +556,26 @@ def city_status(city_dir: Path) -> str | None:
 def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, features: Callable | None = None,
                lst: Callable | None = None, era5: Callable | None = None, cell_m: float = CELL_M,
                margin_m: float = MARGIN_M, drift: str = "fe", drift_degree: int = 1, utc_to: str | None = None,
-               lst_window_days: int = 16, lst_min_clear: float = 0.5, cache_dir: Path | None = None) -> dict:
+               lst_window_days: int = 16, lst_min_clear: float = 0.5, cache_dir: Path | None = None,
+               skip_files: tuple[str, ...] = SKIP_FILES) -> dict:
     """Build one city's table and rasters from a local traverse folder; returns its meta (also written).
 
     ``features(ctx, campaign_date) → (rasters, provenance)``, ``lst(ctx, campaign_date, study) → {"lst_c",
     "scenes", ...}`` and ``era5(lon, lat, tz, start, end) → {"ta_era5", "sw_down", "lw_net", ...}`` are the data
     providers (defaults: :func:`open_features`, :func:`landsat_lst`, :func:`era5_run`; ``lst=False`` /
-    ``era5=False`` switch a source off).  Tests pass synthetic ones."""
+    ``era5=False`` switch a source off).  Tests pass synthetic ones.  Files whose path contains a pattern of
+    ``skip_files`` (default :data:`SKIP_FILES`) are not read; readings repeated across files are read once
+    (:func:`sparc.core.identify.traverses.scan_traverses`), and the count is ``meta["n_duplicate_readings"]``."""
     from sparc.core.identify.traverses import runs_summary, scan_traverses, to_campaign
 
     t0 = time.perf_counter()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     warnings: list[str] = []
-    points, report = scan_traverses(traverses, utc_to=utc_to)
+    points, report = scan_traverses(traverses, utc_to=utc_to, exclude=tuple(skip_files or ()))
+    n_dup = int(sum(r.get("duplicates", 0) for r in report))
+    if n_dup:
+        warnings.append(f"{n_dup:,} readings repeat another file's (same sensor, time and position): read once")
     if not len(points):
         skipped = "; ".join(f"{r['file']}: {r.get('reason')}" for r in report[:6])
         raise ValueError(f"no traverse points under {traverses}" + (f" (skipped {skipped})" if skipped else ""))
@@ -683,7 +692,7 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
             "catalog": {"node": spec.node, "folder_hint": spec.folder_hint, "campaign_date": spec.catalog_date,
                         "campaign_date_source": spec.catalog_date_source, "availability": spec.availability},
             "grid": ctx.as_dict(), "tz": spec.tz, "drift_method": drift, "runs": runs,
-            "files": report, "features": fprov,
+            "files": report, "skip_files": list(skip_files or ()), "n_duplicate_readings": n_dup, "features": fprov,
             "lst": None if lst_res is None else {k: v for k, v in lst_res.items() if k != "lst_c"},
             "n_rows": int(len(table)), "rasters": sorted(rasters), "warnings": warnings,
             "seconds": round(time.perf_counter() - t0, 1),

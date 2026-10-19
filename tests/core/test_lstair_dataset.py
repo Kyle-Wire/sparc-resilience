@@ -359,3 +359,40 @@ def test_fe_drift_falls_back_when_revisits_are_only_minutes_apart():
     v3 = v2.assign(temp=v2["temp"] + 2.0 * rng.standard_normal(len(v2)))
     _, info3 = D.adjust_visits(v3, max_drift_se=0.05)
     assert info3["method"] == "protocol" and "SE above" in info3["fallback"] and info3["fe_drift_se_per_h"] > 0.05
+
+
+def test_repeated_traverse_files_are_read_once_and_appendix_archives_skipped(built, tmp_path):
+    """R8: CAPA's Providence node ships the afternoon run in its main archive and again in an appendix archive
+    (plus extra sensors); reading both doubled readings and visits and changed the drift and the target."""
+    import zipfile
+
+    root, out, _ = built
+    trav = tmp_path / "trav" / "providence_ri"
+    shutil.copytree(root / "traverses" / "providence_ri", trav)
+    af = pd.read_csv(trav / "af_trav.csv")
+    extra = af[af["car"] == 1].assign(car=9, lat=af["lat"] + 0.3)               # a sensor far outside the study area
+    with zipfile.ZipFile(trav / "Appendix Data_Heat Watch RI.zip", "w") as z:
+        z.writestr("appendix_af_trav.csv", pd.concat([af, extra]).to_csv(index=False))
+    kw = dict(features=synthetic_features, lst=False, era5=False, probe_opener=_no_network)
+    D.build_dataset(["Providence, RI"], tmp_path / "o1", traverses_dir=tmp_path / "trav", **kw)
+    c1 = D.load_city(tmp_path / "o1" / "cities" / "providence_ri")
+    ref = D.load_city(out / "cities" / "providence_ri")
+    skipped = [f for f in c1.meta["files"] if f["file"].startswith("Appendix")]
+    assert skipped and skipped[0]["status"] == "skipped" and "excluded" in skipped[0]["reason"]
+    assert c1.grid.as_dict() == ref.grid.as_dict() and c1.meta["n_duplicate_readings"] == 0
+    # a second copy of a file under another name: its readings are read once
+    shutil.copy(trav / "af_trav.csv", trav / "af_trav_copy.csv")
+    D.build_dataset(["Providence, RI"], tmp_path / "o2", traverses_dir=tmp_path / "trav", **kw)
+    c2 = D.load_city(tmp_path / "o2" / "cities" / "providence_ri")
+    assert c2.meta["n_duplicate_readings"] == len(af)
+    assert any("read once" in w for w in c2.meta["warnings"])
+    a = ref.table.sort_values(["run_id", "cell"]).reset_index(drop=True)
+    b = c2.table.sort_values(["run_id", "cell"]).reset_index(drop=True)
+    assert a["cell"].tolist() == b["cell"].tolist() and (a["n_readings"] == b["n_readings"]).all()
+    assert np.allclose(a["Ta"], b["Ta"]) and np.allclose(a["dTa"], b["dTa"])
+    # read with the appendix: its copies of the afternoon readings are dropped, its extra sensor kept
+    D.build_dataset(["Providence, RI"], tmp_path / "o3", traverses_dir=tmp_path / "trav", skip_files=(), **kw)
+    c3 = D.load_city(tmp_path / "o3" / "cities" / "providence_ri")
+    assert c3.meta["n_duplicate_readings"] == 2 * len(af)
+    run = next(r for r in c3.meta["runs"] if r["run"] == "af")
+    assert run["vehicles"] == 4

@@ -35,6 +35,9 @@ def add_lstair_parser(subs) -> None:
     d.add_argument("--no-era5", action="store_true", help="skip ERA5 (ta_era5 NaN; physics uses default forcing)")
     d.add_argument("--utc", action="store_true", help="the traverse clocks are UTC without saying so: convert to local")
     d.add_argument("--force", action="store_true", help="rebuild cities that are already cached")
+    d.add_argument("--keep-appendix", action="store_true",
+                   help="also read files whose name contains 'appendix' (CAPA's appendix archives repeat the main "
+                        "traverses; repeated readings are read once either way)")
     d.add_argument("--cell", type=float, default=30.0, help="cell size in metres (default 30)")
     d.add_argument("--margin", type=float, default=2000.0, help="grid margin around the traverses, m (default 2000)")
     d.add_argument("--drift", choices=("fe", "protocol", "none"), default="fe",
@@ -108,7 +111,8 @@ def cmd_dataset(args) -> int:
     cities = _cities(args.cities)
     utc_to = None
     kw = dict(cell_m=args.cell, margin_m=args.margin, drift=args.drift, lst_window_days=args.lst_window_days,
-              lst_min_clear=args.lst_min_clear, cache_dir=Path(args.cache) if args.cache else out / "cache" / "landsat")
+              lst_min_clear=args.lst_min_clear, cache_dir=Path(args.cache) if args.cache else out / "cache" / "landsat",
+              skip_files=() if args.keep_appendix else D.SKIP_FILES)
     try:
         if args.utc:
             summary = {"cities": {}}
