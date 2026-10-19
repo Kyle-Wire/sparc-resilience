@@ -25,9 +25,10 @@ Models
   loss).  It is fitted **once per city and window** on that city's own cells of one run (the window's run with
   the most cells, with that run's ERA5 forcing and background; :func:`physics_run_id`; no advection: no wind
   record is assumed), and a held-out city's runs are each predicted with their own forcing.  **Transfer rule** to a held-out city: every nonlinear parameter (L, shading, storage, evaporative
-  fraction, water sink) and the lapse coefficient γ is the **median over the training cities' fits**; the gain and
-  the coupling are transferred in physical units, a/forcing (= r_a/ρc_p) and c_lst·forcing (= ρc_p/r_a), and
-  converted back with the held-out city's own forcing (ERA5 SW↓ of the run, else a default per run); the
+  fraction, water sink) and the lapse coefficient γ is the **median over the training cities' fits**; the gain is
+  transferred in physical units, a/forcing, and the LST term as the median over cities of the product
+  a_phys·h_lst (the air's K-per-K response to LST, which the data determine; a and c_lst trade off within a fit),
+  both converted back with the held-out city's own forcing (ERA5 SW↓ of the run, else a default per run); the
   intercept and the linear trend are city-specific and set to 0.  No label of the held-out city is used.
   ``C0`` is the same physics without LST (secondary).  C − C0 shows what LST adds *inside the physics*, not
   beyond land cover: the physics' land-cover source has a fixed form, and an LST that is only a function of land
@@ -84,7 +85,6 @@ EXACT_SIGN_FLIP_MAX = 16       # up to this many cities every sign vector is enu
 GROUP_KM = 10.0                # cities whose grids come this close are one campaign group (held out together)
 MIN_CELLS = 30                 # a run with fewer driven cells is not scored
 DEFAULT_FORCING = {"af": (650.0, -90.0), "am": (150.0, -60.0), "pm": (40.0, -80.0), "ni": (0.0, -80.0)}
-RHO_CP = 1170.0                # J m⁻³ K⁻¹ (air near 30 °C), for the implied r_a
 
 CENTRED = (["canopy", "impervious", "ndvi", "albedo", "elevation", "log_water"]
            + [f"{k}_f{r}" for k in FOCAL_FEATURES for r in FOCAL_RADII])
@@ -391,21 +391,32 @@ def fit_city_physics(city: CityData, run: str, use_lst: bool, s: Settings) -> di
            "window": cfg["window"], "seconds": round(time.perf_counter() - t0, 2), "roles": inp["roles"]}
     if use_lst:
         rec["c_lst"] = float(T["c_lst"])
-        rec["h_lst"] = float(T["c_lst"]) * norm                      # W m⁻² K⁻¹ = ρc_p / r_a
-        rec["r_a_lst_s_m"] = RHO_CP / rec["h_lst"] if rec["h_lst"] > 0 else None
-    if m.a > 0:
-        rec["r_a_s_m"] = float(m.a) / norm * RHO_CP                   # a = r_a·SW/ρc_p in the local limit
+        rec["h_lst"] = float(T["c_lst"]) * norm                      # the coupling in forcing units (W m⁻² K⁻¹)
+        # what the data determine: the air's response per K of LST anomaly, a·c_lst = a_phys·h_lst (K per K);
+        # a and c_lst trade off within a fit, so their separate values (and any r_a read from them) are not
+        # usable as aerodynamic resistances
+        rec["g_lst"] = rec["a_phys"] * rec["h_lst"]
     return rec
 
 
 def transfer_params(fits: list[dict], use_lst: bool) -> dict:
-    """The transfer rule: medians over the training cities' fits (gain and coupling in physical units)."""
+    """The transfer rule: medians over the training cities' fits (gain and coupling in physical units).
+
+    The LST term's effect on the air is a·c_lst·ΔLST = a_phys·h_lst·ΔLST, and within a fit a and c_lst trade off
+    (anti-correlated across cities), so the separate medians of a_phys and h_lst misstate their product.  The
+    transferred LST gain is the **median of the per-city products** g = a_phys·h_lst (K per K), and h_lst is set
+    to g / median(a_phys), so the held-out city gets a·c_lst = g; median(a_phys) itself serves the land-cover
+    source only.  With median(a_phys) ≤ 0 the LST term cannot be carried and h_lst is 0 (recorded)."""
     nat = {k: float(np.median([f["natural"][k] for f in fits])) for k in TRANSFER_KEYS}
-    out = {"natural": nat, "a_phys": float(np.median([f["a_phys"] for f in fits])),
-           "gamma": float(np.median([f["gamma"] for f in fits])), "n_cities": len(fits),
-           "cities": [f["slug"] for f in fits]}
+    a_med = float(np.median([f["a_phys"] for f in fits]))
+    out = {"natural": nat, "a_phys": a_med, "gamma": float(np.median([f["gamma"] for f in fits])),
+           "n_cities": len(fits), "cities": [f["slug"] for f in fits]}
     if use_lst:
-        out["h_lst"] = float(np.median([f["h_lst"] for f in fits]))
+        g = float(np.median([f.get("g_lst", f["a_phys"] * f["h_lst"]) for f in fits]))
+        out["g_lst"] = g
+        out["h_lst"] = g / a_med if a_med > 0 else 0.0
+        if a_med <= 0:
+            out["note"] = "median gain a_phys ≤ 0: the LST term cannot be carried (h_lst = 0)"
     return out
 
 
@@ -675,7 +686,7 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
                 preds[v][te] = centre(pc.reindex(idx).to_numpy(), key[te])
                 rec[v] = city_metrics(df.loc[te, "dTa"], preds[v][te])
                 rec[v]["transfer"] = {"a_phys": tp["a_phys"], "L_m": tp["natural"]["L"],
-                                      **({"h_lst": tp["h_lst"]} if v == "C" else {})}
+                                      **({"g_lst": tp["g_lst"], "h_lst": tp["h_lst"]} if v == "C" else {})}
         for h in members:
             if "lst_offset_days" in df:
                 off = df.loc[df["slug"] == h, "lst_offset_days"]
@@ -753,8 +764,9 @@ def evaluate(cities: list[CityData], s: Settings | None = None, cache: Path | No
 TRANSFER_RULE = ("Model C is fitted once per city and window on that city's own driven cells of one run (the "
                  "window's run with the most cells, with that run's forcing and background).  For a held-out city "
                  "every nonlinear physics parameter and the lapse coefficient are the medians of the training "
-                 "cities' fits; the gain and the LST coupling are transferred in physical units (a/forcing and "
-                 "c_lst·forcing) and converted with the held-out city's own run forcing; the intercept and the "
+                 "cities' fits; the gain is transferred in physical units (a/forcing) and the LST term as the "
+                 "median of the per-city products a_phys·h_lst (K per K), converted with the held-out city's own "
+                 "run forcing; the intercept and the "
                  "linear trend are 0; each of its runs is predicted with that run's own forcing and centred to "
                  "median zero over the run's cells.  No held-out "
                  "label is used.")

@@ -309,3 +309,15 @@ def test_physics_uses_one_run_with_its_own_forcing_and_predicts_every_run(tmp_pa
     assert set(pc.index.get_level_values(0)) == {"2021-07-20 midday", "2021-07-21 midday"}
     for _, part in pc.groupby(level=0):
         assert abs(part.median()) < 1e-9
+
+
+def test_the_lst_gain_is_transferred_as_the_median_of_the_per_city_products():
+    """R4: a and c_lst trade off within a fit (anti-correlated across cities); the product of the separate medians
+    misstated the transferred LST response.  The median of a_phys·h_lst is what reaches the held-out city."""
+    fits = [{"slug": f"c{i}", "natural": {k: 1.0 for k in E.TRANSFER_KEYS}, "a_phys": a, "gamma": 0.0, "h_lst": h,
+             "g_lst": a * h} for i, (a, h) in enumerate([(1.0, 3.0), (2.0, 1.0), (3.0, 2.0)])]
+    tp = E.transfer_params(fits, True)
+    assert tp["g_lst"] == pytest.approx(3.0) and tp["a_phys"] == pytest.approx(2.0)
+    assert tp["a_phys"] * tp["h_lst"] == pytest.approx(3.0)                       # not median(a)·median(h) = 4
+    zero = E.transfer_params([{**f, "a_phys": 0.0} for f in fits], True)
+    assert zero["h_lst"] == 0.0 and "cannot" in zero["note"]
