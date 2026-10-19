@@ -538,6 +538,8 @@ def within_city(df: pd.DataFrame, s: Settings) -> dict:
         rec = {"slug": slug, "n": int(len(g)), "n_blocks": int(nb)}
         for name, cols in (("A", A_COLS), ("B", B_COLS)):
             X = g[cols].to_numpy(float)
+            if not np.isfinite(X).all():                  # B without LST (a dataset built with --no-lst)
+                continue
             p = np.full(len(g), np.nan)
             for tr, te in kf.split(X, y, blocks):
                 p[te] = _fit_predict("ridge_spline", {"alpha": 3.0}, X[tr], y[tr], np.ones(tr.size), X[te], s.seed)
@@ -547,8 +549,10 @@ def within_city(df: pd.DataFrame, s: Settings) -> dict:
         return {"label": "within-city block CV (interpolation-prone)", "cities": []}
     return {"label": "within-city block CV (interpolation-prone: held-out blocks share the city's streets, weather "
                      "and campaign with the training blocks)", "block_m": s.block_m, "cities": rows,
-            "median_r2": {m: float(np.median([r[m]["r2"] for r in rows])) for m in ("A", "B")},
-            "mean_diff_mse_B_minus_A": float(np.mean([r["B"]["mse"] - r["A"]["mse"] for r in rows]))}
+            "median_r2": {m: float(np.median([r[m]["r2"] for r in rows if m in r])) for m in ("A", "B")
+                          if any(m in r for r in rows)},
+            "mean_diff_mse_B_minus_A": (float(np.mean([r["B"]["mse"] - r["A"]["mse"] for r in rows if "B" in r]))
+                                        if any("B" in r for r in rows) else None)}
 
 
 # --------------------------------------------------------------------------- #
@@ -565,15 +569,30 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
         res.update(status="not run", reason=f"{len(keep)} cities with ≥ {MIN_CELLS} driven cells in this run (need "
                                             f"{MIN_CITIES})")
         return res, pd.DataFrame()
-    ok = np.isfinite(df[B_COLS + ["dTa"]].to_numpy(float)).all(axis=1)
+    ok_a = np.isfinite(df[A_COLS + ["dTa"]].to_numpy(float)).all(axis=1)
+    has_lst = np.isfinite(df[LST_COLS].to_numpy(float)).all(axis=1)
+    no_lst = not (ok_a & has_lst).any()
+    res["lst"] = ("none: the dataset has no LST in this window (built with --no-lst, or no city had a clear Landsat "
+                  "scene); A and C0 only") if no_lst else "present"
+    ok = ok_a if no_lst else ok_a & has_lst
     res["n_cells_total"] = int(len(df))
     res["n_cells_dropped_missing_predictor"] = int((~ok).sum())
     n_all = df.groupby(["slug", "run_id"]).size()
+    excluded = []
+    if not no_lst:
+        for sl in sorted(df["slug"].unique()):
+            sel = (df["slug"] == sl).to_numpy()
+            if (ok_a & sel).sum() >= MIN_CELLS and (ok & sel).sum() < MIN_CELLS:
+                excluded.append({"slug": sl, "reason": f"no LST over its driven cells ({int((has_lst & sel).sum())} of "
+                                                       f"{int(sel.sum())}): no clear Landsat scene"})
+    res["excluded"] = excluded
     df = df[ok].reset_index(drop=True)
     by_city = {c.slug: c for c in keep}
     slugs = [c for c in sorted(df["slug"].unique()) if (df["slug"] == c).sum() >= MIN_CELLS]
     if len(slugs) < MIN_CITIES:
-        res.update(status="not run", reason=f"{len(slugs)} cities with ≥ {MIN_CELLS} cells with every predictor")
+        why = "every predictor" if no_lst else "every predictor (missing LST excluded " + \
+            (f"{len(excluded)} of them)" if excluded else "none)")
+        res.update(status="not run", reason=f"{len(slugs)} cities with ≥ {MIN_CELLS} cells with {why}")
         return res, pd.DataFrame()
     df = df[df["slug"].isin(slugs)].reset_index(drop=True)
     df, res["target_recentred"] = recentre_target(df, n_all)
@@ -589,8 +608,11 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
     preds = {m: np.full(len(df), np.nan) for m in ("A", "B", "C", "C0")}
     chosen = {}
     fits = {}
+    models = ("A",) if no_lst else ("A", "B")
     if s.physics:
         for v in s.physics_variants:
+            if v == "C" and no_lst:
+                continue
             fits[v] = physics_fits([by_city[c] for c in slugs], run, v == "C", s,
                                    None if cache is None else cache / "physics")
     per_city = []
@@ -600,7 +622,7 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
         train = _subsample(df[~te_g], s.max_rows_per_city, s.seed)
         recs = {h: {"slug": h, "city": str(df.loc[df["slug"] == h, "city"].iloc[0]),
                     "n": int((df["slug"] == h).sum()), "group": g} for h in members}
-        for name, cols in (("A", A_COLS), ("B", B_COLS)):
+        for name, cols in (("A", A_COLS), ("B", B_COLS))[:len(models)]:
             (kind, params), table = inner_select(train, cols, s)
             p = _fit_predict(kind, params, train[cols].to_numpy(float), train["dTa"].to_numpy(float),
                              _weights(train["slug"].to_numpy()), df.loc[te_g, cols].to_numpy(float), s.seed)
@@ -658,14 +680,19 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
             res["summary"][m] = {"n_cities": len(rows), "mean_rmse": float(np.mean([x["rmse"] for x in rows])),
                                  "median_r2": float(np.median([x["r2"] for x in rows])),
                                  "median_r": float(np.nanmedian([x["r"] for x in rows]))}
-    res["paired"] = {"B-A": paired(*pair("B", "A"), s.boot, s.seed)}
+    if no_lst:
+        nt = {"verdict": "not testable", "n_cities": 0, "reason": "no LST: " + res["lst"].split(": ", 1)[1]}
+        res["paired"] = {"B-A": {"comparison": "B − A", "claim": "LST adds information beyond land cover", **nt}}
+    else:
+        res["paired"] = {"B-A": paired(*pair("B", "A"), s.boot, s.seed)}
     if "C" in res["summary"]:
         res["paired"]["C-A"] = paired(*pair("C", "A"), s.boot, s.seed + 1, "C − A", "physics with LST beats land cover")
     if "C" in res["summary"] and "C0" in res["summary"]:
         res["paired"]["C-C0"] = paired(*pair("C", "C0"), s.boot, s.seed + 2, "C − C0",
                                        "LST adds information inside the physics")
     res["verdict"] = res["paired"]["B-A"]["verdict"]
-    offs = [(r["lst_offset_days"], r["B"]["mse"] - r["A"]["mse"]) for r in per_city if r.get("lst_offset_days") is not None]
+    offs = [(r["lst_offset_days"], r["B"]["mse"] - r["A"]["mse"]) for r in per_city
+            if r.get("lst_offset_days") is not None and "B" in r]
     if len(offs) >= 4 and len({o for o, _ in offs}) > 1:
         from scipy.stats import spearmanr
 
@@ -748,8 +775,13 @@ def results_markdown(res: dict) -> str:
                      f"{g('B', 'r')} | {g('C', 'r')} |")
         wc = w.get("within_city") or {}
         if wc.get("cities"):
-            L += ["", f"Secondary, {wc['label']}: median R² A {_f(wc['median_r2']['A'])}, B {_f(wc['median_r2']['B'])}; "
-                      f"mean ΔMSE (B − A) {wc['mean_diff_mse_B_minus_A']:+.4f} °C²."]
+            dm = wc.get("mean_diff_mse_B_minus_A")
+            L += ["", f"Secondary, {wc['label']}: median R² A {_f(wc['median_r2'].get('A'))}, B "
+                      f"{_f(wc['median_r2'].get('B'))}; mean ΔMSE (B − A) {_f(dm, 4)} °C²."]
+        if w.get("excluded"):
+            L += ["", "Excluded: " + "; ".join(f"{e['slug']} ({e['reason']})" for e in w["excluded"]) + "."]
+        if w.get("lst", "present") != "present":
+            L += ["", f"LST: {w['lst']}."]
         if w.get("gain_vs_lst_offset"):
             g = w["gain_vs_lst_offset"]
             L += ["", f"B − A against the LST scene's offset from the campaign: Spearman {_f(g['spearman'])} over {g['n']} "

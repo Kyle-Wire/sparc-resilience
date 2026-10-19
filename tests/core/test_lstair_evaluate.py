@@ -260,3 +260,28 @@ def test_the_target_is_recentred_on_the_cells_scored():
     assert len(rows) == 4 and all(r["share_dropped"] > 0.3 and r["shift_c"] > 0 for r in rows)
     shifted, _ = E.recentre_target(E.design(cities[0].table).dropna(subset=E.B_COLS))
     assert np.allclose(shifted["dTa"] + shifted["Ta"].median(), shifted["Ta"])
+
+
+def _no_lst(c: D.CityData) -> D.CityData:
+    t = c.table.copy()
+    for k in ("lst", "lst_f100", "lst_f300"):
+        t[k] = np.nan
+    return D.CityData(slug=c.slug, meta=c.meta, table=t, grid=c.grid,
+                      rasters={k: v for k, v in c.rasters.items() if not k.startswith("lst")})
+
+
+def test_without_lst_the_land_cover_and_physics_baselines_still_run():
+    """R22: a dataset built with --no-lst gave 'not run' for every model; a city without a scene vanished unnamed."""
+    cities = [_no_lst(toy_city(k, n=32)) for k in range(4)]
+    s = E.Settings(**{**FAST.__dict__, "within_city": True, "physics_iter": 10})
+    res, pred = E.evaluate_window(cities, "af", s)
+    assert res["status"] == "done" and res["lst"].startswith("none")
+    assert set(res["summary"]) == {"A", "C0"} and "pred_A" in pred and "pred_C0" in pred and "pred_B" not in pred
+    assert res["paired"]["B-A"]["verdict"] == "not testable" and "no LST" in res["paired"]["B-A"]["reason"]
+    assert "LST: none" in E.results_markdown({"target": "t", "n_cities": 4, "transfer_rule": "r",
+                                              "windows": {"af": res}})
+    # one city without a scene among LST cities: named as excluded, the rest evaluated
+    mixed = [toy_city(k, n=32) for k in range(4)] + [_no_lst(toy_city(4, n=32))]
+    res2, _ = E.evaluate_window(mixed, "af", E.Settings(**{**s.__dict__, "physics": False}))
+    assert [e["slug"] for e in res2["excluded"]] == ["toy_4"] and "no clear Landsat scene" in res2["excluded"][0]["reason"]
+    assert {r["slug"] for r in res2["per_city"]} == {"toy_0", "toy_1", "toy_2", "toy_3"}
