@@ -733,6 +733,31 @@ class _Partial:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+#: build_city settings that change a city's table (the fingerprint a cached city is compared with).
+SETTING_DEFAULTS = {"cell_m": CELL_M, "margin_m": MARGIN_M, "drift": "fe", "drift_degree": 1, "utc_to": None,
+                    "lst_window_days": 16, "lst_min_clear": 0.5, "skip_files": list(SKIP_FILES),
+                    "campaign_date": None, "lst": True, "era5": True}
+
+
+def build_settings(**kw) -> dict:
+    """The fingerprinted settings of a city build (``SETTING_DEFAULTS`` updated with ``kw``; ``lst`` / ``era5`` are
+    whether the source is on) and their key."""
+    out = dict(SETTING_DEFAULTS)
+    for k, v in kw.items():
+        if k in out:
+            out[k] = (v is not False) if k in ("lst", "era5") else (list(v) if isinstance(v, tuple) else v)
+    out["cell_m"], out["margin_m"] = float(out["cell_m"]), float(out["margin_m"])
+    out["lst_window_days"], out["lst_min_clear"] = int(out["lst_window_days"]), float(out["lst_min_clear"])
+    out["schema"] = SCHEMA
+    return out
+
+
+def settings_key(settings: dict) -> str:
+    import hashlib
+
+    return hashlib.sha256(json.dumps(settings, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
 def _provider_id(fn, default: str) -> str:
     return default if fn is None else f"{getattr(fn, '__module__', '')}.{getattr(fn, '__qualname__', repr(fn))}"
 
@@ -768,6 +793,9 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     from sparc.core.identify.traverses import runs_summary, scan_traverses, to_campaign
 
     t0 = time.perf_counter()
+    settings = build_settings(cell_m=cell_m, margin_m=margin_m, drift=drift, drift_degree=drift_degree, utc_to=utc_to,
+                              lst_window_days=lst_window_days, lst_min_clear=lst_min_clear, skip_files=skip_files,
+                              campaign_date=campaign_date, lst=lst, era5=era5)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     warnings: list[str] = []
@@ -925,7 +953,8 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
             "campaign_date": campaign.isoformat(), "campaign_date_source": date_source,
             "catalog": {"node": spec.node, "folder_hint": spec.folder_hint, "campaign_date": spec.catalog_date,
                         "campaign_date_source": spec.catalog_date_source, "availability": spec.availability},
-            "grid": ctx.as_dict(), "tz": spec.tz, "drift_method": drift, "runs": runs,
+            "grid": ctx.as_dict(), "tz": spec.tz, "drift_method": drift, "settings": settings,
+            "settings_key": settings_key(settings), "runs": runs,
             "files": report, "skip_files": list(skip_files or ()), "n_duplicate_readings": n_dup, "features": fprov,
             "lst": None if lst_res is None else {k: v for k, v in lst_res.items() if k != "lst_c"},
             "n_rows": int(len(table)), "rasters": sorted(rasters), "warnings": warnings,
@@ -1061,7 +1090,14 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
     (out / "cities").mkdir(parents=True, exist_ok=True)
     specs = [city_spec(c) for c in cities]
     single = len(specs) == 1
-    todo = [s for s in specs if force or city_status(out / "cities" / s.slug) != "ok"]
+    wanted = {s.slug: settings_key(build_settings(**{**kw, "lst": lst, "era5": era5,
+                                                     "campaign_date": _lookup(campaign_dates, s),
+                                                     **({"utc_to": s.tz} if utc else {})})) for s in specs}
+    stale = {s.slug: _stale(out / "cities" / s.slug, wanted[s.slug]) for s in specs}
+    todo = [s for s in specs if force or city_status(out / "cities" / s.slug) != "ok" or stale[s.slug]]
+    for s in specs:
+        if stale[s.slug] and not force and city_status(out / "cities" / s.slug) == "ok":
+            log.info("lstair: %s is rebuilt: %s", s.name, stale[s.slug])
     local = {s.slug: local_traverses(s, traverses_dir, single) for s in todo}
     unavailable = {s.slug: _unavailable(s) for s in todo if local[s.slug] is None and _unavailable(s)}
     need_dl = [s for s in todo if local[s.slug] is None and s.slug not in unavailable and not _downloaded(out, s)]
@@ -1117,6 +1153,22 @@ def _lookup(mapping: dict | None, spec: CitySpec):
     keys = {spec.name.lower(), spec.slug, spec.name.split(",")[0].strip().lower()}
     return next((v for k, v in mapping.items() if str(k).strip().lower() in keys or slugify(str(k)) == spec.slug),
                 None)
+
+
+def _stale(city_dir: Path, key: str) -> str | None:
+    """Why a finished city's cache does not match the requested settings (None when it does or is absent)."""
+    p = Path(city_dir) / "meta.json"
+    if not p.exists():
+        return None
+    try:
+        meta = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if meta.get("status") != "ok" or meta.get("settings_key") == key:
+        return None
+    if "settings_key" not in meta:
+        return "built before settings were recorded"
+    return f"built with other settings ({meta.get('settings')})"
 
 
 def _unavailable(spec: CitySpec) -> str | None:

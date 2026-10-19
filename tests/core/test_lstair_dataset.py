@@ -712,3 +712,24 @@ def test_a_city_cut_off_mid_build_resumes_from_the_sources_already_done(built, t
     assert np.allclose(a["canopy_f300"], b["canopy_f300"]) and np.allclose(a["lst"], b["lst"], equal_nan=True)
     m = D.load_city(tmp_path / "o" / "cities" / "providence_ri").meta
     assert not any("large grid" in w for w in m["warnings"])
+
+
+def test_a_cached_city_is_rebuilt_when_its_build_settings_change(built, tmp_path):
+    """R17: a rerun with another --drift (or cell, margin, LST window, ...) silently kept the old table."""
+    root, _, _ = built
+    calls = []
+
+    def feats(ctx, d):
+        calls.append(1)
+        return synthetic_features(ctx, d)
+
+    kw = dict(traverses_dir=root / "traverses", features=feats, lst=False, era5=False, probe_opener=_no_network)
+    D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)
+    s = D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)
+    assert len(calls) == 1 and s["cities"]["Providence, RI"].get("skipped") == "cached"
+    s = D.build_dataset(["Providence, RI"], tmp_path / "o", drift="protocol", **kw)
+    assert len(calls) == 2 and "skipped" not in s["cities"]["Providence, RI"]
+    m = D.load_city(tmp_path / "o" / "cities" / "providence_ri").meta
+    assert m["settings"]["drift"] == "protocol" and {r["drift"]["method"] for r in m["runs"]} == {"protocol"}
+    D.build_dataset(["Providence, RI"], tmp_path / "o", drift="protocol", **kw)
+    assert len(calls) == 2
