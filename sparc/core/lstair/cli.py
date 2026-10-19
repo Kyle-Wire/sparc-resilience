@@ -4,7 +4,7 @@
                                [--no-lst] [--no-era5] [--utc] [--force]
     sparc core lstair dataset  --cities all --out DIR            (every CAPA catalog city)
     sparc core lstair evaluate --data DIR --out DIR [--windows af,am,pm] [--no-physics] [--boot 4000]
-    sparc core lstair validate --out DIR [--cities 8] [--seeds 0,1,2] [--fast]   (synthetic worlds, known answers)
+    sparc core lstair validate --out DIR [--cities 8] [--seeds 0-49] [--fast]   (synthetic worlds, known answers)
     sparc core lstair hosts [--probe]                            (the hosts a real run needs)
 
 Exit codes (dataset): 0 done (some cities may have failed: see DIR/dataset.json), 1 nothing built, 2 a host the
@@ -69,7 +69,9 @@ def add_lstair_parser(subs) -> None:
     v = s.add_parser("validate", help="synthetic worlds with known answers: does the harness say what it should?")
     v.add_argument("--out", required=True, help="folder for validation.json / validation.md")
     v.add_argument("--cities", type=int, default=8, help="cities per world (default 8)")
-    v.add_argument("--seeds", default="0", help="comma list of world seeds (default 0)")
+    v.add_argument("--seeds", default="0",
+                   help="world seeds: a comma list and/or ranges, e.g. 0-49 (default 0); with 10 or more the verdict "
+                        "rests on the claim rates over seeds")
     v.add_argument("--size", type=int, default=64, help="grid cells per side of each city (default 64)")
     v.add_argument("--fast", action="store_true", help="spline ridge only, short physics fits")
     v.set_defaults(func=_tracked(cmd_validate))
@@ -175,6 +177,19 @@ def cmd_evaluate(args) -> int:
     return 0
 
 
+def _seeds(text: str) -> tuple[int, ...]:
+    """``"0,1,2"`` or ranges ``"0-49"`` (inclusive)."""
+    out = []
+    for part in str(text).split(","):
+        part = part.strip()
+        if "-" in part[1:]:
+            a, b = part.split("-", 1)
+            out += list(range(int(a), int(b) + 1))
+        elif part:
+            out.append(int(part))
+    return tuple(out)
+
+
 def cmd_validate(args) -> int:
     from sparc.core.lstair.evaluate import Settings
     from sparc.core.lstair.synthetic import validate, validation_markdown
@@ -182,8 +197,7 @@ def cmd_validate(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     s = (Settings(physics_cell_m=30.0, physics_iter=30, within_city=False, gbm=False, boot=1000) if args.fast
          else Settings(physics_cell_m=30.0, within_city=False))
-    v = validate(n_cities=args.cities, seeds=tuple(int(x) for x in args.seeds.split(",") if x.strip()), settings=s,
-                 n=args.size, out=args.out)
+    v = validate(n_cities=args.cities, seeds=_seeds(args.seeds), settings=s, n=args.size, out=args.out)
     print(validation_markdown(v))
     return 0 if v["all_as_expected"] else 1
 
