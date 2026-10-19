@@ -528,3 +528,53 @@ def test_an_osf_http_error_fails_one_city_and_a_blocked_files_host_is_named(buil
     with pytest.raises(D.NetworkBlocked) as exc:
         D.build_dataset(["Providence, RI"], tmp_path / "o2", **kw)
     assert exc.value.host == "files.osf.io"
+
+
+def write_2019_campaign(folder, centre=(-116.20, 43.61), day="2019-07-24", tz="America/Boise"):
+    """The 2019 NIHHIS layout (tdsy7 Boise/Boston): one table per run named AM/PM/Eve, fields lat, long, time_n
+    (UTC HHMMSS, no date) and T_F; PM is the 15–16 h afternoon run, Eve the 19–20 h one."""
+    from pyproj import Transformer
+
+    folder.mkdir(parents=True, exist_ok=True)
+    to_xy = Transformer.from_crs("EPSG:4326", "EPSG:32611", always_xy=True)
+    to_ll = Transformer.from_crs("EPSG:32611", "EPSG:4326", always_xy=True)
+    x0, y0 = to_xy.transform(*centre)
+    segs = _routes(x0, y0)
+    xs = np.concatenate([s[0] for s in segs])
+    ys = np.concatenate([s[1] for s in segs])
+    lon, lat = to_ll.transform(xs, ys)
+    for name, local_start, base in (("AM", "06:00:00", 20.0), ("PM", "15:00:00", 33.0), ("Eve", "19:00:00", 31.0)):
+        when = pd.Timestamp(f"{day} {local_start}") + pd.to_timedelta(np.arange(xs.size) % 3500, unit="s")
+        utc = when.tz_localize(tz).tz_convert("UTC")
+        T = base + _truth(xs, ys, x0, y0) - 28.0
+        pd.DataFrame({"lat": lat, "long": lon, "time_n": utc.strftime("%H%M%S").astype(int), "speed": 10.0,
+                      "T_F": T * 9 / 5 + 32, "case": 1}).to_csv(folder / f"{name}_TraversePoints_Boise.csv", index=False)
+
+
+def test_the_2019_nihhis_layout_is_dated_from_the_campaign_and_says_what_it_needs(tmp_path):
+    """R11: tdsy7's Boise/Boston tables carry time_n (UTC HHMMSS, no date); without a campaign date the build
+    must say so (it used to fail with an empty reason), and with one the runs land at 6, 15 and 19 h local."""
+    write_2019_campaign(tmp_path / "trav" / "boise_id")
+    kw = dict(traverses_dir=tmp_path / "trav", features=synthetic_features, lst=False, era5=False,
+              probe_opener=_no_network)
+    s = D.build_dataset(["Boise, ID"], tmp_path / "o", **kw)
+    err = s["cities"]["Boise, ID"]["error"]
+    assert s["cities"]["Boise, ID"]["status"] == "failed"
+    assert "time_n" in err and "--campaign-date" in err and "usable timestamp" in err
+    s = D.build_dataset(["Boise, ID"], tmp_path / "o", campaign_dates={"Boise, ID": "2019-07-24"}, **kw)
+    assert s["cities"]["Boise, ID"]["status"] == "ok", s
+    c = D.load_city(tmp_path / "o" / "cities" / "boise_id")
+    starts = {r["run"]: r["start"] for r in c.meta["runs"]}
+    assert set(starts) == {"am", "af", "pm"}
+    assert starts["am"].startswith("2019-07-24 06:0") and starts["af"].startswith("2019-07-24 15:0")
+    assert starts["pm"].startswith("2019-07-24 19:0")                       # 01:00 UTC of the next day
+    assert c.meta["campaign_date"] == "2019-07-24" and "time_n" in c.meta["campaign_date_source"]
+    assert all("time_n" in f["clock"] for f in c.meta["files"] if f["status"] == "read")
+
+
+def test_no_run_reason_is_never_empty():
+    spec = D.CitySpec(name="X, ID", slug="x_id", tz="America/Boise")
+    msg = D._no_run_reason([], [{"file": "a.csv", "status": "skipped", "reason": "no time column"}], spec)
+    assert "no file could be read" in msg and "a.csv" in msg
+    msg = D._no_run_reason([{"run_id": "r1", "error": "no cells"}], [], spec)
+    assert msg.endswith("r1: no cells")

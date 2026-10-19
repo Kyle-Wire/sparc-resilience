@@ -35,6 +35,9 @@ def add_lstair_parser(subs) -> None:
     d.add_argument("--no-era5", action="store_true", help="skip ERA5 (ta_era5 NaN; physics uses default forcing)")
     d.add_argument("--utc", action="store_true", help="the traverse clocks are UTC without saying so: convert to local")
     d.add_argument("--force", action="store_true", help="rebuild cities that are already cached")
+    d.add_argument("--campaign-date", action="append", default=[], metavar="CITY=YYYY-MM-DD",
+                   help="local campaign date of a city whose traverse clock has no date (2019 NIHHIS time_n tables, "
+                        "e.g. \"Boise, ID=2019-07-..\" from the city's report); repeatable")
     d.add_argument("--keep-appendix", action="store_true",
                    help="also read files whose name contains 'appendix' (CAPA's appendix archives repeat the main "
                         "traverses; repeated readings are read once either way)")
@@ -103,6 +106,18 @@ def _cities(names: list[str]) -> list[str]:
     return [n.strip() for n in names if n.strip()]
 
 
+def _dates(items: list[str]) -> dict[str, str]:
+    import datetime as dt
+
+    out = {}
+    for it in items or []:
+        name, sep, day = str(it).rpartition("=")
+        if not sep or not name.strip():
+            raise SystemExit(f"--campaign-date {it!r}: expected CITY=YYYY-MM-DD")
+        out[name.strip()] = dt.date.fromisoformat(day.strip()).isoformat()
+    return out
+
+
 def cmd_dataset(args) -> int:
     from sparc.core.lstair import dataset as D
 
@@ -112,7 +127,7 @@ def cmd_dataset(args) -> int:
     utc_to = None
     kw = dict(cell_m=args.cell, margin_m=args.margin, drift=args.drift, lst_window_days=args.lst_window_days,
               lst_min_clear=args.lst_min_clear, cache_dir=Path(args.cache) if args.cache else out / "cache" / "landsat",
-              skip_files=() if args.keep_appendix else D.SKIP_FILES)
+              skip_files=() if args.keep_appendix else D.SKIP_FILES, campaign_dates=_dates(args.campaign_date))
     try:
         if args.utc:
             summary = {"cities": {}}

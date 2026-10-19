@@ -700,7 +700,7 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
                lst: Callable | None = None, era5: Callable | None = None, cell_m: float = CELL_M,
                margin_m: float = MARGIN_M, drift: str = "fe", drift_degree: int = 1, utc_to: str | None = None,
                lst_window_days: int = 16, lst_min_clear: float = 0.5, cache_dir: Path | None = None,
-               skip_files: tuple[str, ...] = SKIP_FILES) -> dict:
+               skip_files: tuple[str, ...] = SKIP_FILES, campaign_date: str | None = None) -> dict:
     """Build one city's table and rasters from a local traverse folder; returns its meta (also written).
 
     ``features(ctx, campaign_date) → (rasters, provenance)``, ``lst(ctx, campaign_date, study) → {"lst_c",
@@ -708,14 +708,22 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     providers (defaults: :func:`open_features`, :func:`landsat_lst`, :func:`era5_run`; ``lst=False`` /
     ``era5=False`` switch a source off).  Tests pass synthetic ones.  Files whose path contains a pattern of
     ``skip_files`` (default :data:`SKIP_FILES`) are not read; readings repeated across files are read once
-    (:func:`sparc.core.identify.traverses.scan_traverses`), and the count is ``meta["n_duplicate_readings"]``."""
+    (:func:`sparc.core.identify.traverses.scan_traverses`), and the count is ``meta["n_duplicate_readings"]``.
+
+    Timestamps are read as the local clock of ``spec.tz`` (tz-aware ones converted to it).  Tables whose only clock
+    is the 2019 NIHHIS ``time_n`` (UTC ``HHMMSS``, no date; tdsy7's Boise and Boston) are dated with
+    ``campaign_date`` (local ISO date; default the catalog's ``campaign_date``); without one the build stops
+    and says so."""
     from sparc.core.identify.traverses import runs_summary, scan_traverses, to_campaign
 
     t0 = time.perf_counter()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     warnings: list[str] = []
-    points, report = scan_traverses(traverses, utc_to=utc_to, exclude=tuple(skip_files or ()))
+    clock_date = campaign_date or spec.catalog_date
+    points, report = scan_traverses(traverses, timezone=spec.tz, utc_to=utc_to, exclude=tuple(skip_files or ()),
+                                    campaign_date=clock_date)
+    hms = [r for r in report if r.get("clock")]
     n_dup = int(sum(r.get("duplicates", 0) for r in report))
     if n_dup:
         warnings.append(f"{n_dup:,} readings repeat another file's (same sensor, time and position): read once")
@@ -755,12 +763,15 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
         runs.append(rec)
         frames.append(cells)
     if not frames:
-        raise ValueError("no run could be placed on the city grid: " + "; ".join(r.get("error", "") for r in runs))
+        raise ValueError(_no_run_reason(runs, report, spec))
     table = pd.concat(frames, ignore_index=True)
     ok_runs = [r for r in runs if "error" not in r]
     af = [r for r in ok_runs if r["run"] == "af"]
     campaign = dt.date.fromisoformat((af[0] if af else ok_runs[0])["run_date"])
     date_source = "traverse timestamps"
+    if hms:
+        date_source = (("--campaign-date" if campaign_date else f"catalog campaign_date ({spec.catalog_date_source})")
+                       + ": the traverse clock (time_n) is UTC HHMMSS without a date")
     if spec.catalog_date and spec.catalog_date != campaign.isoformat():
         warnings.append(f"catalog campaign date {spec.catalog_date} ({spec.catalog_date_source}) differs from the "
                         f"traverse timestamps ({campaign.isoformat()}); the timestamps are used")
@@ -847,6 +858,24 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     return meta
 
 
+def _no_run_reason(runs: list[dict], report: list[dict], spec: CitySpec) -> str:
+    """Why no run could be built, file by file (the reason never ends empty)."""
+    if runs:
+        return "no run could be placed on the city grid: " + "; ".join(
+            f"{r['run_id']}: {r.get('error') or 'no cells'}" for r in runs)
+    read = [r for r in report if r.get("status") == "read"]
+    parts = [f"{r['file']}: skipped ({r.get('reason')})" for r in report if r.get("status") != "read"][:6]
+    parts += [f"{r['file']}: {r['rows']:,} readings" + (f", clock {r['clock']}" if r.get("clock") else "")
+              for r in read][:6]
+    msg = (f"no reading has a usable timestamp, so no run could be formed ({len(read)} files read)"
+           if read else "no file could be read")
+    if any("no date" in str(r.get("clock")) for r in read):
+        msg += (". These are the 2019 NIHHIS tables whose clock is time_n (UTC HHMMSS without a date): give the "
+                f"campaign's local date with --campaign-date \"{spec.name}=YYYY-MM-DD\" (from the city's report) or "
+                "campaign_date in its catalog entry" + ("" if spec.tz else ", and a time zone for the city"))
+    return msg + (": " + "; ".join(parts) if parts else "")
+
+
 def _json_default(o):
     if isinstance(o, (np.integer,)):
         return int(o)
@@ -886,12 +915,14 @@ def local_traverses(spec: CitySpec, traverses_dir: str | Path | None, single: bo
 def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str | Path | None = None,
                   features: Callable | None = None, lst: Callable | bool | None = None,
                   era5: Callable | bool | None = None, force: bool = False, probe_opener: Callable | None = None,
-                  download: Callable | None = None, **kw) -> dict:
+                  download: Callable | None = None, campaign_dates: dict[str, str] | None = None, **kw) -> dict:
     """Build (or resume) the dataset for ``cities``; returns the summary also written to ``OUT/dataset.json``.
 
     Cities with a finished cache are skipped unless ``force``.  Before anything is fetched, every host the
     remaining cities need is probed (:func:`check_hosts`): a blocked host raises :class:`NetworkBlocked` at once.
-    A city that fails for another reason is recorded with its error and the build moves on."""
+    A city that fails for another reason is recorded with its error and the build moves on.  ``campaign_dates``
+    maps a city (name as given, catalog name or slug) to its local campaign date, for traverse tables without
+    one (:func:`build_city`)."""
     out = Path(out_dir)
     (out / "cities").mkdir(parents=True, exist_ok=True)
     specs = [city_spec(c) for c in cities]
@@ -916,7 +947,8 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
             if folder is None:
                 folder = out / "raw" / s.slug
                 (download or _download_traverses)(s, folder)
-            meta = build_city(s, folder, cdir, features=features, lst=lst, era5=era5, **kw)
+            meta = build_city(s, folder, cdir, features=features, lst=lst, era5=era5,
+                              campaign_date=_lookup(campaign_dates, s), **kw)
             summary["cities"][s.name] = {"slug": s.slug, "status": "ok", "rows": meta["n_rows"],
                                          "runs": [r["run"] for r in meta["runs"] if "error" not in r],
                                          "warnings": meta["warnings"]}
@@ -932,6 +964,15 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
             summary["cities"][s.name] = {"slug": s.slug, "status": "failed", "error": msg}
     _write_atomic(out / "dataset.json", json.dumps(summary, indent=1, default=_json_default).encode())
     return summary
+
+
+def _lookup(mapping: dict | None, spec: CitySpec):
+    """``mapping``'s value for a city keyed by its catalog name, slug or the name before the comma."""
+    if not mapping:
+        return None
+    keys = {spec.name.lower(), spec.slug, spec.name.split(",")[0].strip().lower()}
+    return next((v for k, v in mapping.items() if str(k).strip().lower() in keys or slugify(str(k)) == spec.slug),
+                None)
 
 
 def _downloaded(out: Path, spec: CitySpec) -> bool:
