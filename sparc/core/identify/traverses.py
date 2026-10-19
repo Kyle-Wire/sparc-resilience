@@ -68,9 +68,59 @@ def _id_column(df: pd.DataFrame) -> str | None:
     return None
 
 
-def _standardise(df: pd.DataFrame) -> pd.DataFrame:
+def utc_hms_to_local(hms, local_date: str, tz: str) -> pd.Series:
+    """Local wall-clock times (naive) of UTC clock readings ``HHMMSS`` (an integer or float field, e.g. the 2019
+    NIHHIS ``time_n``: 120106 = 12:01:06 UTC) taken on the local calendar day ``local_date`` in ``tz``.
+
+    The UTC date of each reading is the one of (day before, same day, day after) whose local date is
+    ``local_date``: unambiguous, since the candidates are 24 h apart (an evening run at 19:00 MDT is 01:00 UTC
+    of the next day).  Unparseable values are NaT."""
+    v = pd.to_numeric(pd.Series(hms), errors="coerce")
+    iv = v.round().fillna(-1).astype(np.int64)
+    h, m, sec = iv // 10000, (iv // 100) % 100, iv % 100
+    ok = (iv >= 0) & (h < 24) & (m < 60) & (sec < 60)
+    sod = pd.to_timedelta((h * 3600 + m * 60 + sec).where(ok, 0), unit="s")
+    day = pd.Timestamp(local_date).normalize()
+    out = pd.Series(pd.NaT, index=v.index, dtype="datetime64[ns]")
+    for k in (-1, 0, 1):
+        utc = (day + pd.Timedelta(days=k) + sod).dt.tz_localize("UTC").dt.tz_convert(tz).dt.tz_localize(None)
+        pick = ok & (utc.dt.normalize() == day) & out.isna()
+        out[pick] = utc[pick]
+    return out
+
+
+def _file_zone(df: pd.DataFrame, norm: dict) -> str | None:
+    """The IANA zone a table names in a ``tz`` / ``timezone`` column (one value), else None."""
+    col = next((norm[n] for n in ("tz", "timezone", "time_zone", "tzone") if n in norm), None)
+    if col is None:
+        return None
+    vals = pd.Series(df[col]).dropna().astype(str).str.strip().unique()
+    if len(vals) != 1:
+        return None
+    try:
+        import zoneinfo
+
+        zoneinfo.ZoneInfo(vals[0])
+        return vals[0]
+    except Exception:  # noqa: BLE001 - not a zone name
+        return None
+
+
+def _window_hint_2019(name: str) -> str | None:
+    """Run names of the 2019 NIHHIS traverse files (``AM_…``, ``PM_…``, ``Eve_…``; ``Boston_am``, ``Boston_pm…``,
+    ``Boston_ev``): PM there is the 15–16 h afternoon run and Eve/ev the 19–20 h evening one."""
+    base = name.replace("\\", "/").rsplit("/", 1)[-1].lower()
+    for pat, win in ((r"(^|_)eve?(_|\.|$)", "evening"), (r"(^|_)pm(_|\.|$)", "midday"), (r"(^|_)am(_|\.|$)", "morning")):
+        if re.search(pat, base):
+            return win
+    return None
+
+
+def _standardise(df: pd.DataFrame, timezone: str | None = None, campaign_date: str | None = None) -> pd.DataFrame:
     """Temperature columns under a name the CAPA parser knows (``temp_f`` / ``temp_c``), and lat/lon
-    from a point geometry (reprojected to WGS-84) in place of projected x/y columns."""
+    from a point geometry (reprojected to WGS-84) in place of projected x/y columns.  A table whose only clock
+    is the 2019 NIHHIS ``time_n`` (UTC ``HHMMSS``, no date) gets a local ``datetime`` when the campaign's local
+    date and time zone are known (:func:`utc_hms_to_local`); ``attrs["clock"]`` says which clock was used."""
     ren = {}
     for c in df.columns:
         n = _norm(c)
@@ -85,10 +135,30 @@ def _standardise(df: pd.DataFrame) -> pd.DataFrame:
         for n in ("datetime", "date_time", "timestamp", "time_stamp", "time", "date"):
             if n in norm and norm[n] != local:
                 ren[norm[n]] = f"gps_{n}"                 # the UTC GPS clock: kept, not used as the time
-    elif not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp", "local_time", "time_local")):
+    clock = None
+    if local is None and not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp", "local_time",
+                                                     "time_local")):
         utc = next((norm[n] for n in _UTC_TIME if n in norm), None)
         if utc is not None:
-            ren[utc] = "datetime"
+            # the GPS clock in UTC is the only time: convert it with the file's own zone (CAPA tables carry a
+            # ``tz`` column, e.g. America/New_York) or the caller's; without either it is read as recorded
+            zone = _file_zone(df, norm) or timezone
+            if zone:
+                t = pd.to_datetime(df[utc], errors="coerce", utc=True).dt.tz_convert(zone).dt.tz_localize(None)
+                df = df.assign(datetime=t.dt.strftime("%Y-%m-%d %H:%M:%S").to_numpy())
+                ren[utc] = f"gps_{_norm(utc)}"
+                clock = f"{utc} (UTC) converted to {zone}"
+            else:
+                ren[utc] = "datetime"
+    if "time_n" in norm and not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp",
+                                                         "local_time", "time_local", "time", "date")
+                                    + _LOCAL_TIME + _UTC_TIME):
+        if campaign_date and timezone:
+            df = df.assign(datetime=utc_hms_to_local(df[norm["time_n"]].to_numpy(), campaign_date, timezone)
+                           .dt.strftime("%Y-%m-%d %H:%M:%S").to_numpy())
+            clock = f"time_n (UTC HHMMSS) on the local date {campaign_date} in {timezone}"
+        else:
+            clock = "time_n (UTC HHMMSS, no date): no timestamps without the campaign date and time zone"
     if "file" in norm and not any(n in norm for n in ID_COLUMNS):
         # one logger file per sensor and run: the sensor id (e.g. CAPA1061) is the vehicle
         sensor = df[norm["file"]].astype(str).str.extract(r"^([A-Za-z]+\d+)", expand=False)
@@ -109,23 +179,33 @@ def _standardise(df: pd.DataFrame) -> pd.DataFrame:
         keep = [c for c in out.columns if c != "geometry" and _norm(c) not in _COORD_NAMES]
         out = pd.DataFrame({"lat": geom.y.to_numpy(float), "lon": geom.x.to_numpy(float),
                             **{c: out[c].to_numpy() for c in keep}})
+    out = pd.DataFrame(out) if not isinstance(out, pd.DataFrame) else out
+    out.attrs["clock"] = clock
     return out
 
 
-def _parse_frame(df: pd.DataFrame, source: str, timezone: str | None) -> pd.DataFrame:
+def _parse_frame(df: pd.DataFrame, source: str, timezone: str | None, campaign_date: str | None = None
+                 ) -> pd.DataFrame:
     from sparc.data.collect.capa import _window_hint_from_name, parse_traverse_table
 
-    df = _standardise(df)
+    df = _standardise(df, timezone, campaign_date)
+    clock = df.attrs.get("clock")
+    hint = _window_hint_2019(source) if str(clock or "").startswith("time_n") else _window_hint_from_name(source)
     idc = _id_column(df)
     groups = [(None, df)] if idc is None else list(df.groupby(idc, sort=False))
     out = []
     for key, part in groups:
-        t = parse_traverse_table(part.reset_index(drop=True), timezone=timezone,
-                                 window_hint=_window_hint_from_name(source))
+        t = parse_traverse_table(part.reset_index(drop=True), timezone=timezone, window_hint=hint)
+        if timezone and len(t) and getattr(pd.to_datetime(t["time"], errors="coerce").dt, "tz", None) is not None:
+            t["time"] = pd.to_datetime(t["time"]).dt.tz_convert(timezone).dt.tz_localize(None)   # local wall clock
+        t["clock"] = clock if clock and "datetime" in df.columns else None
         t["source_file"] = source
         t["vehicle_key"] = f"{source}:{key}" if key is not None else source
+        t["vehicle_id"] = None if key is None else str(key)       # the id as published (same in every copy of a file)
         out.append(t)
-    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+    res = pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+    res.attrs["clock"] = clock
+    return res
 
 
 def _read_any(f: Path) -> pd.DataFrame:
@@ -143,12 +223,26 @@ def _read_any(f: Path) -> pd.DataFrame:
     return gpd.read_file(f)
 
 
-def _walk(root: Path, tmp: Path, depth: int = 0):
-    """Every readable file under ``root`` (zips unpacked into ``tmp``), as (path, display name)."""
+#: The download record :func:`sparc.data.collect.capa.download_capa_files` writes next to the files it fetched.
+_BOOKKEEPING = ("_download.json",)
+
+
+def _excluded(name: str, exclude: tuple[str, ...]) -> str | None:
+    low = name.lower()
+    return next((p for p in exclude if p and p.lower() in low), None)
+
+
+def _walk(root: Path, tmp: Path, depth: int = 0, exclude: tuple[str, ...] = ()):
+    """Every readable file under ``root`` (zips unpacked into ``tmp``), as (path, display name, error); files and
+    archives whose display name contains a pattern of ``exclude`` are yielded with the reason, not unpacked."""
     files = sorted(q for q in root.rglob("*") if q.is_file()) if root.is_dir() else [root]
     for f in files:
         name = f.relative_to(root).as_posix() if root.is_dir() else f.name
-        if f.name.startswith(".") or "__macosx" in name.lower():
+        if f.name.startswith(".") or "__macosx" in name.lower() or f.name in _BOOKKEEPING or f.suffix == ".part":
+            continue                                  # hidden files and a download's own records / partial files
+        pat = _excluded(name, exclude)
+        if pat is not None:
+            yield f, name, f"excluded (name contains {pat!r})"
             continue
         if f.suffix.lower() == ".zip" and depth < 4:
             dest = tmp / f"z{depth}_{abs(hash(str(f))) % 10**8}"
@@ -158,23 +252,33 @@ def _walk(root: Path, tmp: Path, depth: int = 0):
             except (zipfile.BadZipFile, OSError) as exc:
                 yield f, name, f"unreadable zip ({exc})"
                 continue
-            for sub, sub_name, err in _walk(dest, tmp, depth + 1):
+            for sub, sub_name, err in _walk(dest, tmp, depth + 1, exclude):
                 yield sub, f"{name}/{sub_name}", err
         else:
             yield f, name, None
 
 
-def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | None = None
-                   ) -> tuple[pd.DataFrame, list[dict]]:
+def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | None = None,
+                   exclude: tuple[str, ...] = (), campaign_date: str | None = None) -> tuple[pd.DataFrame, list[dict]]:
     """Every traverse point under ``path`` (a file, an archive, or a folder of them) and a report of each
-    file: ``{"file", "status": "read"|"skipped", "rows"|"reason", "columns"}``.  ``utc_to``: the
-    timestamps are UTC without saying so; convert them to this local time zone."""
+    file: ``{"file", "status": "read"|"skipped", "rows"|"reason", "columns"}`` (plus ``clock`` when the file
+    has only a UTC ``time_n`` field).  ``utc_to``: the timestamps are UTC without saying so; convert them to
+    this local time zone.  ``exclude``: name patterns (case-insensitive substrings of the path, archives
+    included) of files not to read, e.g. ``("appendix",)``.  ``campaign_date`` (local ISO date) with
+    ``timezone``: dates the 2019 NIHHIS tables whose clock is ``time_n`` (UTC ``HHMMSS`` without a date);
+    without them those readings have no time (and so no run).
+
+    **Duplicates.**  A campaign folder can hold the same readings twice (Providence's OSF node ships the
+    afternoon and evening traverses in its main archive and again in an appendix archive).  A time-stamped
+    reading of a vehicle id at a position (5 decimals of a degree, ~1 m) that an earlier file already holds is
+    dropped, the first copy (in path order) kept; without an id column the key is the time and the position.
+    Each file's report entry gets ``duplicates``, the number of its readings dropped."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"{p} does not exist")
     frames, report = [], []
     with tempfile.TemporaryDirectory() as tmp:
-        for f, name, err in _walk(p, Path(tmp)):
+        for f, name, err in _walk(p, Path(tmp), exclude=tuple(exclude or ())):
             low = f.name.lower()
             if err:
                 report.append({"file": name, "status": "skipped", "reason": err})
@@ -186,25 +290,51 @@ def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | 
                 continue
             try:
                 raw = _read_any(f)
-                t = _parse_frame(raw, name, timezone)
+                t = _parse_frame(raw, name, timezone, campaign_date)
                 if not len(t):
                     raise ValueError("no rows with a position and a temperature")
             except Exception as exc:  # noqa: BLE001 - every file is reported, none stops the scan
                 report.append({"file": name, "status": "skipped", "reason": str(exc).splitlines()[0][:200]})
                 continue
             report.append({"file": name, "status": "read", "rows": int(len(t)),
-                           "columns": [str(c) for c in list(raw.columns)[:30]]})
+                           "columns": [str(c) for c in list(raw.columns)[:30]],
+                           **({"clock": t.attrs["clock"]} if t.attrs.get("clock") else {})})
             frames.append(t)
     if not frames:
-        return pd.DataFrame(columns=["time", "lat", "lon", "temp_f", "window", "source_file", "vehicle_key"]), report
+        return pd.DataFrame(columns=["time", "lat", "lon", "temp_f", "window", "source_file", "vehicle_key",
+                                     "vehicle_id", "clock"]), report
     out = pd.concat(frames, ignore_index=True)
     out["time"] = pd.to_datetime(out["time"], errors="coerce")
     if utc_to:
         t = out["time"]
         if getattr(t.dt, "tz", None) is None:
             t = t.dt.tz_localize("UTC")
-        out["time"] = t.dt.tz_convert(utc_to).dt.tz_localize(None)
+        conv = t.dt.tz_convert(utc_to).dt.tz_localize(None)
+        done = out["clock"].notna() if "clock" in out else pd.Series(False, index=out.index)
+        out["time"] = conv.where(~done, out["time"])          # time_n readings are local already
+    out = _drop_duplicates(out, report)
     return assign_runs(out), report
+
+
+def _drop_duplicates(pts: pd.DataFrame, report: list[dict]) -> pd.DataFrame:
+    """The readings without the copies of an earlier file's readings (see :func:`scan_traverses`)."""
+    have = pts["time"].notna().to_numpy()
+    if not have.any() or pts["source_file"].nunique() < 2:
+        return pts
+    vid = pts["vehicle_id"] if "vehicle_id" in pts else pd.Series(None, index=pts.index)
+    key = pd.DataFrame({"v": vid.astype(object).where(vid.notna(), ""), "t": pts["time"],
+                        "la": pts["lat"].round(5), "lo": pts["lon"].round(5)})
+    src = pts["source_file"].astype(str)
+    first = src.groupby([key["v"], key["t"], key["la"], key["lo"]], sort=False, dropna=False).transform("first")
+    dup = (key.duplicated(keep="first") & (src != first)).to_numpy() & have          # copies in another file only
+    if not dup.any():
+        return pts
+    counts = pts.loc[dup, "source_file"].value_counts()
+    for r in report:
+        if r.get("status") == "read" and r["file"] in counts.index:
+            r["duplicates"] = int(counts[r["file"]])
+    log.info("traverses: dropped %d readings that repeat an earlier file's", int(dup.sum()))
+    return pts.loc[~dup].reset_index(drop=True)
 
 
 def read_traverses(path: str | Path, timezone: str | None = None, utc_to: str | None = None) -> pd.DataFrame:

@@ -59,19 +59,42 @@ def utm_epsg(lon: float, lat: float) -> int:
     return (32600 if lat >= 0 else 32700) + zone
 
 
+_MGRS_BANDS = "CDEFGHJKLMNPQRSTUVWX"                    # 8° latitude bands from 80°S (X spans 72–84°N)
+_MGRS_COLS = ("STUVWXYZ", "ABCDEFGH", "JKLMNPQR")       # 100 km column letters by UTM zone mod 3
+_MGRS_ROWS = "ABCDEFGHJKLMNPQRSTUV"                    # 100 km row letters (AA scheme; even zones offset by 5)
+
+
+def mgrs_square(lon: float, lat: float) -> str:
+    """MGRS 100 km square (e.g. ``19TCG``) of a point, without the optional ``mgrs`` package.
+
+    Method: the WGS-84 UTM zone and 8° latitude band, then the 100 km column letter (set chosen by zone
+    mod 3, from easting // 100 km) and row letter (northing // 100 km mod 20, shifted by 5 in even zones:
+    the "AA" lettering of WGS-84 MGRS).  Standard UTM zones only: the Norway/Svalbard exceptions and the
+    polar UPS areas are not handled (no Heat Watch city lies there)."""
+    from pyproj import Transformer
+
+    if not -80.0 <= lat < 84.0:
+        raise ValueError("MGRS squares are defined between 80°S and 84°N (UTM)")
+    zone = int((lon + 180.0) // 6.0) + 1
+    band = _MGRS_BANDS[min(int((lat + 80.0) // 8.0), 19)]
+    epsg = (32600 if lat >= 0 else 32700) + zone
+    e, n = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True).transform(lon, lat)
+    col = _MGRS_COLS[zone % 3][int(e // 100000.0) - 1]
+    row = _MGRS_ROWS[(int(n // 100000.0) + (5 if zone % 2 == 0 else 0)) % 20]
+    return f"{zone:02d}{band}{col}{row}"
+
+
 def mgrs_tiles(bounds, zone: int) -> list[str]:
-    """MGRS 100 km tile ids (zone + band + square) covering lon/lat ``bounds``."""
+    """MGRS 100 km tile ids (zone + band + square) covering lon/lat ``bounds`` (the ``mgrs`` package when
+    installed, else :func:`mgrs_square`), from a 5 × 5 lattice of points over the bounds."""
+    w, s, e, n = bounds
+    pts = [(lo, la) for lo in np.linspace(w, e, 5) for la in np.linspace(s, n, 5)]
     try:
         import mgrs  # optional dependency
         m = mgrs.MGRS()
-        out = set()
-        w, s, e, n = bounds
-        for lo in np.linspace(w, e, 5):
-            for la in np.linspace(s, n, 5):
-                out.add(m.toMGRS(la, lo, MGRSPrecision=0))
-        return sorted(out)
+        return sorted({m.toMGRS(la, lo, MGRSPrecision=0) for lo, la in pts})
     except ImportError:
-        return []
+        return sorted({mgrs_square(lo, la) for lo, la in pts})
 
 
 def _s2_tile_prefixes(bounds, tiles: list[str] | None) -> list[str]:
@@ -79,7 +102,7 @@ def _s2_tile_prefixes(bounds, tiles: list[str] | None) -> list[str]:
         return tiles
     t = mgrs_tiles(bounds, 0)
     if not t:
-        raise ValueError("pass features.s2_tiles (e.g. ['19TCG', '19TBG']) or install the 'mgrs' package")
+        raise ValueError("pass features.s2_tiles (e.g. ['19TCG', '19TBG'])")
     return t
 
 
@@ -109,13 +132,26 @@ def s2_scenes(tiles: list[str], months: list[tuple[int, int]], max_cloud: float 
     return out
 
 
-def s2_composite(scenes: list[dict], bounds_lonlat, res: float = 10.0) -> dict:
-    """Median composite of the S2 bands on one UTM grid (cloud-masked)."""
+def _s2_href(sc: dict, band: str) -> str:
+    """GDAL path of one band COG of a scene from :func:`s2_scenes`."""
+    return "/vsicurl/" + S2 + sc["prefix"] + f"{band}.tif"
+
+
+def s2_composite(scenes: list[dict], bounds_lonlat, res: float = 10.0, memory_mb: float = 512.0) -> dict:
+    """Median composite of the S2 bands on one UTM grid (cloud-masked).
+
+    Method: every scene's SCL is warped onto the grid (nearest) and a scene more than 95% cloud, shadow, cirrus,
+    snow or no-data over the area is dropped; for each band the remaining scenes are warped (bilinear), masked
+    with their SCL and with non-positive reflectance, and the per-pixel median over scenes is taken.  The bands
+    are read and composited **in blocks of rows** (a block holds every scene, at most ``memory_mb`` of float32),
+    with the SCL masks kept bit-packed, so memory no longer grows with area × scenes: the per-pixel median is
+    the same as over the whole stack at once.  A band window that fails to read counts as masked there."""
     import rasterio
     from pyproj import Transformer
     from rasterio.enums import Resampling
     from rasterio.transform import from_origin
     from rasterio.vrt import WarpedVRT
+    from rasterio.windows import Window
 
     w, s, e, n = bounds_lonlat
     epsg = utm_epsg(0.5 * (w + e), 0.5 * (s + n))
@@ -125,38 +161,58 @@ def s2_composite(scenes: list[dict], bounds_lonlat, res: float = 10.0) -> dict:
     y0, y1 = math.floor(min(ys) / res) * res, math.ceil(max(ys) / res) * res
     W, H = int(round((x1 - x0) / res)), int(round((y1 - y0) / res))
     T = from_origin(x0, y1, res, res)
-    stack = {b: [] for b in S2_BANDS}
-    used = []
+
+    def warp(sc, band, resampling, window=None):
+        with rasterio.open(_s2_href(sc, band)) as src, \
+                WarpedVRT(src, crs=f"EPSG:{epsg}", transform=T, width=W, height=H, resampling=resampling,
+                          nodata=0) as vrt:
+            return vrt.read(1, window=window)
+
+    used, masks = [], []
     with gdal_env():
         for sc in scenes:
-            def warp(band, resampling):
-                with rasterio.open("/vsicurl/" + S2 + sc["prefix"] + f"{band}.tif") as src, \
-                        WarpedVRT(src, crs=f"EPSG:{epsg}", transform=T, width=W, height=H,
-                                  resampling=resampling, nodata=0) as vrt:
-                    return vrt.read(1).astype("float32")
             progress.check_cancel()
             with progress.task("remote_object", key=f"s2:{sc['name']}", unit="remote_object"):
                 try:
-                    scl = warp("SCL", Resampling.nearest)
-                    bad = np.isin(scl, SCL_BAD)
-                    if bad.mean() > 0.95:
-                        continue
-                    for b in S2_BANDS:
-                        a = warp(b, Resampling.bilinear) / 10000.0
-                        a[bad | (a <= 0)] = np.nan
-                        stack[b].append(a)
-                    used.append(sc["name"])
-                    log.info("s2: %s (%.1f%% cloud) — %.0f%% usable", sc["name"], sc["cloud"],
-                             100 * (1 - bad.mean()))
+                    bad = np.isin(warp(sc, "SCL", Resampling.nearest), SCL_BAD)
                 except Exception as exc:                      # noqa: BLE001 - skip a broken scene
                     log.warning("s2: skipping %s (%s)", sc["name"], exc)
-    if not used:
-        raise RuntimeError("no usable Sentinel-2 scenes")
-    with np.errstate(all="ignore"):
-        med = {b: np.nanmedian(np.stack(v), axis=0) for b, v in stack.items()}
+                    continue
+                if bad.mean() > 0.95:
+                    continue
+                masks.append((sc, np.packbits(bad, axis=1)))
+                used.append(sc["name"])
+                log.info("s2: %s (%.1f%% cloud) — %.0f%% usable", sc["name"], sc["cloud"], 100 * (1 - bad.mean()))
+        if not used:
+            raise RuntimeError("no usable Sentinel-2 scenes")
+        rows = max(16, int(memory_mb * 1e6 / (4.0 * max(W, 1) * len(masks))))
+        med = {b: np.full((H, W), np.nan, dtype=np.float32) for b in S2_BANDS}
+        for b in S2_BANDS:
+            for r0 in range(0, H, rows):
+                h = min(rows, H - r0)
+                win = Window(0, r0, W, h)
+                stack = np.full((len(masks), h, W), np.nan, dtype=np.float32)
+                for i, (sc, packed) in enumerate(masks):
+                    progress.check_cancel()
+                    try:
+                        a = warp(sc, b, Resampling.bilinear, win).astype("float32") / 10000.0
+                    except Exception as exc:                  # noqa: BLE001 - masked where it failed
+                        log.warning("s2: %s %s rows %d–%d unreadable (%s)", sc["name"], b, r0, r0 + h, exc)
+                        continue
+                    bad = np.unpackbits(packed[r0:r0 + h], axis=1, count=W).astype(bool)
+                    a[bad | (a <= 0)] = np.nan
+                    stack[i] = a
+                with np.errstate(all="ignore"):
+                    import warnings
+
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", RuntimeWarning)
+                        med[b][r0:r0 + h] = np.nanmedian(stack, axis=0)
+                del stack
     ndvi = (med["B08"] - med["B04"]) / (med["B08"] + med["B04"])
     albedo = sum(ALBEDO_COEF[b] * med[b] for b in S2_BANDS) + ALBEDO_OFFSET
-    return {"ndvi": ndvi, "albedo": albedo, "transform": T, "crs": f"EPSG:{epsg}", "scenes": used}
+    return {"ndvi": ndvi, "albedo": albedo, "transform": T, "crs": f"EPSG:{epsg}", "scenes": used,
+            "block_rows": int(rows)}
 
 
 def dem_tiles(bounds) -> list[str]:

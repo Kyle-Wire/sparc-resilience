@@ -12,6 +12,22 @@ Each entry:
   year        — Campaign year (omitted if unknown).
   state       — US state abbreviation.
 
+Optional, where the catalog knows it (see :func:`availability`,
+:func:`traverse_node`, :func:`campaign_date`):
+  traverse_node        — OSF node holding the raw traverse points, when it
+                         differs from or is confirmed apart from ``osf_node``.
+  campaign_date        — ISO date of the campaign day.
+  campaign_date_source — where that date comes from: "traverse timestamps"
+                         (the readings' own clock), "filename_guess" or
+                         "era5_matched" (circular for ERA5 features; see
+                         configs/multicity_pilot.yml).
+  availability         — {"traverse_points": bool | None, "rasters": bool | None}:
+                         whether the node is known to hold the raw traverse
+                         points (the measurements) and CAPA's interpolated
+                         area-wide rasters (a land-cover model of them, not a
+                         measurement); None = not known to the catalog.
+  availability_source  — where the availability statement comes from.
+
 Multi-city nodes:
   tdsy7  — 2019 NIHHIS campaign (~25 cities in one OSF project)
   3xvmg  — Virginia cities (Abingdon, Arlington, Farmville, Lynchburg, Petersburg)
@@ -34,6 +50,18 @@ import difflib
 # Catalog
 # ---------------------------------------------------------------------------
 
+#: The 2019 NIHHIS project tdsy7 has 13 root folders (OSF listing checked 2026-10-19: Boston, Honolulu,
+#: Worcester, Yonkers, West Palm Beach, Fort Lauderdale, San Juan, Los Angeles, Victorville, Oakland-Berkeley,
+#: San Bernardino, Sacramento, Boise).  Entries mapped to tdsy7 whose hint matches none of them hold no data there.
+TDSY7_FOLDERS = ("Boston, MA", "Honolulu, HI", "Worcester, MA", "Yonkers, NY", "West Palm Beach, FL",
+                 "Fort Lauderdale, FL", "San Juan, PR", "Los Angeles, CA", "Victorville, CA", "Oakland-Berkeley, CA",
+                 "San Bernardino (CA)", "Sacramento (CA)", "Boise, ID")
+_NO_TDSY7_FOLDER = {
+    "availability": {"traverse_points": False, "rasters": False},
+    "availability_source": "OSF tdsy7 root listing (checked 2026-10-19): no folder for this city; its campaign "
+                           "data are not in tdsy7 (node unknown)",
+}
+
 CAPA_CATALOG: dict[str, dict] = {
 
     # ── NEW ENGLAND ────────────────────────────────────────────────────────
@@ -50,14 +78,21 @@ CAPA_CATALOG: dict[str, dict] = {
         "utm_epsg": "EPSG:32619", "year": 2023, "state": "MA",
     },
     "Providence, RI": {
-        "osf_node": "tdsy7", "folder_hint": "Providence",
-        "utm_epsg": "EPSG:32619", "year": 2019, "state": "RI",
+        # 2020 RI Heat Watch (not the 2019 NIHHIS project tdsy7): the traverses are OSF wu9v7,
+        # four runs on 2020-07-29 (am/af/pm, plus mi 00-01 on 07-30) dated by the readings' own clock.
+        "osf_node": "wu9v7", "folder_hint": None, "traverse_node": "wu9v7",
+        "utm_epsg": "EPSG:32619", "year": 2020, "state": "RI",
+        "campaign_date": "2020-07-29", "campaign_date_source": "traverse timestamps",
+        "availability": {"traverse_points": True, "rasters": None},
+        "availability_source": "docs/results/canopy_identification.md (the wu9v7 download: am/af/pm/mi_trav "
+                               "point shapefiles); rasters in wu9v7 not verified",
     },
 
     # ── MID-ATLANTIC ───────────────────────────────────────────────────────
     "New York, NY": {
         "osf_node": "tdsy7", "folder_hint": "New York",
         "utm_epsg": "EPSG:32618", "year": 2019, "state": "NY",
+        **_NO_TDSY7_FOLDER,
     },
     "Manhattan, NY": {
         "osf_node": "j6eqr", "folder_hint": "Manhattan",
@@ -102,6 +137,7 @@ CAPA_CATALOG: dict[str, dict] = {
     "Baltimore, MD": {
         "osf_node": "tdsy7", "folder_hint": "Baltimore",
         "utm_epsg": "EPSG:32618", "year": 2019, "state": "MD",
+        **_NO_TDSY7_FOLDER,
     },
 
     # ── SOUTH ATLANTIC ─────────────────────────────────────────────────────
@@ -172,16 +208,19 @@ CAPA_CATALOG: dict[str, dict] = {
     "Miami, FL": {
         "osf_node": "tdsy7", "folder_hint": "Miami",
         "utm_epsg": "EPSG:32617", "year": 2019, "state": "FL",
+        **_NO_TDSY7_FOLDER,
     },
 
     # ── SOUTH CENTRAL ──────────────────────────────────────────────────────
     "Louisville, KY": {
         "osf_node": "tdsy7", "folder_hint": "Louisville",
         "utm_epsg": "EPSG:32616", "year": 2019, "state": "KY",
+        **_NO_TDSY7_FOLDER,
     },
     "Jackson, MS": {
         "osf_node": "tdsy7", "folder_hint": "Jackson",
         "utm_epsg": "EPSG:32615", "year": 2019, "state": "MS",
+        **_NO_TDSY7_FOLDER,
     },
     "New Orleans, LA": {
         "osf_node": "eau82", "folder_hint": None,
@@ -190,10 +229,12 @@ CAPA_CATALOG: dict[str, dict] = {
     "Dallas, TX": {
         "osf_node": "tdsy7", "folder_hint": "Dallas",
         "utm_epsg": "EPSG:32614", "year": 2019, "state": "TX",
+        **_NO_TDSY7_FOLDER,
     },
     "El Paso, TX": {
         "osf_node": "tdsy7", "folder_hint": "El Paso",
         "utm_epsg": "EPSG:32613", "year": 2019, "state": "TX",
+        **_NO_TDSY7_FOLDER,
     },
     "Austin, TX": {
         "osf_node": "h8cte", "folder_hint": None,
@@ -220,6 +261,7 @@ CAPA_CATALOG: dict[str, dict] = {
     "Kansas City, MO": {
         "osf_node": "tdsy7", "folder_hint": "Kansas City",
         "utm_epsg": "EPSG:32615", "year": 2019, "state": "MO",
+        **_NO_TDSY7_FOLDER,
     },
     "Kansas City, KS": {
         "osf_node": "hxyrv", "folder_hint": None,
@@ -244,12 +286,14 @@ CAPA_CATALOG: dict[str, dict] = {
     "Anchorage, AK": {
         "osf_node": "tdsy7", "folder_hint": "Anchorage",
         "utm_epsg": "EPSG:32604", "year": 2019, "state": "AK",
+        **_NO_TDSY7_FOLDER,
     },
 
     # ── MOUNTAIN ───────────────────────────────────────────────────────────
     "Denver, CO": {
         "osf_node": "tdsy7", "folder_hint": "Denver",
         "utm_epsg": "EPSG:32613", "year": 2019, "state": "CO",
+        **_NO_TDSY7_FOLDER,
     },
     "Boulder, CO": {
         "osf_node": "ek7r5", "folder_hint": None,
@@ -322,6 +366,35 @@ CAPA_CATALOG: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
+
+AVAILABILITY_KEYS = ("traverse_points", "rasters")
+
+
+def availability(entry: dict) -> dict:
+    """``{"traverse_points": bool | None, "rasters": bool | None}`` for a catalog entry.
+
+    True / False only where the catalog states it (``entry["availability"]``); None means not known
+    (the node may or may not hold that kind of file).  Traverse points are the vehicle measurements;
+    rasters are CAPA's interpolated area-wide maps, a land-cover model of those measurements."""
+    av = (entry or {}).get("availability") or {}
+    return {k: (None if av.get(k) is None else bool(av.get(k))) for k in AVAILABILITY_KEYS}
+
+
+def traverse_node(entry: dict) -> tuple[str | None, str | None]:
+    """(OSF node, folder hint) to search for the raw traverse points of a catalog entry."""
+    entry = entry or {}
+    if entry.get("traverse_node"):
+        same = entry["traverse_node"] == entry.get("osf_node")
+        return entry["traverse_node"], (entry.get("folder_hint") if same else entry.get("traverse_folder_hint"))
+    return entry.get("osf_node"), entry.get("folder_hint")
+
+
+def campaign_date(entry: dict) -> tuple[str | None, str | None]:
+    """(ISO campaign date, its source) when the catalog records one, else (None, None)."""
+    entry = entry or {}
+    d = entry.get("campaign_date")
+    return (str(d), entry.get("campaign_date_source") or "unknown") if d else (None, None)
+
 
 def list_cities() -> list[str]:
     """Return all city names in the catalog, sorted alphabetically."""

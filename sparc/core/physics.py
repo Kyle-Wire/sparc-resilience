@@ -42,6 +42,16 @@ release) and q = Q_H/|LW|.  Any missing role drops its term (albedo falls
 back to a constant 0.15).  ``_c`` means centred with constants fixed on the
 fitting frame.
 
+Optional role ``lst`` (land surface temperature, °C or K; off unless configured): surface–air coupling adds
+a non-negative source term, q += c_lst⁺·(LST − T_bg)_c, with T_bg = ``physics.lst_background`` (the
+background air temperature, default 0) and c_lst = 0.01·softplus(u) K⁻¹ fitted without a prior.  In bulk
+transfer Q_H = ρc_p·(T_s − T_a)/r_a, so c_lst = ρc_p/(r_a·forcing) and r_a = ρc_p/(c_lst·forcing).  The term
+is spread by the same Green's function.  The surface–air difference is centred like the other features, so
+T_bg only matters for reporting; without the role every term, leaf and result is the same as before it existed.
+
+:meth:`PhysicsModel.assign` sets parameters instead of fitting them (transfer to a domain without labels:
+the feature constants come from that domain's own features).
+
 The point source q_raw is averaged into raster cells, centred by its mean
 over valid cells *of the fitting frame* and set to 0 outside the mask
 (Ĝ(0) = 1, so the constant is absorbed by b).  The centring constant is
@@ -155,11 +165,14 @@ _EF_PRIOR_SD = 5.0               # weak: keeps flat directions from drifting
 _W_INIT = 50.0                   # W m⁻² water-cell sink
 _W_SCALE = 100.0
 _DEFAULT_ALBEDO = 0.15
-_ROLES = ("albedo", "canopy", "impervious", "ndvi", "elevation", "water_distance")
+_ROLES = ("albedo", "canopy", "impervious", "ndvi", "elevation", "water_distance", "lst")
+_LST_SCALE = 0.01                # K⁻¹ per softplus unit of the surface–air coupling c_lst (role "lst")
+_LST_INIT = 0.02                 # initial c_lst (K⁻¹): r_a ≈ 90 s m⁻¹ at 650 W m⁻²
 #: Natural parameter (a :meth:`PhysicsModel._transform` key) → the fit leaf (``_init_params`` key) it is a
 #: function of.  The drift v = v_max·(ux, uy) has one leaf per axis.
 NATURAL_LEAF = {"L": "uL", "s": "s", "kc": "ukc", "c0": "uc0", "cw": "ucw", "a1": "a1", "a1n": "a1n",
-                "e0": "e0", "e1": "e1", "e2": "e2", "e3": "e3", "w": "w", "vx": "ux", "vy": "uy"}
+                "e0": "e0", "e1": "e1", "e2": "e2", "e3": "e3", "w": "w", "vx": "ux", "vy": "uy",
+                "c_lst": "ulst"}
 LEAF_NATURAL = {v: k for k, v in NATURAL_LEAF.items()}
 
 
@@ -712,6 +725,11 @@ class PhysicsModel:
             "impervious": self._fill.get("impervious", 0.0) / 100.0,
         }
         self._elev_mean = self._fill.get("elevation", 0.0)
+        if "lst" in feats:
+            self._centre["lst"] = self._fill["lst"] - self._lst_background()
+
+    def _lst_background(self) -> float:
+        return float(self.cfg.get("lst_background") or 0.0)
 
     def _torch_features(self, feats: dict[str, np.ndarray]) -> dict:
         import torch
@@ -726,6 +744,9 @@ class PhysicsModel:
             t["ndvi"] = torch.as_tensor(feats["ndvi"], dtype=torch.float64)
         if "water_distance" in feats:
             t["water"] = torch.as_tensor((feats["water_distance"] <= self.dx / 2.0).astype(np.float64))
+        if "lst" in feats:
+            t["lst"] = torch.as_tensor(feats["lst"] - self._lst_background() - self._centre["lst"],
+                                       dtype=torch.float64)
         return t
 
     # -------------------------------------------------------------- params
@@ -735,7 +756,7 @@ class PhysicsModel:
         def p(val, grad=True):
             return torch.tensor(float(val), dtype=torch.float64, requires_grad=grad)
 
-        return {
+        P = {
             "uL": p(_uL_from_L(self.L_init, self.L_lo, self.L_hi)),
             "ux": p(v0[0] / self.v_max, self.fit_advection),
             "uy": p(v0[1] / self.v_max, self.fit_advection),
@@ -752,6 +773,9 @@ class PhysicsModel:
             "e3": p(_inv_softplus(_EF_INIT["e3"])),
             "w": p(_inv_softplus(_W_INIT / _W_SCALE)),
         }
+        if "lst" in self.roles:
+            P["ulst"] = p(_inv_softplus(_LST_INIT / _LST_SCALE))
+        return P
 
     def _active_leaf_names(self, feats: dict) -> list[str]:
         """Names of the fitted leaves (``_init_params`` keys) for these role features, in fit order."""
@@ -765,6 +789,8 @@ class PhysicsModel:
         names += [e for e, r in (("e1", "ndvi"), ("e2", "canopy"), ("e3", "impervious")) if r in feats]
         if "water" in feats:
             names.append("w")
+        if "lst" in feats:
+            names.append("ulst")
         return names
 
     def _active_leaves(self, P: dict, feats: dict) -> list:
@@ -775,7 +801,7 @@ class PhysicsModel:
         import torch.nn.functional as F
 
         zero = torch.zeros((), dtype=torch.float64)
-        return {
+        T = {
             "L": torch.exp(self.L_lo + (self.L_hi - self.L_lo) * torch.sigmoid(P["uL"])),
             "vx": self.v_max * P["ux"] if self.fit_advection else zero,
             "vy": self.v_max * P["uy"] if self.fit_advection else zero,
@@ -793,6 +819,9 @@ class PhysicsModel:
             "e3": F.softplus(P["e3"]),
             "w": _W_SCALE * F.softplus(P["w"]),
         }
+        if "ulst" in P:
+            T["c_lst"] = _LST_SCALE * F.softplus(P["ulst"])
+        return T
 
     def _penalty(self, P: dict, T: dict, feats: dict, prior_scale: float | None = None):
         """``prior_weight``·Σ z² over the source priors (× ``prior_scale`` when given: 0 switches every prior
@@ -857,14 +886,14 @@ class PhysicsModel:
             return float(C0_BOUNDS[0]), float(C0_BOUNDS[1]), "lin"
         if key in ("s", "a1", "a1n"):
             return 0.0, 1.0, "lin"
-        if key in ("e1", "e2", "e3", "w"):
+        if key in ("e1", "e2", "e3", "w", "c_lst"):
             return 0.0, None, "floor"
         if key in ("e0", "vx", "vy"):
             return None, None, "free"
         raise KeyError(f"unknown physics parameter {key!r}")
 
     def _leaf_scale(self, key: str) -> float:
-        return {"w": _W_SCALE, "vx": self.v_max, "vy": self.v_max}.get(key, 1.0)
+        return {"w": _W_SCALE, "vx": self.v_max, "vy": self.v_max, "c_lst": _LST_SCALE}.get(key, 1.0)
 
     def to_natural(self, key: str, u):
         """Natural value of parameter ``key`` at leaf value ``u`` (a float, or a tensor: torch ops, so it stays
@@ -974,6 +1003,9 @@ class PhysicsModel:
         qh = (qstar - dqs) * one_minus_ef
         if "water" in tf:
             qh = qh - T["w"] * tf["water"]
+        if "lst" in tf:
+            # surface–air coupling, already normalised: c_lst = ρc_p / (r_a · forcing)
+            return qh / norm + T["c_lst"] * tf["lst"]
         return qh / norm
 
     def _cell_mean(self, values):
@@ -1149,6 +1181,55 @@ class PhysicsModel:
                  self._T["vx"], self._T["vy"], self.a, self.train_rmse, self.fit_info["seconds"])
         return self
 
+    def assign(self, frame: pd.DataFrame, coords: np.ndarray, natural: dict, a: float, b: float = 0.0,
+               gamma: float = 0.0, beta: tuple[float, float] = (0.0, 0.0)) -> "PhysicsModel":
+        """Set the parameters instead of fitting them: transfer to a domain without labels.
+
+        The feature constants (fill values, centring, the source's centring constant, the elevation and
+        coordinate means) come from ``frame``'s features, never from labels.  ``natural`` gives parameters
+        by :data:`NATURAL_LEAF` key in natural units (e.g. medians of fits elsewhere); parameters it omits
+        keep their starting values.  ``a``, ``b``, ``gamma`` and ``beta`` are the linear coefficients.
+        Afterwards the model predicts as a fitted one (``train_rmse`` is NaN; ``fit_info["assigned"]``)."""
+        import torch
+
+        unknown = sorted(set(natural) - set(NATURAL_LEAF))
+        if unknown:
+            raise ValueError(f"PhysicsModel.assign: unknown parameters {unknown} (known: {sorted(NATURAL_LEAF)})")
+        if not self.fit_advection and any(abs(float(natural.get(k, 0.0))) > 0 for k in ("vx", "vy")):
+            raise ValueError("PhysicsModel.assign: v ≠ 0 needs fit_advection")
+        with _torch_threads(self.cfg.get("num_threads")):
+            self._check_frame(frame)
+            self._fitted = False
+            coords = np.asarray(coords, dtype=np.float64)
+            feats = self._raw_features(frame)
+            self._set_feature_constants(feats)
+            self._xy_mean = coords.mean(axis=0)
+            self._prepare_grid_tensors()
+            tf = self._torch_features(feats)
+            v0 = (float(natural.get("vx", 0.0)), float(natural.get("vy", 0.0)))
+            P = self._init_params(v0)
+            for k, v in natural.items():
+                leaf = NATURAL_LEAF[k]
+                if leaf in P and k not in ("vx", "vy"):
+                    P[leaf] = torch.tensor(self.to_leaf(k, float(v)), dtype=torch.float64)
+            T = self._transform(P)
+            T = {**T, **{k: torch.as_tensor(float(v), dtype=torch.float64) for k, v in natural.items() if k in T}}
+            with torch.no_grad():
+                _, q_mean = self._q_raster_torch(tf, T)
+            self._P = {k: v.detach().clone() for k, v in P.items()}
+            self._T = {k: float(v.detach()) for k, v in T.items()}
+            self._q_mean = float(q_mean)
+            self.a, self.b, self.gamma = float(a), float(b), float(gamma)
+            self.beta_x, self.beta_y = (float(x) for x in beta)
+            self.train_rmse = float("nan")
+            self.train_r2 = float("nan")
+            self.fit_warning = None
+            self._fitted = True
+            self._store_operator_rasters(frame)
+            self.fit_info = {"assigned": True, "natural": {k: float(v) for k, v in natural.items()},
+                             "pad_cells": int(self.pad)}
+        return self
+
     def _check_fixed(self, fixed: dict | None, tf: dict) -> dict:
         """``fit(fixed=...)`` as {natural key: float}; every key must be an active parameter of this fit."""
         if not fixed:
@@ -1281,4 +1362,5 @@ class PhysicsModel:
             "albedo_map": ({"from": list(self._albedo_from), "to": list(self.cfg["albedo_map"].get("to", (0.08, 0.25)))}
                            if self.cfg.get("albedo_map") and getattr(self, "_albedo_from", None) else None),
             "L_bounds_m": [math.exp(self.L_lo), math.exp(self.L_hi)],
+            **({"c_lst": T["c_lst"], "lst_background": self._lst_background()} if "c_lst" in T else {}),
         }

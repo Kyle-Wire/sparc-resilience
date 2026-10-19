@@ -39,3 +39,64 @@ def test_compare_features_and_data_join(tmp_path, synthetic_city):
     assert "open_canopy" in data.frame and np.isfinite(data.frame["open_canopy"]).all()
     cmp = FO.compare_features(pd.DataFrame({"canopy": data.frame["open_canopy"]}), data, {"canopy": "canopy"})
     assert cmp[0]["pearson_r"] > 0.8 and cmp[0]["role"] == "canopy"
+
+
+def test_mgrs_square_without_the_mgrs_package():
+    # 100 km squares of known places (Sentinel-2 tile names): Providence's two, New York, Los Angeles, Chicago
+    assert FO.mgrs_square(-71.0, 41.8) == "19TCG" and FO.mgrs_square(-71.6, 41.8) == "19TBG"
+    assert FO.mgrs_square(-74.0, 40.7) == "18TWL" and FO.mgrs_square(-118.24, 34.05) == "11SLT"
+    assert FO.mgrs_square(-87.63, 41.88) == "16TDM"
+    tiles = FO.mgrs_tiles((-71.5, 41.75, -71.35, 41.9), 0)
+    assert set(tiles) >= {"19TBG", "19TCG"} and all(len(t) == 5 for t in tiles)
+    with pytest.raises(ValueError):
+        FO.mgrs_square(0.0, 85.0)
+
+
+def test_s2_composite_in_row_blocks_equals_the_whole_stack(tmp_path, monkeypatch):
+    """R15: the Sentinel-2 median is taken in blocks of rows (memory bounded by the block, not area × scenes);
+    the result must equal the composite of the whole stack at once and the plain per-pixel median."""
+    import rasterio
+    from pyproj import Transformer
+    from rasterio.transform import from_origin
+
+    from sparc.core import features_open as F
+
+    bounds = (-71.43, 41.80, -71.40, 41.83)
+    epsg = F.utm_epsg(-71.415, 41.815)
+    tr = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
+    xs, ys = tr.transform([bounds[0], bounds[2], bounds[0], bounds[2]], [bounds[1], bounds[1], bounds[3], bounds[3]])
+    res = 10.0
+    x0, y1 = np.floor(min(xs) / res) * res, np.ceil(max(ys) / res) * res
+    W = int(round((np.ceil(max(xs) / res) * res - x0) / res))
+    H = int(round((y1 - np.floor(min(ys) / res) * res) / res))
+    T = from_origin(x0, y1, res, res)
+    rng = np.random.default_rng(0)
+    scenes, ref = [], {b: [] for b in F.S2_BANDS}
+    for k in range(4):
+        d = tmp_path / f"s{k}"
+        d.mkdir()
+        scl = np.full((H, W), 4, np.uint8)
+        scl[rng.random((H, W)) < 0.2] = 9                                      # 20% cloud per scene
+        if k == 3:
+            scl[:] = 9                                                          # a fully cloudy scene: dropped
+        for band in F.S2_BANDS + ("SCL",):
+            arr = scl if band == "SCL" else rng.integers(200, 4000, (H, W)).astype(np.uint16)
+            with rasterio.open(d / f"{band}.tif", "w", driver="GTiff", width=W, height=H, count=1,
+                               dtype=arr.dtype, crs=f"EPSG:{epsg}", transform=T) as dst:
+                dst.write(arr, 1)
+            if band != "SCL" and k < 3:
+                a = arr.astype(np.float32) / 10000.0
+                a[np.isin(scl, F.SCL_BAD)] = np.nan
+                ref[band].append(a)
+        scenes.append({"name": f"s{k}", "cloud": 5.0, "prefix": str(d) + "/"})
+    monkeypatch.setattr(F, "_s2_href", lambda sc, band: sc["prefix"] + f"{band}.tif")
+    whole = F.s2_composite(scenes, bounds, memory_mb=1e4)
+    blocks = F.s2_composite(scenes, bounds, memory_mb=0.05)
+    assert whole["scenes"] == blocks["scenes"] == ["s0", "s1", "s2"]
+    assert blocks["block_rows"] < H <= whole["block_rows"]
+    for k in ("ndvi", "albedo"):
+        assert np.array_equal(whole[k], blocks[k], equal_nan=True), k
+    with np.errstate(all="ignore"):
+        med = {b: np.nanmedian(np.stack(v), axis=0) for b, v in ref.items()}
+    ndvi = (med["B08"] - med["B04"]) / (med["B08"] + med["B04"])
+    assert np.allclose(blocks["ndvi"], ndvi, atol=1e-5, equal_nan=True)

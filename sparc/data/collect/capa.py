@@ -69,6 +69,8 @@ OSF_API        = "https://api.osf.io/v2/nodes/{node_id}/files/osfstorage/"
 # Waterbutler direct-download URL — faster and more reliable than osf.io/download/
 # Retrieved from item["links"]["move"] in the API response (same base URL, GET = download)
 OSF_WATERBUTLER = "https://files.osf.io/v1/resources/{node_id}/providers/osfstorage/{file_id}"
+# files.osf.io answers a download with a 302 to OSF's object storage (checked 2026-10 for wu9v7 and tdsy7 files)
+OSF_STORAGE_HOST = "idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com"
 
 # Match _MMDDYY followed by any non-digit (covers both ZIP names and report filenames)
 _DATE_RE = re.compile(r"_(\d{2})(\d{2})(\d{2})(?=[^\d]|$)", re.IGNORECASE)
@@ -253,6 +255,8 @@ def _scan_storage(
     folder_id: str = "",
     depth: int = 0,
     top_level_filter: Optional[str] = None,
+    info: Optional[dict] = None,
+    root_files: bool = True,
 ) -> list[dict]:
     """Recursively list every file in an OSF node's storage.
 
@@ -265,6 +269,12 @@ def _scan_storage(
                        name contains this substring (case-insensitive).  Useful
                        for multi-city project nodes like ``"tdsy7"`` where each
                        city lives in its own top-level folder.
+    info             : when given, filled with ``top_folders`` (every root
+                       folder's name), ``matched`` (those the filter kept)
+                       and ``root_files_skipped`` (see ``root_files``).
+    root_files       : keep the files at the node's root (default).  With a
+                       filter they belong to no city in particular; False
+                       skips them (listed in ``info``).
     """
     if depth > 6:
         return []
@@ -279,13 +289,23 @@ def _scan_storage(
             name: str = item["attributes"]["name"]
             fid:  str = item["id"]
             if kind == "folder":
+                if depth == 0 and info is not None:
+                    info.setdefault("top_folders", []).append(name)
                 # At depth 0, apply the city-folder filter if provided
                 if depth == 0 and top_level_filter:
                     if top_level_filter.lower() not in name.lower():
                         continue  # skip this top-level folder
+                    if info is not None:
+                        info.setdefault("matched", []).append(name)
                 files.extend(_scan_storage(node_id, fid, depth + 1, top_level_filter))
             else:
-                files.append({"name": name, "id": fid})
+                attrs = item["attributes"]
+                if depth == 0 and not root_files:
+                    if info is not None:
+                        info.setdefault("root_files_skipped", []).append(name)
+                    continue
+                files.append({"name": name, "id": fid,
+                              "path": attrs.get("materialized_path") or name, "size": attrs.get("size")})
         url = payload.get("links", {}).get("next")
     return files
 
@@ -366,11 +386,20 @@ def _load_raster_data(source: dict) -> dict:
 
 
 def _http_get(url: str) -> bytes:
+    """GET ``url`` (redirects followed).  A failure re-raises with ``exc.sparc_url`` = ``url``, so callers can
+    name the host that failed (an HTTPError's own ``url`` is the redirect target when a redirect was followed)."""
     req = urllib.request.Request(
         url, headers={"User-Agent": "SPARC-DataCollection/1.0"}
     )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-        return resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            return resp.read()
+    except Exception as exc:
+        try:
+            exc.sparc_url = getattr(exc, "url", None) or url
+        except Exception:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -792,6 +821,161 @@ def download_capa_traverses(
     if not frames:
         return empty
     return pd.concat(frames, ignore_index=True)
+
+
+#: Files a traverse download keeps: tables, vector layers (with their shapefile sidecars) and archives.
+#: Rasters, PDFs and images are not needed for the traverse points and are skipped.
+TRAVERSE_FILE_EXTS = (".zip", ".csv", ".txt", ".tsv", ".geojson", ".json", ".gpkg", ".kml",
+                      ".shp", ".shx", ".dbf", ".prj", ".cpg")
+#: Path patterns (case-insensitive) of archives that hold CAPA's interpolated maps, not traverse points
+#: (Providence ``rasters_chw_*``, LA's and Boise's "Surface Models" / ``Area-wide_*`` zips).
+RASTER_ARCHIVE_PATTERNS = ("rasters_", "surface models", "surface_models", "area-wide", "area_wide")
+DOWNLOAD_RETRIES = 4
+_CHUNK = 1 << 20
+
+
+def _fetch_file(url: str, part: "object", size: Optional[int] = None, retries: int = DOWNLOAD_RETRIES) -> None:
+    """Stream ``url`` into the file ``part``, resuming a partial file with an HTTP Range request and retrying
+    cut-off transfers (``IncompleteRead``, resets, timeouts, 5xx) with back-off; a 4xx answer raises at once.
+    When ``size`` is known the finished file must have it.  Failures carry ``exc.sparc_url``."""
+    import http.client
+    import pathlib
+    import time
+    import urllib.error
+
+    part = pathlib.Path(part)
+    last: Optional[BaseException] = None
+    for attempt in range(retries + 1):
+        have = part.stat().st_size if part.exists() else 0
+        if size is not None and have == int(size):
+            return
+        if size is not None and have > int(size):
+            part.unlink()
+            have = 0
+        headers = {"User-Agent": "SPARC-DataCollection/1.0"}
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=HTTP_TIMEOUT) as r:
+                status = int(getattr(r, "status", None) or 200)
+                mode = "ab" if have and status == 206 else "wb"      # a 200 to a Range request: start over
+                with open(part, mode) as fh:
+                    while True:
+                        chunk = r.read(_CHUNK)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+            got = part.stat().st_size
+            if size is not None and got != int(size):
+                raise http.client.IncompleteRead(b"", int(size) - got)
+            return
+        except urllib.error.HTTPError as exc:
+            if exc.code == 416 and size is not None and part.exists() and part.stat().st_size == int(size):
+                return
+            if exc.code < 500:
+                exc.sparc_url = getattr(exc, "url", None) or url
+                raise
+            last = exc
+        except (http.client.HTTPException, ConnectionError, TimeoutError, urllib.error.URLError, OSError) as exc:
+            last = exc
+        if attempt < retries:
+            log.warning("capa download: %s cut off (%s); retry %d/%d", url, last, attempt + 1, retries)
+            time.sleep(min(2.0 ** attempt, 30.0))
+    try:
+        last.sparc_url = url                                         # type: ignore[union-attr]
+    except Exception:
+        pass
+    raise last                                                       # type: ignore[misc]
+
+
+def download_capa_files(
+    node_id: str,
+    dest: "str | object",
+    *,
+    folder_hint: Optional[str] = None,
+    exts: tuple = TRAVERSE_FILE_EXTS,
+    max_file_bytes: int = 2_000_000_000,
+    skip_patterns: tuple = RASTER_ARCHIVE_PATTERNS,
+) -> dict:
+    """Download the raw files of an OSF node (traverse tables, point layers, archives) into ``dest``.
+
+    Unlike :func:`download_capa_traverses` this keeps the files as published, in their OSF folder
+    layout, so a shapefile's ``.shp``/``.dbf``/``.shx``/``.prj`` stay together and
+    :func:`sparc.core.identify.traverses.scan_traverses` can read the folder as it is.  Only files whose
+    extension is in ``exts`` are fetched (rasters, PDFs and images are skipped and listed), and none whose path
+    contains a pattern of ``skip_patterns`` (default the raster archives, :data:`RASTER_ARCHIVE_PATTERNS`).
+    Each file is streamed to ``<name>.part`` (:func:`_fetch_file`: cut-off transfers are retried and resumed
+    with HTTP Range, also after a restart) and renamed when complete; ``dest/_download.json`` records the
+    listing and is written last, so a folder with it is complete and a rerun returns it without downloading.
+
+    With ``folder_hint`` (a multi-city node) only the root folders whose name contains it are read, and the
+    node's root-level files are skipped (they belong to no city in particular; listed under ``skipped``); when
+    no root folder matches, LookupError names the folders there are, and nothing is recorded as complete.  The
+    completion record is keyed on (node, folder_hint): changing the hint downloads again.
+
+    Returns the record: ``{"node", "folder_hint", "files": [...], "skipped": [...], "complete": True}``.
+    Raises on network failure (the caller decides whether that is fatal), and ValueError when nothing to keep
+    was found.
+    """
+    import pathlib
+
+    root = pathlib.Path(dest)
+    done = root / "_download.json"
+    if done.exists():
+        rec = json.loads(done.read_text(encoding="utf-8"))
+        if rec.get("complete") and rec.get("node") == node_id and rec.get("folder_hint") == folder_hint:
+            return rec
+        for f in rec.get("files") or []:                # another node or hint: its files are not this city's
+            parts = [q for q in str(f.get("path", "")).split("/") if q not in ("", ".", "..")]
+            if parts:
+                root.joinpath(*parts).unlink(missing_ok=True)
+        done.unlink()
+    info: dict = {}
+    if folder_hint:
+        files = _scan_storage(node_id, top_level_filter=folder_hint, info=info, root_files=False)
+        if not info.get("matched"):
+            raise LookupError(f"OSF node {node_id} has no root folder matching {folder_hint!r} (folders: "
+                              f"{', '.join(info.get('top_folders') or []) or 'none'})")
+    else:
+        files = _scan_storage(node_id, top_level_filter=None)
+    root.mkdir(parents=True, exist_ok=True)
+    kept, skipped = [], []
+    for name in info.get("root_files_skipped") or []:
+        skipped.append({"path": name, "reason": "root-level file of a multi-city node (not assigned to this city)"})
+    for f in files:
+        rel = str(f.get("path") or f["name"]).replace("\\", "/").lstrip("/")
+        parts = [p for p in rel.split("/") if p not in ("", ".", "..")]
+        if not parts:
+            continue
+        low = parts[-1].lower()
+        size = f.get("size")
+        if not low.endswith(tuple(exts)):
+            skipped.append({"path": "/".join(parts), "reason": "not a table, vector layer or archive"})
+            continue
+        pat = next((q for q in skip_patterns or () if q.lower() in "/".join(parts).lower()), None)
+        if pat is not None:
+            skipped.append({"path": "/".join(parts), "reason": f"name contains {pat!r} (maps, not traverse points)"})
+            continue
+        if size is not None and int(size) > max_file_bytes:
+            skipped.append({"path": "/".join(parts), "reason": f"larger than {max_file_bytes} bytes"})
+            continue
+        target = root.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not (target.exists() and size is not None and target.stat().st_size == int(size)):
+            tmp = target.with_name(target.name + ".part")
+            _fetch_file(OSF_WATERBUTLER.format(node_id=node_id, file_id=f["id"]), tmp,
+                        None if size is None else int(size))
+            tmp.replace(target)
+        kept.append({"path": "/".join(parts), "id": f["id"], "size": size})
+    if not kept:
+        raise ValueError(f"OSF node {node_id}" + (f" folder {', '.join(info.get('matched') or [])!r}" if folder_hint
+                                                  else "") + " holds no table, vector layer or archive")
+    rec = {"node": node_id, "folder_hint": folder_hint, "matched_folders": info.get("matched"), "files": kept,
+           "skipped": skipped, "complete": True}
+    tmp = done.with_name(done.name + ".part")
+    tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    tmp.replace(done)
+    return rec
 
 
 # ---------------------------------------------------------------------------
