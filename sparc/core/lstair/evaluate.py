@@ -523,7 +523,7 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
                                        "LST adds information inside the physics")
     res["verdict"] = res["paired"]["B-A"]["verdict"]
     offs = [(r["lst_offset_days"], r["B"]["mse"] - r["A"]["mse"]) for r in per_city if r.get("lst_offset_days") is not None]
-    if len(offs) >= 4:
+    if len(offs) >= 4 and len({o for o, _ in offs}) > 1:
         from scipy.stats import spearmanr
 
         rho = spearmanr([o for o, _ in offs], [d for _, d in offs]).correlation
