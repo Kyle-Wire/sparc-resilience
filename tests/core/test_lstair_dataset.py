@@ -675,3 +675,40 @@ def test_cli_utc_builds_every_city_in_one_call_and_never_from_another_citys_fold
     assert summary["cities"]["Brockton, MA"]["status"] == "failed" and "offline" in summary["cities"]["Brockton, MA"]["error"]
     c = D.load_city(tmp_path / "o" / "cities" / "providence_ri")
     assert {r["run"]: r["start"][11:13] for r in c.meta["runs"]} == {"af": "15", "am": "06"}
+
+
+def test_a_city_cut_off_mid_build_resumes_from_the_sources_already_done(built, tmp_path):
+    """R15: features, LST and ERA5 are kept per city as each finishes, so a restart (or an out-of-memory kill)
+    during a later source does not throw the finished ones away."""
+    root, _, _ = built
+    calls = {"features": 0, "lst": 0, "era5": 0}
+
+    def feats(ctx, d):
+        calls["features"] += 1
+        return synthetic_features(ctx, d)
+
+    def era5(*a):
+        calls["era5"] += 1
+        return fake_era5(*a)
+
+    def lst_killed(ctx, d, study):
+        calls["lst"] += 1
+        raise MemoryError("killed")
+
+    def lst_ok(ctx, d, study):
+        calls["lst"] += 1
+        return synthetic_lst(ctx, d, study)
+
+    kw = dict(traverses_dir=root / "traverses", probe_opener=_no_network)
+    s = D.build_dataset(["Providence, RI"], tmp_path / "o", features=feats, lst=lst_killed, era5=era5, **kw)
+    assert s["cities"]["Providence, RI"]["status"] == "failed" and calls == {"features": 1, "lst": 1, "era5": 0}
+    part = tmp_path / "o" / "cities" / "providence_ri" / "partial"
+    assert (part / "features.json").exists() and (part / "features.npz").exists()
+    s = D.build_dataset(["Providence, RI"], tmp_path / "o", features=feats, lst=lst_ok, era5=era5, **kw)
+    assert s["cities"]["Providence, RI"]["status"] == "ok" and calls == {"features": 1, "lst": 2, "era5": 2}
+    assert not part.exists()
+    a = D.load_city(tmp_path / "o" / "cities" / "providence_ri").table
+    b = D.load_city(built[1] / "cities" / "providence_ri").table
+    assert np.allclose(a["canopy_f300"], b["canopy_f300"]) and np.allclose(a["lst"], b["lst"], equal_nan=True)
+    m = D.load_city(tmp_path / "o" / "cities" / "providence_ri").meta
+    assert not any("large grid" in w for w in m["warnings"])

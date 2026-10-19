@@ -31,7 +31,9 @@ For every city (a CAPA catalog name, or a local folder given by the user):
    (:func:`sparc.data.collect.landsat.campaign_lst`) with focal means at 100 and 300 m, the scene date and its
    offset in days.  Predictors are computed from rasters only; the traverse temperatures never enter them.
 
-Each city is cached in ``OUT/cities/<slug>/``: ``table.parquet``, ``rasters.npz`` (every raster on the full
+While a city builds, each source's result (features, LST, ERA5 per run) is kept in ``OUT/cities/<slug>/partial/``
+as it finishes, so a build cut off by a container restart resumes there.  Each city is cached in
+``OUT/cities/<slug>/``: ``table.parquet``, ``rasters.npz`` (every raster on the full
 grid: the physics model needs features beyond the driven cells) and ``meta.json`` (provenance, runs, drift,
 scenes), written last, so a city with ``meta.json`` status ``ok`` is skipped on a rerun.  Hosts are probed
 before anything is fetched (for Landsat: the STAC API, the SAS token and a signed listing of the COG container);
@@ -73,6 +75,7 @@ FOCAL_FEATURES = ("canopy", "impervious", "ndvi", "albedo")
 FOCAL_RADII = (100, 300, 1000)
 LST_RADII = (100, 300)
 MAX_CELLS = 6_000_000                  # ~70 km square at 30 m: larger grids are refused
+WARN_CELLS = 1_500_000                 # ~37 km square: the open features take long (a warning in meta.json)
 STUDY_BUFFER_M = 300.0                 # LST clear fraction is measured within this distance of the traverses
 TARGET_COLUMNS = ("Ta", "dTa", "ta_background", "n_readings", "n_visits")
 #: File-name patterns not read by default: CAPA's appendix archives repeat the main traverses (Providence wu9v7:
@@ -686,6 +689,54 @@ def _write_atomic(path: Path, data: bytes) -> None:
     tmp.replace(path)
 
 
+class _Partial:
+    """Per-source results of a city build kept as each finishes (``OUT/cities/<slug>/partial/<name>.npz|json``),
+    so a build cut off by a restart or an out-of-memory kill resumes from the sources already done.  Each entry
+    carries a key (a hash of the grid, the date, the provider and its settings); a different key recomputes.
+    Removed when the city is finished (its rasters are then in ``rasters.npz``)."""
+
+    def __init__(self, city_dir: Path):
+        self.dir = Path(city_dir) / "partial"
+
+    @staticmethod
+    def key(*parts) -> str:
+        import hashlib
+
+        return hashlib.sha256(json.dumps(parts, default=_json_default, sort_keys=True).encode()).hexdigest()[:20]
+
+    def load(self, name: str, key: str):
+        j, z = self.dir / f"{name}.json", self.dir / f"{name}.npz"
+        try:
+            meta = json.loads(j.read_text(encoding="utf-8"))
+            if meta.get("key") != key:
+                return None
+            arrays = {}
+            if z.exists():
+                with np.load(z, allow_pickle=False) as f:
+                    arrays = {k: f[k] for k in f.files}
+            return arrays, meta.get("value")
+        except (OSError, ValueError, KeyError):
+            return None
+
+    def save(self, name: str, key: str, arrays: dict | None, value) -> None:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        if arrays:
+            buf = io.BytesIO()
+            np.savez(buf, **{k: np.asarray(v) for k, v in arrays.items()})
+            _write_atomic(self.dir / f"{name}.npz", buf.getvalue())
+        _write_atomic(self.dir / f"{name}.json", json.dumps({"key": key, "value": value},
+                                                            default=_json_default).encode())
+
+    def clear(self) -> None:
+        import shutil
+
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+
+def _provider_id(fn, default: str) -> str:
+    return default if fn is None else f"{getattr(fn, '__module__', '')}.{getattr(fn, '__qualname__', repr(fn))}"
+
+
 def city_status(city_dir: Path) -> str | None:
     p = Path(city_dir) / "meta.json"
     if not p.exists():
@@ -732,7 +783,11 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
         raise ValueError(f"no traverse points under {traverses}" + (f" (skipped {skipped})" if skipped else ""))
     points = points.dropna(subset=["lat", "lon", "temp_f"])
     ctx = make_city_grid(points["lon"].to_numpy(float), points["lat"].to_numpy(float), spec.crs, cell_m, margin_m)
+    if ctx.nx * ctx.ny > WARN_CELLS:
+        warnings.append(f"large grid: {ctx.nx * ctx.dx / 1000:.0f} × {ctx.ny * ctx.dx / 1000:.0f} km "
+                        f"({ctx.nx * ctx.ny:,} cells); the open features take long (several readings far apart?)")
     cfg, layout = ctx.identify_cfg(), ctx.identify_layout()
+    partial = _Partial(out)
     points, clock_note = check_clock(points, spec.tz, utc_given=bool(utc_to))
     if clock_note:
         warnings.append(clock_note)
@@ -782,12 +837,26 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     from scipy import ndimage
 
     study = ndimage.distance_transform_edt(~driven.reshape(ctx.shape)) * ctx.dx <= STUDY_BUFFER_M
-    feats, fprov = (features or open_features)(ctx, campaign)
+    fkey = partial.key("features", ctx.as_dict(), campaign.isoformat(), _provider_id(features, "open_features"))
+    got = partial.load("features", fkey)
+    if got is not None:
+        feats, fprov = {k: np.asarray(v, dtype=np.float64) for k, v in got[0].items()}, got[1]
+    else:
+        feats, fprov = (features or open_features)(ctx, campaign)
+        partial.save("features", fkey, {k: feats[k] for k in FEATURES if k in feats}, fprov)
     lst_res = None
     if lst is not False:
-        lst_res = (lst or (lambda c, d, s: landsat_lst(c, d, s, lst_window_days, lst_min_clear, cache_dir)))(
-            ctx, campaign, study)
-        check_lst_result(lst_res)                     # a provider's read failures never pass as "no clear scene"
+        lkey = partial.key("lst", ctx.as_dict(), campaign.isoformat(), _provider_id(lst, "landsat_lst"),
+                           lst_window_days, lst_min_clear, np.packbits(study).tobytes().hex())
+        got = partial.load("lst", lkey)
+        if got is not None:
+            lst_res = {**got[1], "lst_c": got[0].get("lst_c")}
+        else:
+            lst_res = (lst or (lambda c, d, s: landsat_lst(c, d, s, lst_window_days, lst_min_clear, cache_dir)))(
+                ctx, campaign, study)
+            check_lst_result(lst_res)                 # a provider's read failures never pass as "no clear scene"
+            partial.save("lst", lkey, None if lst_res.get("lst_c") is None else {"lst_c": lst_res["lst_c"]},
+                         {k: v for k, v in lst_res.items() if k != "lst_c"})
         if lst_res.get("lst_c") is None:
             why = ("no Landsat scene within the window" if lst_res.get("status") == "no_scene"
                    else "no Landsat scene clear enough within the window")
@@ -824,7 +893,15 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
             rec["era5"] = {"error": "ERA5 off" if era5 is False else "no time zone for this city"}
             continue
         try:
-            e = (era5 or era5_run)(float(clon), float(clat), spec.tz, pd.Timestamp(rec["start"]), pd.Timestamp(rec["end"]))
+            ekey = partial.key("era5", float(clon), float(clat), spec.tz, rec["start"], rec["end"],
+                               _provider_id(era5, "era5_run"))
+            got = partial.load(f"era5_{_Partial.key(rec['run_id'])}", ekey)
+            if got is not None:
+                e = got[1]
+            else:
+                e = (era5 or era5_run)(float(clon), float(clat), spec.tz, pd.Timestamp(rec["start"]),
+                                       pd.Timestamp(rec["end"]))
+                partial.save(f"era5_{_Partial.key(rec['run_id'])}", ekey, None, e)
             rec["era5"] = e
             table.loc[table["run_id"] == rec["run_id"], "ta_era5"] = e["ta_era5"]
         except Exception as exc:                      # noqa: BLE001 - ERA5 is optional
@@ -855,6 +932,7 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
             "seconds": round(time.perf_counter() - t0, 1),
             "built_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     _write_atomic(out / "meta.json", json.dumps(meta, indent=1, default=_json_default).encode())
+    partial.clear()
     return meta
 
 
