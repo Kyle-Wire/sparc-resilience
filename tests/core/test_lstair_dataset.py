@@ -46,11 +46,15 @@ def write_campaign(folder, centre, date="2020-07-29", drift_c_per_h=1.2, offsets
     to_ll = Transformer.from_crs(UTM19, "EPSG:4326", always_xy=True)
     x0, y0 = to_xy.transform(*centre)
     segs = _routes(x0, y0)
+    nv = len(offsets)
+    # each vehicle drives its streets, then its first two again ~25 min later: the repeat visits that identify the
+    # drift within cell fixed effects (crossings a few minutes apart do not; see adjust_visits)
+    plan = [(k % nv, xs, ys) for k, (xs, ys) in enumerate(segs)] + [(v, *segs[v + nv * j]) for j in range(2)
+                                                                     for v in range(nv)]
     for run, start, base in (("af", "15:00:00", 0.0), ("am", "06:05:00", -6.0)):
         rows = []
-        t_veh = [0.0] * len(offsets)
-        for k, (xs, ys) in enumerate(segs):
-            v = k % len(offsets)
+        t_veh = [0.0] * nv
+        for v, xs, ys in plan:
             n = xs.size
             ts = t_veh[v] + np.arange(n) * 1.0                                   # 1 Hz at 10 m/s
             t_veh[v] = ts[-1] + 20.0
@@ -321,3 +325,37 @@ def test_cli_fails_fast_naming_the_blocked_host(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(D, "probe", lambda url, timeout=10.0, opener=None: "URLError: Tunnel connection failed: 403")
     rc = main(["lstair", "dataset", "--cities", "Providence, RI", "--out", str(tmp_path / "o")])
     assert rc == 2 and "api.osf.io" in capsys.readouterr().err
+
+
+def test_fe_drift_falls_back_when_revisits_are_only_minutes_apart():
+    """Real Heat Watch routes (R7): each vehicle drives its own route and comes back to a cell within minutes, so
+    cell fixed effects cannot see the drift over the hour; the run must fall back to CAPA's protocol line."""
+    rng = np.random.default_rng(3)
+    rows = []
+    for veh in range(3):                                         # three vehicles, disjoint routes
+        t = 0.0
+        for leg in range(12):                                    # 12 legs of 40 cells, each driven out and back
+            cells = 10_000 * veh + 40 * leg + np.arange(40)
+            for c in list(cells) + list(cells[::-1]):            # back along the same street within ~1.5 min
+                rows.append((c, veh, t))
+                t += 1.2
+            t += 120.0
+    v = pd.DataFrame(rows, columns=["cell", "vehicle", "t_s"])
+    mu = rng.normal(30.0, 0.8, v["cell"].max() + 1)
+    v["temp"] = (mu[v["cell"]] + 1.5 * (v["t_s"] - v["t_s"].median()) / 3600.0 + 0.4 * v["vehicle"]
+                 + 0.05 * rng.standard_normal(len(v)))
+    adj, info = D.adjust_visits(v)
+    assert info["n_repeat_cells"] > 1000 and info["n_repeat_cells_spread"] == 0
+    assert info["method"] == "protocol" and "min apart" in info["fallback"] and info["vehicle_offsets"] == {}
+    assert np.isfinite(info["drift_se_per_h"])
+    # revisits spread over the run: the fixed-effect drift is identified and its SE is recorded
+    rows2 = [(c, k % 3, t) for k, (c, t) in enumerate(zip(np.tile(np.arange(300), 4), np.linspace(0, 3600, 1200)))]
+    v2 = pd.DataFrame(rows2, columns=["cell", "vehicle", "t_s"])
+    v2["temp"] = mu[v2["cell"]] + 1.5 * (v2["t_s"] - v2["t_s"].median()) / 3600.0 + 0.02 * rng.standard_normal(len(v2))
+    _, info2 = D.adjust_visits(v2)
+    assert info2["method"] == "fe" and info2["drift_per_h"] == pytest.approx(1.5, abs=0.05)
+    assert 0 < info2["drift_se_per_h"] < D.MAX_DRIFT_SE
+    # a noisy fixed-effect drift (SE above the limit) also falls back
+    v3 = v2.assign(temp=v2["temp"] + 2.0 * rng.standard_normal(len(v2)))
+    _, info3 = D.adjust_visits(v3, max_drift_se=0.05)
+    assert info3["method"] == "protocol" and "SE above" in info3["fallback"] and info3["fe_drift_se_per_h"] > 0.05

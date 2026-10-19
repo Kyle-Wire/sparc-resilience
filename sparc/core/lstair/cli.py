@@ -38,7 +38,8 @@ def add_lstair_parser(subs) -> None:
     d.add_argument("--cell", type=float, default=30.0, help="cell size in metres (default 30)")
     d.add_argument("--margin", type=float, default=2000.0, help="grid margin around the traverses, m (default 2000)")
     d.add_argument("--drift", choices=("fe", "protocol", "none"), default="fe",
-                   help="drift/vehicle adjustment: cell fixed effects (default), CAPA's line through the hour, none")
+                   help="drift/vehicle adjustment: cell fixed effects where repeat visits ≥ 15 min apart identify "
+                        "them (SE ≤ 0.3 °C/h; else CAPA's line through the hour), protocol (always the line), none")
     d.add_argument("--lst-window-days", type=int, default=16, help="Landsat search window ± days (default 16)")
     d.add_argument("--lst-min-clear", type=float, default=0.5, help="minimum clear fraction over the study area")
     d.add_argument("--cache", default=None, help="Landsat COG window cache (default OUT/cache/landsat)")

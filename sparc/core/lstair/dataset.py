@@ -14,9 +14,13 @@ For every city (a CAPA catalog name, or a local folder given by the user):
    :mod:`sparc.core.identify`'s levels design does, a time polynomial and vehicle offsets are fitted jointly,
    here against **cell fixed effects** instead of land-cover terms, so no predictor enters the target:
    ``T_visit = μ_cell + β·τ (+ β₂·τ²) + o_vehicle + ε`` (τ in hours from the run's median time).  Drift is
-   identified from cells visited more than once; vehicle offsets only between vehicles linked by shared cells,
-   so they are centred (visit-weighted mean 0) within each linked group.  With too few repeat cells the run
-   falls back to CAPA's protocol: a straight line through the hour fitted to all readings (vehicle offsets 0).
+   identified only from cells revisited at different times; vehicle offsets only between vehicles linked by
+   shared cells, so they are centred (visit-weighted mean 0) within each linked group.  Real Heat Watch routes
+   rarely give that: each vehicle drives its own route and comes back to a cell within minutes (Providence:
+   every repeat within 4 min).  So the fixed-effect drift is used only when at least 20 cells were revisited
+   15 min or more apart and its standard error is below 0.3 °C/h (:func:`adjust_visits`); otherwise the run
+   falls back to CAPA's protocol: a straight line through the hour fitted to all readings (vehicle offsets 0),
+   with the reason and both drift estimates in ``meta.json``.
 4. **Target.**  ``Ta`` (°C) is the cell mean of the adjusted visits of the run; ``dTa = Ta − background`` with the
    background the run's median ``Ta`` over its cells.  ``ta_era5`` is ERA5's 2 m temperature over the run's
    hours at the city centre (:func:`sparc.core.forcing.era5_site`), when available.
@@ -333,16 +337,45 @@ def _components(cells: np.ndarray, vehicles: np.ndarray) -> np.ndarray:
     return lab[:uv.size]
 
 
-def adjust_visits(v: pd.DataFrame, method: str = "fe", degree: int = 1, min_repeat_cells: int = 20) -> tuple[np.ndarray, dict]:
+MIN_REPEAT_SPAN_S = 900.0             # a repeat visit identifies drift only when it comes back this much later
+MAX_DRIFT_SE = 0.3                     # °C/h: a cell-fixed-effect drift less certain than this is not used
+
+
+def _protocol_line(temp: np.ndarray, P: np.ndarray) -> tuple[np.ndarray, float]:
+    """CAPA's detrending: a polynomial in time through every reading; (coefficients, SE of the linear one)."""
+    X = np.column_stack([np.ones(P.shape[0]), P])
+    b, *_ = np.linalg.lstsq(X, temp, rcond=None)
+    dof = temp.size - X.shape[1]
+    se = float("inf")
+    if dof > 0:
+        s2 = float(np.sum((temp - X @ b) ** 2)) / dof
+        with np.errstate(all="ignore"):
+            cov = s2 * np.linalg.pinv(X.T @ X)
+        se = float(np.sqrt(max(cov[1, 1], 0.0)))
+    return b, se
+
+
+def adjust_visits(v: pd.DataFrame, method: str = "fe", degree: int = 1, min_repeat_cells: int = 20,
+                  min_span_s: float = MIN_REPEAT_SPAN_S, max_drift_se: float = MAX_DRIFT_SE) -> tuple[np.ndarray, dict]:
     """Visit temperatures with the run's drift and the vehicles' offsets removed.
 
     ``v`` has ``cell, vehicle, t_s, temp`` (one row per visit).  ``method``: ``"fe"`` (time polynomial and
     vehicle offsets fitted against cell fixed effects; module docstring), ``"protocol"`` (a polynomial in time
-    fitted to all readings, CAPA's detrending; no vehicle offsets) or ``"none"``.  ``"fe"`` falls back to
-    ``"protocol"`` with fewer than ``min_repeat_cells`` cells visited more than once.  Returns (adjusted
-    temperatures, info) with ``info["method"]`` the method used, ``drift_per_h`` (the linear coefficient, temperature
-    units per hour at the run's median time), ``vehicle_offsets`` and ``n_repeat_cells``.  The adjustment is zero
-    at the run's median time (τ = 0), so levels are those of mid-run."""
+    fitted to all readings, CAPA's detrending; no vehicle offsets) or ``"none"``.
+
+    Within cell fixed effects the drift is identified only by cells visited twice **at different times**: two
+    passes a minute apart say almost nothing about the warming over an hour, and extrapolating from them puts
+    an error along each route's time axis into the target (spatially structured, since time runs along the
+    route).  So ``"fe"`` is used only when at least ``min_repeat_cells`` cells were revisited ``min_span_s`` or
+    more apart (default 15 min) *and* the drift's standard error is below ``max_drift_se`` (default 0.3 °C/h);
+    otherwise it falls back to ``"protocol"`` with the reason in ``info["fallback"]``.  The SE is the OLS one
+    of the linear coefficient (Frisch–Waugh: σ̂²/‖M τ‖², with M the projection off the cell and vehicle effects
+    and the other time terms; σ̂² from the fit's residuals and its degrees of freedom).
+
+    Returns (adjusted temperatures, info) with ``info["method"]`` the method used, ``drift_per_h`` (the linear
+    coefficient, temperature units per hour at the run's median time), ``drift_se_per_h``, ``vehicle_offsets``,
+    ``n_repeat_cells`` and ``n_repeat_cells_spread`` (revisited at least ``min_span_s`` apart).  The adjustment
+    is zero at the run's median time (τ = 0), so levels are those of mid-run."""
     temp = v["temp"].to_numpy(float)
     t = v["t_s"].to_numpy(float)
     tau = (t - np.median(t)) / 3600.0
@@ -350,22 +383,33 @@ def adjust_visits(v: pd.DataFrame, method: str = "fe", degree: int = 1, min_repe
     veh = v["vehicle"].to_numpy()
     counts = pd.Series(cells).value_counts()
     n_rep = int((counts >= 2).sum())
+    gt = pd.Series(t).groupby(cells)
+    span = gt.max() - gt.min()
+    n_spread = int((span >= float(min_span_s)).sum())
     info: dict = {"requested": method, "degree": int(degree), "n_visits": int(temp.size), "n_cells": int(counts.size),
-                  "n_repeat_cells": n_rep, "n_vehicles": int(np.unique(veh).size)}
+                  "n_repeat_cells": n_rep, "n_repeat_cells_spread": n_spread, "min_span_s": float(min_span_s),
+                  "max_drift_se": float(max_drift_se), "n_vehicles": int(np.unique(veh).size)}
     if method == "none" or temp.size < 3:
         info.update(method="none", drift_per_h=0.0, vehicle_offsets={})
         return temp.copy(), info
-    P = np.column_stack([tau ** k for k in range(1, degree + 1)])
-    if method == "fe" and n_rep < min_repeat_cells:
-        info["fallback"] = f"only {n_rep} cells visited more than once (< {min_repeat_cells}): CAPA protocol detrending"
-        method = "protocol"
-    if method == "protocol":
-        X = np.column_stack([np.ones_like(tau), P])
-        b, *_ = np.linalg.lstsq(X, temp, rcond=None)
-        info.update(method="protocol", drift_per_h=float(b[1]), drift_coef=[float(x) for x in b[1:]], vehicle_offsets={})
-        return temp - P @ b[1:], info
-    if method != "fe":
+    if method not in ("fe", "protocol"):
         raise ValueError(f"unknown drift method {method!r} (fe, protocol, none)")
+    P = np.column_stack([tau ** k for k in range(1, degree + 1)])
+
+    def protocol(reason: str | None) -> tuple[np.ndarray, dict]:
+        b, se = _protocol_line(temp, P)
+        if reason:
+            info["fallback"] = reason
+        info.update(method="protocol", drift_per_h=float(b[1]), drift_se_per_h=se, drift_coef=[float(x) for x in b[1:]],
+                    vehicle_offsets={})
+        return temp - P @ b[1:], info
+
+    if method == "protocol":
+        return protocol(None)
+    if n_spread < min_repeat_cells:
+        return protocol(f"only {n_spread} cells revisited ≥ {min_span_s / 60:.0f} min apart (< {min_repeat_cells}; "
+                        f"{n_rep} revisited at all): repeat visits minutes apart do not identify the drift over the "
+                        "run, CAPA protocol detrending")
     from scipy.sparse import csr_matrix, hstack
     from scipy.sparse.linalg import lsqr
 
@@ -375,18 +419,33 @@ def adjust_visits(v: pd.DataFrame, method: str = "fe", degree: int = 1, min_repe
     C = csr_matrix((np.ones(n), (np.arange(n), ci)), shape=(n, uc.size))
     V = csr_matrix((np.ones(n), (np.arange(n), vi)), shape=(n, uv.size))
     X = hstack([C, csr_matrix(P), V]).tocsr()
-    sol = lsqr(X, temp - temp.mean(), atol=1e-12, btol=1e-12, iter_lim=20 * X.shape[1] + 1000)[0]
+    lim = 20 * X.shape[1] + 1000
+    y0 = temp - temp.mean()
+    sol = lsqr(X, y0, atol=1e-12, btol=1e-12, iter_lim=lim)[0]
     beta = sol[uc.size:uc.size + degree]
     off = sol[uc.size + degree:].copy()
     comp = _components(cells, veh)
+    n_groups = int(np.unique(comp).size)
+    # SE of the linear drift coefficient (Frisch–Waugh)
+    dof = n - (uc.size + degree + uv.size - n_groups)
+    Z = hstack([C, csr_matrix(P[:, 1:]), V]).tocsr() if degree > 1 else hstack([C, V]).tocsr()
+    e = P[:, 0] - Z @ lsqr(Z, P[:, 0], atol=1e-12, btol=1e-12, iter_lim=20 * Z.shape[1] + 1000)[0]
+    ee = float(e @ e)
+    se = float("inf")
+    if dof > 0 and ee > 1e-12:
+        s2 = float(np.sum((y0 - X @ sol) ** 2)) / dof
+        se = math.sqrt(s2 / ee)
+    info["fe_drift_per_h"], info["fe_drift_se_per_h"] = float(beta[0]), se
+    if not se <= max_drift_se:
+        return protocol(f"cell-fixed-effect drift {beta[0]:+.2f} ± {se:.2f} °C/h (SE above {max_drift_se} °C/h): "
+                        "CAPA protocol detrending")
     w = np.bincount(vi, minlength=uv.size).astype(float)
     for g in np.unique(comp):
         sel = comp == g
         off[sel] -= np.average(off[sel], weights=w[sel])
     adj = temp - P @ beta - off[vi]
-    info.update(method="fe", drift_per_h=float(beta[0]), drift_coef=[float(x) for x in beta],
-                vehicle_offsets={str(k): float(o) for k, o in zip(uv, off)},
-                n_vehicle_groups=int(np.unique(comp).size))
+    info.update(method="fe", drift_per_h=float(beta[0]), drift_se_per_h=se, drift_coef=[float(x) for x in beta],
+                vehicle_offsets={str(k): float(o) for k, o in zip(uv, off)}, n_vehicle_groups=n_groups)
     return adj, info
 
 
