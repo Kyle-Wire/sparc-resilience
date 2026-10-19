@@ -645,3 +645,33 @@ def test_a_utc_only_capa_table_is_converted_with_its_own_tz_column(tmp_path):
     df.to_csv(tmp_path / "af_trav.csv", index=False)
     pts, rep = scan_traverses(tmp_path)
     assert pts["time"].min() == pd.Timestamp("2020-07-29 15:00:00") and "America/New_York" in rep[0]["clock"]
+
+
+def test_cli_utc_builds_every_city_in_one_call_and_never_from_another_citys_folder(built, tmp_path, monkeypatch):
+    """R14/R23: with --utc each city used to be built alone, so a city without a subfolder got the whole
+    --traverses-dir (another city's traverses) and dataset.json kept only the last city."""
+    from sparc.core.cli import main
+
+    root, _, _ = built
+    trav = tmp_path / "trav"
+    shutil.copytree(root / "traverses" / "providence_ri", trav / "providence_ri")
+    _to_utc_clock(trav / "providence_ri", 4)
+    calls = []
+    orig = D.build_city
+
+    def spy(spec, folder, *a, **k):
+        calls.append((spec.slug, str(folder), k.get("utc_to")))
+        return orig(spec, folder, *a, **{**k, "features": synthetic_features})
+
+    monkeypatch.setattr(D, "build_city", spy)
+    monkeypatch.setattr(D, "run_probe", lambda pr, opener=None, timeout=10.0: ("host", None))
+    monkeypatch.setattr(D, "_download_traverses", lambda spec, dest: (_ for _ in ()).throw(RuntimeError("offline")))
+    rc = main(["lstair", "dataset", "--cities", "Providence, RI", "Brockton, MA", "--out", str(tmp_path / "o"),
+               "--traverses-dir", str(trav), "--utc", "--no-lst", "--no-era5"])
+    assert rc == 0 and calls == [("providence_ri", str(trav / "providence_ri"), "America/New_York")]
+    summary = json.loads((tmp_path / "o" / "dataset.json").read_text())
+    assert set(summary["cities"]) == {"Providence, RI", "Brockton, MA"}
+    assert summary["cities"]["Providence, RI"]["status"] == "ok"
+    assert summary["cities"]["Brockton, MA"]["status"] == "failed" and "offline" in summary["cities"]["Brockton, MA"]["error"]
+    c = D.load_city(tmp_path / "o" / "cities" / "providence_ri")
+    assert {r["run"]: r["start"][11:13] for r in c.meta["runs"]} == {"af": "15", "am": "06"}

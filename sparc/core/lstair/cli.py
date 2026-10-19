@@ -124,24 +124,14 @@ def cmd_dataset(args) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
     out = Path(args.out)
     cities = _cities(args.cities)
-    utc_to = None
     kw = dict(cell_m=args.cell, margin_m=args.margin, drift=args.drift, lst_window_days=args.lst_window_days,
               lst_min_clear=args.lst_min_clear, cache_dir=Path(args.cache) if args.cache else out / "cache" / "landsat",
               skip_files=() if args.keep_appendix else D.SKIP_FILES, campaign_dates=_dates(args.campaign_date))
     try:
-        if args.utc:
-            summary = {"cities": {}}
-            for c in cities:                      # each city converts with its own time zone
-                spec = D.city_spec(c)
-                if not spec.tz:
-                    print(f"{c}: no time zone known for --utc", file=sys.stderr)
-                    continue
-                s = D.build_dataset([c], out, traverses_dir=args.traverses_dir, lst=False if args.no_lst else None,
-                                    era5=False if args.no_era5 else None, force=args.force, utc_to=spec.tz, **kw)
-                summary["cities"].update(s["cities"])
-        else:
-            summary = D.build_dataset(cities, out, traverses_dir=args.traverses_dir, lst=False if args.no_lst else None,
-                                      era5=False if args.no_era5 else None, force=args.force, utc_to=utc_to, **kw)
+        # one call for every city (each converts a --utc clock with its own time zone), so a city is never built
+        # from the whole --traverses-dir and dataset.json lists every city
+        summary = D.build_dataset(cities, out, traverses_dir=args.traverses_dir, lst=False if args.no_lst else None,
+                                  era5=False if args.no_era5 else None, force=args.force, utc=bool(args.utc), **kw)
     except D.NetworkBlocked as exc:
         print(f"lstair dataset: {exc}", file=sys.stderr)
         return 2

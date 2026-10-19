@@ -969,14 +969,16 @@ def local_traverses(spec: CitySpec, traverses_dir: str | Path | None, single: bo
 def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str | Path | None = None,
                   features: Callable | None = None, lst: Callable | bool | None = None,
                   era5: Callable | bool | None = None, force: bool = False, probe_opener: Callable | None = None,
-                  download: Callable | None = None, campaign_dates: dict[str, str] | None = None, **kw) -> dict:
+                  download: Callable | None = None, campaign_dates: dict[str, str] | None = None, utc: bool = False,
+                  **kw) -> dict:
     """Build (or resume) the dataset for ``cities``; returns the summary also written to ``OUT/dataset.json``.
 
     Cities with a finished cache are skipped unless ``force``.  Before anything is fetched, every host the
     remaining cities need is probed (:func:`check_hosts`): a blocked host raises :class:`NetworkBlocked` at once.
     A city that fails for another reason is recorded with its error and the build moves on.  ``campaign_dates``
     maps a city (name as given, catalog name or slug) to its local campaign date, for traverse tables without
-    one (:func:`build_city`)."""
+    one (:func:`build_city`).  ``utc``: every city's traverse clocks are UTC; each is converted to its own time zone
+    (a city without one fails with that reason)."""
     out = Path(out_dir)
     (out / "cities").mkdir(parents=True, exist_ok=True)
     specs = [city_spec(c) for c in cities]
@@ -1002,12 +1004,17 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
             summary["cities"][s.name] = {"slug": s.slug, "status": "ok", "skipped": "cached"}
             continue
         try:
+            ckw = dict(kw)
+            if utc:
+                if not s.tz:
+                    raise ValueError("no time zone known for this city: its UTC clock (--utc) cannot be converted")
+                ckw["utc_to"] = s.tz
             folder = local[s.slug]
             if folder is None:
                 folder = out / "raw" / s.slug
                 (download or _download_traverses)(s, folder)
             meta = build_city(s, folder, cdir, features=features, lst=lst, era5=era5,
-                              campaign_date=_lookup(campaign_dates, s), **kw)
+                              campaign_date=_lookup(campaign_dates, s), **ckw)
             summary["cities"][s.name] = {"slug": s.slug, "status": "ok", "rows": meta["n_rows"],
                                          "runs": [r["run"] for r in meta["runs"] if "error" not in r],
                                          "warnings": meta["warnings"]}
