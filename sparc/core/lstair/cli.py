@@ -131,7 +131,7 @@ def cmd_dataset(args) -> int:
     cities = _cities(args.cities)
     kw = dict(cell_m=args.cell, margin_m=args.margin, drift=args.drift, lst_window_days=args.lst_window_days,
               lst_min_clear=args.lst_min_clear, lst_prefer_clear=args.lst_prefer_clear, cache_dir=Path(args.cache) if args.cache else out / "cache" / "landsat",
-              skip_files=() if args.keep_appendix else D.SKIP_FILES, campaign_dates=_dates(args.campaign_date))
+              skip_files=tuple(q for q in D.SKIP_FILES if q != "appendix") if args.keep_appendix else D.SKIP_FILES, campaign_dates=_dates(args.campaign_date))
     try:
         # one call for every city (each converts a --utc clock with its own time zone), so a city is never built
         # from the whole --traverses-dir and dataset.json lists every city

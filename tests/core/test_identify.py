@@ -409,3 +409,22 @@ def test_capa_heat_watch_tables_use_the_local_clock_and_the_sensor(tmp_path):
     (tmp_path / "am_trav.dbf").rename(lone / "am_trav.dbf")
     pts2, report2 = scan_traverses(lone)
     assert len(pts2) == 0 and report2[0]["status"] == "skipped" and ".shp" in report2[0]["reason"]
+
+
+def test_a_shapefile_clock_cut_to_datetim_is_read_as_the_local_datetime(tmp_path):
+    """Albuquerque 2021 (OSF np4q9): the layers' only clock is "datetim" (local time; the shapefile export cut
+    "datetime"), next to t_f and one logger file per sensor."""
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import Point
+
+    from sparc.core.identify.traverses import scan_traverses
+
+    n = 8
+    loc = pd.date_range("2021-07-09 15:00:00", periods=n, freq="1s")
+    df = pd.DataFrame({"datetim": loc.strftime("%Y-%m-%d %H:%M:%S"), "t_f": 100.79, "rh": 15.5,
+                       "file": ["1023B_090721_204535.000_0.csv"] * n, "spdKmhr": 19.0, "trav_id": "af"})
+    gpd.GeoDataFrame(df, geometry=[Point(-106.65 + 1e-4 * i, 35.08) for i in range(n)],
+                     crs="EPSG:4326").to_file(tmp_path / "af_trav.shp")
+    pts, report = scan_traverses(tmp_path, timezone="America/Denver")
+    assert [r["status"] for r in report] == ["read"]
+    assert pts["time"].iloc[0] == pd.Timestamp("2021-07-09 15:00:00") and pts["time"].notna().all()

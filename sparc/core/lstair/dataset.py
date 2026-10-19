@@ -80,8 +80,10 @@ WARN_CELLS = 1_500_000                 # ~37 km square: the open features take l
 STUDY_BUFFER_M = 300.0                 # LST clear fraction is measured within this distance of the traverses
 TARGET_COLUMNS = ("Ta", "dTa", "ta_background", "n_readings", "n_visits")
 #: File-name patterns not read by default: CAPA's appendix archives repeat the main traverses (Providence wu9v7:
-#: the afternoon and evening runs again, plus three more sensors far outside the study area).
-SKIP_FILES = ("appendix",)
+#: the afternoon and evening runs again, plus three more sensors far outside the study area); stationary-sensor
+#: tables (Columbia SC, Clark County NV: fixed loggers, a time series at a few points, not traverses); mobile
+#: air-quality tables (the Oklahoma City node also holds Bloomington IN's, another city and instrument).
+SKIP_FILES = ("appendix", "stationary", "air quality")
 SCHEMA = 1
 
 #: IANA zone by state (for converting the traverses' local clock to UTC hours for ERA5), with city overrides.

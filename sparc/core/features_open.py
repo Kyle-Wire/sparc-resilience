@@ -40,7 +40,7 @@ from sparc.core.opendata import (
     gdal_env,
     points_lonlat,
     raster_to_points,
-    read_window,
+    read_mosaic,
     worldcover_tiles,
 )
 
@@ -235,11 +235,10 @@ def build_open_features(data, cfg, months=((2020, 6), (2020, 7), (2020, 8)), max
     out = {"id": data.ids}
     prov: dict = {}
     # WorldCover: tree / built fractions and water distance
-    tiles = worldcover_tiles(b)
-    if len(tiles) != 1:
-        raise NotImplementedError(f"study area spans several WorldCover tiles {tiles}")
-    with progress.task("remote_object", key=f"worldcover:{tiles[0]}", unit="remote_object"):
-        wc, tr, _ = read_window(WORLDCOVER.format(tile=tiles[0]), _bounds(lon, lat, margin=0.02))
+    wb = _bounds(lon, lat, margin=0.02)
+    tiles = worldcover_tiles(wb)
+    with progress.task("remote_object", key=f"worldcover:{'+'.join(tiles)}", unit="remote_object"):
+        wc, tr, _ = read_mosaic([WORLDCOVER.format(tile=t) for t in tiles], wb)
     fr = raster_to_points(wc, tr, data, cfg, mode="fractions", classes=WC_CLASSES, sub=1, nodata=0)
     out["canopy"] = 100.0 * np.nan_to_num(fr["tree"])
     out["impervious"] = 100.0 * np.nan_to_num(fr["built"])
@@ -248,16 +247,14 @@ def build_open_features(data, cfg, months=((2020, 6), (2020, 7), (2020, 8)), max
     py_m = abs(tr.e) * 111320.0
     dist = ndimage.distance_transform_edt(~water, sampling=(py_m, px_m)).astype("float32")
     out["water_distance"] = raster_to_points(dist, tr, data, cfg, mode="mean", sub=1)["mean"]
-    prov["worldcover"] = tiles[0]
-    # Copernicus DEM
+    prov["worldcover"] = tiles[0] if len(tiles) == 1 else tiles
+    # Copernicus DEM (float32 without a nodata value: pixels no tile covers are NaN)
     dts = dem_tiles(b)
-    if len(dts) != 1:
-        raise NotImplementedError(f"study area spans several DEM tiles {dts}")
     progress.check_cancel()
-    with progress.task("remote_object", key=f"dem:{dts[0]}", unit="remote_object"):
-        dem, trd, nod = read_window(DEM.format(name=dts[0]), b)
+    with progress.task("remote_object", key=f"dem:{'+'.join(dts)}", unit="remote_object"):
+        dem, trd, nod = read_mosaic([DEM.format(name=d) for d in dts], b, fill=float("nan"))
     out["elevation"] = raster_to_points(dem.astype(float), trd, data, cfg, mode="mean", sub=3, nodata=nod)["mean"]
-    prov["dem"] = dts[0]
+    prov["dem"] = dts[0] if len(dts) == 1 else dts
     # Sentinel-2 composite
     progress.check_cancel()
     scenes = s2_scenes(_s2_tile_prefixes(b, s2_tiles), list(months), max_cloud)

@@ -100,3 +100,55 @@ def test_s2_composite_in_row_blocks_equals_the_whole_stack(tmp_path, monkeypatch
         med = {b: np.nanmedian(np.stack(v), axis=0) for b, v in ref.items()}
     ndvi = (med["B08"] - med["B04"]) / (med["B08"] + med["B04"])
     assert np.allclose(blocks["ndvi"], ndvi, atol=1e-5, equal_nan=True)
+
+
+def _tile(path, west, north, values, res=0.25, nodata=None):
+    import rasterio
+    from rasterio.transform import from_origin
+
+    arr = np.asarray(values, dtype="float32")
+    with rasterio.open(path, "w", driver="GTiff", height=arr.shape[0], width=arr.shape[1], count=1,
+                       dtype="float32", crs="EPSG:4326", transform=from_origin(west, north, res, res),
+                       nodata=nodata) as dst:
+        dst.write(arr, 1)
+    return str(path)
+
+
+def test_read_mosaic_joins_tiles_on_their_own_pixel_grid(tmp_path):
+    """A window across a tile edge reads both tiles without resampling; pixels outside every tile are the fill."""
+    from sparc.core.opendata import read_mosaic
+
+    west = _tile(tmp_path / "w.tif", 0.0, 1.0, np.arange(16).reshape(4, 4))
+    east = _tile(tmp_path / "e.tif", 1.0, 1.0, 100 + np.arange(16).reshape(4, 4))
+    arr, tr, nod = read_mosaic([west, east], (0.6, 0.1, 1.4, 0.9), fill=float("nan"))
+    assert (tr.a, tr.e, tr.c, tr.f) == (0.25, -0.25, 0.5, 1.0)           # bounds snapped outwards to the grid
+    assert arr.shape == (4, 4)
+    np.testing.assert_array_equal(arr[:, :2], np.arange(16).reshape(4, 4)[:, 2:])
+    np.testing.assert_array_equal(arr[:, 2:], 100 + np.arange(16).reshape(4, 4)[:, :2])
+    arr, tr, nod = read_mosaic([west, east], (0.6, -0.4, 1.4, 0.9), fill=float("nan"))
+    assert np.isnan(nod) and np.isnan(arr[-2:]).all() and np.isfinite(arr[:-2]).all()
+
+
+def test_read_mosaic_skips_missing_tiles_only_for_http_404(tmp_path, monkeypatch):
+    import rasterio
+    from rasterio.errors import RasterioIOError
+
+    from sparc.core.opendata import read_mosaic
+
+    west = _tile(tmp_path / "w.tif", 0.0, 1.0, np.ones((4, 4)))
+    real = rasterio.open
+
+    def fake(path, *a, **k):
+        if "ocean" in str(path):
+            raise RasterioIOError("HTTP response code: 404")
+        if "blocked" in str(path):
+            raise RasterioIOError("HTTP response code: 403")
+        return real(path, *a, **k)
+
+    monkeypatch.setattr(rasterio, "open", fake)
+    arr, _, _ = read_mosaic([west, "https://example.org/ocean.tif"], (0.6, 0.1, 1.4, 0.9), fill=float("nan"))
+    assert np.isfinite(arr[:, :2]).all() and np.isnan(arr[:, 2:]).all()
+    with pytest.raises(RasterioIOError, match="403"):
+        read_mosaic([west, "https://example.org/blocked.tif"], (0.6, 0.1, 1.4, 0.9))
+    with pytest.raises(ValueError, match="pixel sizes"):
+        read_mosaic([west, _tile(tmp_path / "fine.tif", 1.0, 1.0, np.ones((8, 8)), res=0.125)], (0.6, 0.1, 1.4, 0.9))

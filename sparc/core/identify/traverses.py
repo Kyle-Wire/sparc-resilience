@@ -51,6 +51,8 @@ _COORD_NAMES = {"lat", "latitude", "y", "lon", "long", "longitude", "lng", "x"}
 # "290720" + time "100001"); the local one is the reading's time
 _LOCAL_TIME = ("dttm_lc", "datetime_lc", "datetime_local", "local_datetime", "dttm_local", "date_time_local")
 _UTC_TIME = ("dttm_tc", "datetime_utc", "utc_datetime", "dttm_utc")
+# clock columns under the names shapefile exports cut them to (Albuquerque 2021: "datetim", the local clock)
+_TRUNCATED_TIME = {"datetim": "datetime", "date_tim": "date_time", "timestam": "timestamp", "time_sta": "time_stamp"}
 
 
 # --------------------------------------------------------------------------- #
@@ -121,6 +123,10 @@ def _standardise(df: pd.DataFrame, timezone: str | None = None, campaign_date: s
     from a point geometry (reprojected to WGS-84) in place of projected x/y columns.  A table whose only clock
     is the 2019 NIHHIS ``time_n`` (UTC ``HHMMSS``, no date) gets a local ``datetime`` when the campaign's local
     date and time zone are known (:func:`utc_hms_to_local`); ``attrs["clock"]`` says which clock was used."""
+    have = {_norm(c): c for c in df.columns}
+    cut = {have[k]: v for k, v in _TRUNCATED_TIME.items() if k in have and v not in have}
+    if cut:
+        df = df.rename(columns=cut)
     ren = {}
     for c in df.columns:
         n = _norm(c)

@@ -61,15 +61,61 @@ def points_lonlat(data, cfg) -> tuple[np.ndarray, np.ndarray]:
     return np.asarray(lon), np.asarray(lat)
 
 
+def _gdal_path(url: str) -> str:
+    """GDAL's name for ``url``: remote ones through /vsicurl/, local paths as they are."""
+    return "/vsicurl/" + url if str(url).startswith(("http://", "https://")) else str(url)
+
+
 def read_window(url: str, bounds: tuple[float, float, float, float]):
     """(array, affine transform) of a lon/lat window of a COG/VRT."""
     import rasterio
     from rasterio.windows import from_bounds
 
-    with gdal_env(), rasterio.open("/vsicurl/" + url) as src:
+    with gdal_env(), rasterio.open(_gdal_path(url)) as src:
         w = from_bounds(*bounds, transform=src.transform).round_offsets().round_lengths()
         arr = src.read(1, window=w, boundless=True, fill_value=src.nodata if src.nodata is not None else 0)
         return arr, src.window_transform(w), src.nodata
+
+
+def read_mosaic(urls: list[str], bounds: tuple[float, float, float, float], fill: float | None = None):
+    """(array, affine transform, nodata) of a lon/lat window over one or more tiles of one product.
+
+    One URL is :func:`read_window`.  Several (a study area across tile edges) are merged with
+    :func:`rasterio.merge.merge` onto the first tile's pixel grid (``bounds`` snapped outwards to it), so no
+    pixel is resampled.  A tile that does not exist (open water has no WorldCover or Copernicus DEM tile: HTTP
+    404) is skipped; any other read failure raises.  Pixels no tile covers hold ``fill`` (default the tiles'
+    nodata, else 0), which is returned as the nodata.  Tiles of different pixel sizes raise ValueError."""
+    if len(urls) == 1:
+        return read_window(urls[0], bounds)
+    import rasterio
+    from rasterio.errors import RasterioIOError
+    from rasterio.merge import merge
+
+    with gdal_env():
+        srcs = []
+        try:
+            for u in urls:
+                try:
+                    srcs.append(rasterio.open(_gdal_path(u)))
+                except RasterioIOError as exc:
+                    if "404" not in str(exc):
+                        raise
+                    log.info("mosaic: no tile %s (HTTP 404: open water)", u)
+            if not srcs:
+                raise RasterioIOError(f"none of the tiles exist: {urls}")
+            if len({tuple(round(abs(v), 12) for v in s.res) for s in srcs}) > 1:
+                raise ValueError(f"tiles of different pixel sizes cannot be merged: {urls}")
+            a, e = srcs[0].transform.a, srcs[0].transform.e
+            c, f = srcs[0].transform.c, srcs[0].transform.f
+            w, s, east, n = bounds
+            snapped = (c + math.floor((w - c) / a) * a, f + math.ceil((s - f) / e) * e,
+                       c + math.ceil((east - c) / a) * a, f + math.floor((n - f) / e) * e)
+            nod = fill if fill is not None else (srcs[0].nodata if srcs[0].nodata is not None else 0)
+            arr, tr = merge(srcs, bounds=snapped, nodata=nod)
+            return arr[0], tr, nod
+        finally:
+            for src in srcs:
+                src.close()
 
 
 def raster_to_points(arr: np.ndarray, transform, data, cfg, mode: str = "sum", classes: dict | None = None,
@@ -149,15 +195,13 @@ def fetch_layers(data, cfg, hrsl=HRSL_LAYERS, worldcover: bool = True) -> pd.Dat
         log.info("layers: %s total %.0f", name, out[name].sum())
     if worldcover:
         tiles = worldcover_tiles(b)
-        if len(tiles) != 1:
-            raise NotImplementedError(f"study area spans several WorldCover tiles {tiles}")
         progress.check_cancel()
-        with progress.task("remote_object", key=f"worldcover:{tiles[0]}", unit="remote_object"):
-            arr, tr, nod = read_window(WORLDCOVER.format(tile=tiles[0]), b)
+        with progress.task("remote_object", key=f"worldcover:{'+'.join(tiles)}", unit="remote_object"):
+            arr, tr, nod = read_mosaic([WORLDCOVER.format(tile=t) for t in tiles], b)
         fr = raster_to_points(arr, tr, data, cfg, mode="fractions", classes=WC_CLASSES, sub=1, nodata=0)
         for k, v in fr.items():
             out[f"lc_{k}"] = v
-        log.info("layers: WorldCover %s, mean built-up %.2f, tree %.2f", tiles[0], np.nanmean(fr["built"]),
+        log.info("layers: WorldCover %s, mean built-up %.2f, tree %.2f", "+".join(tiles), np.nanmean(fr["built"]),
                  np.nanmean(fr["tree"]))
     return pd.DataFrame(out)
 
