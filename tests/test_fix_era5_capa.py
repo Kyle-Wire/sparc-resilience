@@ -333,6 +333,17 @@ class TestParseTraverseTable:
         out = capa.parse_traverse_table(frame, timezone="America/New_York")
         assert list(out["window"]) == ["morning", "evening"]     # 06:30 / 19:30 EDT
 
+    def test_capa_nodata_and_implausible_temperatures_dropped(self):
+        """Arlington and Farmville VA 2021 (OSF 3xvmg) mark removed outliers t_f = -9999 (README: "-9999 = removed
+        outlier value"); kept, a few of them gave a run's anomaly an SD of hundreds of degrees."""
+        frame = _df(datetime=["2021-07-15 15:00:0%d" % i for i in range(5)], lat=[38.88] * 5, lon=[-77.1] * 5,
+                    t_f=[91.0, -9999.0, 92.0, 212.0, 90.5])
+        out = capa.parse_traverse_table(frame)
+        np.testing.assert_allclose(out["temp_f"], [91.0, 92.0, 90.5])
+        frame = _df(datetime=["2021-07-15 15:00:00", "2021-07-15 15:00:01"], lat=[38.88] * 2, lon=[-77.1] * 2,
+                    t_c=[-9999.0, 33.0])
+        np.testing.assert_allclose(capa.parse_traverse_table(frame)["temp_f"], [91.4])
+
     def test_rows_missing_values_dropped_and_errors(self):
         frame = _df(datetime=["2022-07-25 06:00", "2022-07-25 06:01"],
                     lat=[40.0, None], lon=[-75.0, -75.0], t_f=[80.0, 81.0])

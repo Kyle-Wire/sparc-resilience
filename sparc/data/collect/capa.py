@@ -550,6 +550,12 @@ _TEMP_F_NAMES = ("t_f", "temp_f", "temperature_f", "tf", "air_temp_f",
 _TEMP_C_NAMES = ("t_c", "temp_c", "temperature_c", "tc", "air_temp_c",
                  "air_temperature_c", "temp_celsius", "temperature_celsius",
                  "t_celsius")
+#: CAPA marks removed readings with -9999 (the READMEs: "-9999 = removed outlier value (traverse point)"); any
+#: value at or below this is nodata, not a temperature.
+NODATA_MAX = -999.0
+#: Gross plausibility of a near-surface air temperature in °F (beyond the world's recorded extremes, -128.6 °F
+#: and 134 °F, with margin): anything outside is a logger or export fault and is dropped.
+PLAUSIBLE_F = (-130.0, 140.0)
 _TEMP_GENERIC = ("temperature", "temp", "air_temperature", "air_temp")
 
 
@@ -616,7 +622,8 @@ def parse_traverse_table(
     * window — from the local hour: morning < 10, midday 10–17, evening ≥ 17
       (or *window_hint* when there is no time column).
 
-    Rows missing lat, lon or temperature are dropped.
+    Rows missing lat, lon or temperature are dropped, and so are CAPA's -9999 nodata readings
+    (:data:`NODATA_MAX`) and temperatures outside :data:`PLAUSIBLE_F`.
     """
     import pandas as pd
 
@@ -655,8 +662,10 @@ def parse_traverse_table(
     if t_col is None:
         raise ValueError(f"parse_traverse_table: no temperature column in {list(df.columns)}")
     temp = pd.to_numeric(df[t_col], errors="coerce").astype(float)
+    temp = temp.mask(temp <= NODATA_MAX)                 # CAPA's -9999: "removed outlier value (traverse point)"
     if to_f:
         temp = temp * 9.0 / 5.0 + 32.0
+    temp = temp.mask((temp < PLAUSIBLE_F[0]) | (temp > PLAUSIBLE_F[1]))
 
     # --- coordinates ---
     lat_col, lon_col = _pick(_LAT_NAMES), _pick(_LON_NAMES)
