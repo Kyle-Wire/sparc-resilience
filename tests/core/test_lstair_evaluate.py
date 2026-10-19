@@ -285,3 +285,27 @@ def test_without_lst_the_land_cover_and_physics_baselines_still_run():
     res2, _ = E.evaluate_window(mixed, "af", E.Settings(**{**s.__dict__, "physics": False}))
     assert [e["slug"] for e in res2["excluded"]] == ["toy_4"] and "no clear Landsat scene" in res2["excluded"][0]["reason"]
     assert {r["slug"] for r in res2["per_city"]} == {"toy_0", "toy_1", "toy_2", "toy_3"}
+
+
+def test_physics_uses_one_run_with_its_own_forcing_and_predicts_every_run(tmp_path):
+    """R18: a city with two afternoon runs was fitted on a blend of the days with the first run's forcing."""
+    c = toy_city(0, n=32)
+    t1 = c.table
+    t2 = t1.iloc[: len(t1) // 2].assign(run_id="2021-07-21 midday", run_date="2021-07-21", Ta=t1["Ta"].iloc[: len(t1) // 2] + 3,
+                                        ta_background=float(t1["ta_background"].iloc[0]) + 3)
+    meta = {**c.meta, "runs": [{"run": "af", "run_id": "2021-07-20 midday", "era5": {"sw_down": 700.0, "lw_net": -90.0}},
+                               {"run": "af", "run_id": "2021-07-21 midday", "era5": {"sw_down": 300.0, "lw_net": -70.0}}]}
+    city = D.CityData(slug=c.slug, meta=meta, table=pd.concat([t1, t2], ignore_index=True), grid=c.grid, rasters=c.rasters)
+    assert E.physics_run_id(city, "af") == "2021-07-20 midday"                 # the run with the most cells
+    a = E.physics_inputs(city, "af", False, 60.0)
+    b = E.physics_inputs(city, "af", False, 60.0, run_id="2021-07-21 midday")
+    assert (a["sw"], a["run_id"]) == (700.0, "2021-07-20 midday") and b["sw"] == 300.0
+    assert b["background"] == pytest.approx(a["background"] + 3) and len(b["table"]) == len(t2)
+    s = E.Settings(physics_iter=10)
+    rec = E.fit_city_physics(city, "af", False, s)
+    assert rec["run_id"] == "2021-07-20 midday" and rec["forcing"][0] == 700.0
+    tp = E.transfer_params([rec, rec], False)
+    pc = E.predict_physics(city, "af", False, tp, s)
+    assert set(pc.index.get_level_values(0)) == {"2021-07-20 midday", "2021-07-21 midday"}
+    for _, part in pc.groupby(level=0):
+        assert abs(part.median()) < 1e-9

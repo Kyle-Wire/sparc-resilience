@@ -22,8 +22,9 @@ Models
 * **C — physics with LST.**  :class:`sparc.core.physics.PhysicsModel` with the ``lst`` role: LST enters the heat
   source as surface–air coupling (q += c_lst⁺·(LST − T_bg)_c, spread by the same Green's function) next to the
   land-cover source, on the city's full raster (cells with features but no traverse feed the source, never the
-  loss).  It is fitted **once per city and run** on that city's own cells (no advection: no wind record is
-  assumed).  **Transfer rule** to a held-out city: every nonlinear parameter (L, shading, storage, evaporative
+  loss).  It is fitted **once per city and window** on that city's own cells of one run (the window's run with
+  the most cells, with that run's ERA5 forcing and background; :func:`physics_run_id`; no advection: no wind
+  record is assumed), and a held-out city's runs are each predicted with their own forcing.  **Transfer rule** to a held-out city: every nonlinear parameter (L, shading, storage, evaporative
   fraction, water sink) and the lapse coefficient γ is the **median over the training cities' fits**; the gain and
   the coupling are transferred in physical units, a/forcing (= r_a/ρc_p) and c_lst·forcing (= ρc_p/r_a), and
   converted back with the held-out city's own forcing (ERA5 SW↓ of the run, else a default per run); the
@@ -296,8 +297,20 @@ def _coarsen(r: np.ndarray, k: int) -> np.ndarray:
             return np.nanmean(buf.reshape(py // k, k, px // k, k), axis=(1, 3))
 
 
-def _forcing(city: CityData, run: str) -> tuple[float, float, str]:
-    rec = next((r for r in city.meta.get("runs", []) if r.get("run") == run and "error" not in r), {})
+def physics_run_id(city: CityData, run: str) -> str | None:
+    """The run a city's physics fit for window ``run`` uses: the window's run with the most driven cells (ties:
+    the earliest id).  One run per fit, so its forcing, background and target are of one day and hour."""
+    t = city.table[city.table["run"] == run]
+    if not len(t):
+        return None
+    n = t.groupby("run_id").size()
+    return str(sorted(n.index, key=lambda r: (-int(n[r]), str(r)))[0])
+
+
+def _forcing(city: CityData, run: str, run_id: str | None = None) -> tuple[float, float, str]:
+    runs = [r for r in city.meta.get("runs", []) if "error" not in r]
+    rec = next((r for r in runs if run_id is not None and r.get("run_id") == run_id), None)
+    rec = rec or next((r for r in runs if r.get("run") == run), {})
     e = rec.get("era5") or {}
     if "sw_down" in e and "lw_net" in e and np.isfinite(e["sw_down"]) and np.isfinite(e["lw_net"]):
         return float(e["sw_down"]), float(e["lw_net"]), "ERA5"
@@ -305,8 +318,10 @@ def _forcing(city: CityData, run: str) -> tuple[float, float, str]:
     return sw, lw, "default"
 
 
-def physics_inputs(city: CityData, run: str, use_lst: bool, cell_m: float) -> dict:
-    """Grid, frame (every raster cell), labels at the driven cells and the fine→coarse cell map for one run."""
+def physics_inputs(city: CityData, run: str, use_lst: bool, cell_m: float, run_id: str | None = None) -> dict:
+    """Grid, frame (every raster cell), labels at the driven cells and the fine→coarse cell map for one run:
+    ``run_id`` (default :func:`physics_run_id`), with that run's own forcing and background — never a blend of
+    the window's runs."""
     from sparc.core.grid import Grid
 
     g = city.grid
@@ -324,16 +339,17 @@ def physics_inputs(city: CityData, run: str, use_lst: bool, cell_m: float) -> di
     frame = pd.DataFrame({f: R[f].ravel() for f in roles})
     if use_lst and frame["lst"].notna().mean() < 0.2:
         raise ValueError(f"{city.slug}: LST covers {frame['lst'].notna().mean():.0%} of the grid")
-    t = city.table[city.table["run"] == run]
+    run_id = run_id or physics_run_id(city, run)
+    t = city.table[(city.table["run"] == run) & (city.table["run_id"] == run_id)]
     fy, fx = np.divmod(t["cell"].to_numpy(np.int64), g.nx)
     coarse = (fy // k) * nx + (fx // k)
     y = np.full(nx * ny, np.nan)
     s = pd.Series(t["dTa"].to_numpy(float)).groupby(coarse).mean()
     y[s.index.to_numpy()] = s.to_numpy()
     coords = np.column_stack([x0 + ix * dx, y0 + iy * dx]).astype(float)
-    sw, lw, fsrc = _forcing(city, run)
+    sw, lw, fsrc = _forcing(city, run, run_id)
     return {"grid": grid, "frame": frame, "y": y, "coords": coords, "coarse": coarse, "roles": roles,
-            "factor": k, "sw": sw, "lw": lw, "forcing_source": fsrc, "table": t,
+            "factor": k, "sw": sw, "lw": lw, "forcing_source": fsrc, "table": t, "run_id": run_id,
             "background": float(t["ta_background"].iloc[0]) if len(t) else 0.0}
 
 
@@ -366,7 +382,9 @@ def fit_city_physics(city: CityData, run: str, use_lst: bool, s: Settings) -> di
                                                                                   inp["coords"])
     T = m._T
     norm = _norm(cfg)
-    rec = {"slug": city.slug, "run": run, "lst": bool(use_lst), "natural": {k: float(T[k]) for k in TRANSFER_KEYS},
+    rec = {"slug": city.slug, "run": run, "run_id": inp["run_id"],
+           "run_rule": "the window's run with the most driven cells", "lst": bool(use_lst),
+           "natural": {k: float(T[k]) for k in TRANSFER_KEYS},
            "a": float(m.a), "gamma": float(m.gamma), "norm": norm, "a_phys": float(m.a) / norm,
            "train_r2": float(m.train_r2), "train_rmse": float(m.train_rmse), "fit_warning": m.fit_warning,
            "n_train": int(tr.size), "cell_m": float(inp["grid"].dx), "forcing": [inp["sw"], inp["lw"], inp["forcing_source"]],
@@ -391,25 +409,31 @@ def transfer_params(fits: list[dict], use_lst: bool) -> dict:
     return out
 
 
-def predict_physics(city: CityData, run: str, use_lst: bool, tp: dict, s: Settings) -> np.ndarray:
-    """Model C on a held-out city's run from the transferred parameters: predictions at the run's cells
-    (table order), centred to median zero.  Only the city's features and forcing are used."""
+def predict_physics(city: CityData, run: str, use_lst: bool, tp: dict, s: Settings) -> pd.Series:
+    """Model C on a held-out city's window from the transferred parameters: every run of the window predicted
+    with **its own** forcing and background, centred to median zero per run; a Series indexed by (run_id, cell).
+    Only the city's features and forcing are used."""
     from sparc.core.physics import PhysicsModel
 
-    inp = physics_inputs(city, run, use_lst, s.physics_cell_m)
-    cfg = physics_cfg(inp, s)
-    norm = _norm(cfg)
-    nat = dict(tp["natural"])
-    if use_lst:
-        nat["c_lst"] = tp["h_lst"] / norm
-    m = PhysicsModel(inp["grid"], cfg, L_init=nat["L"]).assign(inp["frame"], inp["coords"], nat,
-                                                               a=tp["a_phys"] * norm, gamma=tp["gamma"])
-    p = m.predict(inp["frame"], inp["coords"])[inp["coarse"]]
-    return centre(p, inp["table"]["run_id"].to_numpy())
+    parts = []
+    for rid in sorted(city.table.loc[city.table["run"] == run, "run_id"].unique()):
+        inp = physics_inputs(city, run, use_lst, s.physics_cell_m, run_id=rid)
+        cfg = physics_cfg(inp, s)
+        norm = _norm(cfg)
+        nat = dict(tp["natural"])
+        if use_lst:
+            nat["c_lst"] = tp["h_lst"] / norm
+        m = PhysicsModel(inp["grid"], cfg, L_init=nat["L"]).assign(inp["frame"], inp["coords"], nat,
+                                                                   a=tp["a_phys"] * norm, gamma=tp["gamma"])
+        p = m.predict(inp["frame"], inp["coords"])[inp["coarse"]]
+        t = inp["table"]
+        parts.append(pd.Series(centre(p, np.zeros(len(p))),
+                               index=pd.MultiIndex.from_arrays([t["run_id"].to_numpy(), t["cell"].to_numpy()])))
+    return pd.concat(parts) if parts else pd.Series(dtype=float)
 
 
 def _fit_key(city: CityData, run: str, use_lst: bool, s: Settings) -> str:
-    t = city.table[city.table["run"] == run]
+    t = city.table[(city.table["run"] == run) & (city.table["run_id"] == physics_run_id(city, run))]
     h = hashlib.sha256()
     h.update(pd.util.hash_pandas_object(t[["cell", "dTa"]], index=False).to_numpy().tobytes())
     h.update(json.dumps([city.meta.get("built_utc"), use_lst, s.physics_cell_m, s.physics_iter, s.physics_L_max_m]).encode())
@@ -646,11 +670,9 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
                 except Exception as exc:              # noqa: BLE001
                     rec[v] = {"error": str(exc).splitlines()[0][:200] if str(exc) else repr(exc)}
                     continue
-                # the physics predicts every driven cell; score the cells A and B are scored on
-                t_all = by_city[h].table[by_city[h].table["run"] == run]
-                m = pd.Series(pc, index=pd.MultiIndex.from_arrays([t_all["run_id"], t_all["cell"]]))
+                # the physics predicts every driven cell of every run; score the cells A and B are scored on
                 idx = pd.MultiIndex.from_arrays([df.loc[te, "run_id"], df.loc[te, "cell"]])
-                preds[v][te] = centre(m.reindex(idx).to_numpy(), key[te])
+                preds[v][te] = centre(pc.reindex(idx).to_numpy(), key[te])
                 rec[v] = city_metrics(df.loc[te, "dTa"], preds[v][te])
                 rec[v]["transfer"] = {"a_phys": tp["a_phys"], "L_m": tp["natural"]["L"],
                                       **({"h_lst": tp["h_lst"]} if v == "C" else {})}
@@ -728,11 +750,13 @@ def evaluate(cities: list[CityData], s: Settings | None = None, cache: Path | No
     return out, pd.concat(preds, ignore_index=True) if preds else pd.DataFrame()
 
 
-TRANSFER_RULE = ("Model C is fitted once per city and run on that city's own driven cells.  For a held-out city "
+TRANSFER_RULE = ("Model C is fitted once per city and window on that city's own driven cells of one run (the "
+                 "window's run with the most cells, with that run's forcing and background).  For a held-out city "
                  "every nonlinear physics parameter and the lapse coefficient are the medians of the training "
                  "cities' fits; the gain and the LST coupling are transferred in physical units (a/forcing and "
                  "c_lst·forcing) and converted with the held-out city's own run forcing; the intercept and the "
-                 "linear trend are 0; predictions are centred to median zero over the run's cells.  No held-out "
+                 "linear trend are 0; each of its runs is predicted with that run's own forcing and centred to "
+                 "median zero over the run's cells.  No held-out "
                  "label is used.")
 
 
