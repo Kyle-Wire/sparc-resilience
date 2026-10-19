@@ -1,9 +1,12 @@
 """Three models of the traverse air-temperature anomaly, scored on cities they never saw.
 
 Target: ``dTa`` (°C), each run's cell-mean traverse air temperature minus the run's city background (its median
-over the driven cells; :mod:`~sparc.core.lstair.dataset`).  Every model is evaluated **leave-one-city-out**: fitted
+over the driven cells; :mod:`~sparc.core.lstair.dataset`).  Every model is evaluated **leave-one-campaign-out**: fitted
 on the other cities, scored on every driven cell of the held-out city, run window by run window (af first, then
-am, pm and ni where enough cities have them).
+am, pm and ni where enough cities have them).  The held-out unit is the **campaign group**
+(:func:`campaign_groups`): catalog "cities" that are one campaign (same OSF node and date, e.g. Bronx and
+Manhattan) or neighbours (grids within 10 km: New York and its boroughs, the two Kansas Citys) are held out
+together, and the paired comparison treats each group, not each city, as one independent unit.
 
 Models
 ------
@@ -76,6 +79,7 @@ MIN_VERDICT_CITIES = 8         # fewer held-out cities: no verdict (with 5 the s
 ALPHA = 0.025                  # one-sided level of the paired test (the claim is a one-sided improvement)
 MIN_REL_GAIN = 0.05            # the claim also needs a relative MSE reduction of at least 5%
 EXACT_SIGN_FLIP_MAX = 16       # up to this many cities every sign vector is enumerated (2^16)
+GROUP_KM = 10.0                # cities whose grids come this close are one campaign group (held out together)
 MIN_CELLS = 30                 # a run with fewer driven cells is not scored
 DEFAULT_FORCING = {"af": (650.0, -90.0), "am": (150.0, -60.0), "pm": (40.0, -80.0), "ni": (0.0, -80.0)}
 RHO_CP = 1170.0                # J m⁻³ K⁻¹ (air near 30 °C), for the implied r_a
@@ -188,25 +192,65 @@ def city_metrics(y: np.ndarray, p: np.ndarray) -> dict:
             else float("nan"), "r": r}
 
 
+def campaign_groups(cities: list[CityData], near_km: float = GROUP_KM) -> dict[str, str]:
+    """The unit of independence: cities of one campaign or metro area form a group, held out together and resampled
+    as one.  Two cities are linked when they share an OSF node and a campaign date (one campaign published as
+    several catalog "cities", e.g. Bronx and Manhattan in j6eqr) or when their grids lie within ``near_km`` of each
+    other (New York beside its boroughs, Kansas City KS beside MO): their held-out traverses share the day's
+    weather, the vehicles and sensors, and neighbouring streets.  Returns slug → group id (the member slugs
+    joined by ``+``; a city alone is its own group)."""
+    info = []
+    for c in cities:
+        cat = c.meta.get("catalog") or {}
+        try:
+            w, so, e, n = c.grid.bounds_lonlat()
+        except Exception:                             # noqa: BLE001 - no usable georeference: position unknown
+            w = so = e = n = float("nan")
+        info.append((c.slug, cat.get("node"), c.meta.get("campaign_date"), (w, so, e, n)))
+    parent = {sl: sl for sl, *_ in info}
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    for i, (a, na, da, ba) in enumerate(info):
+        for b, nb, db, bb in info[i + 1:]:
+            same = na is not None and na == nb and da is not None and da == db
+            lat = math.radians(0.5 * (ba[1] + bb[3])) if np.isfinite(ba[1]) and np.isfinite(bb[3]) else 0.0
+            gx = max(0.0, max(ba[0], bb[0]) - min(ba[2], bb[2])) * 111.32 * math.cos(lat)
+            gy = max(0.0, max(ba[1], bb[1]) - min(ba[3], bb[3])) * 110.57
+            near = np.isfinite(gx) and np.isfinite(gy) and math.hypot(gx, gy) <= near_km
+            if same or near:
+                parent[find(a)] = find(b)
+    members: dict[str, list[str]] = {}
+    for sl, *_ in info:
+        members.setdefault(find(sl), []).append(sl)
+    return {sl: "+".join(sorted(m)) for m in members.values() for sl in m}
+
+
 def inner_select(train: pd.DataFrame, cols: list[str], s: Settings) -> tuple[tuple[str, dict], list[dict]]:
-    """The candidate with the lowest mean (over inner held-out cities) MSE in a leave-city-out CV on ``train``
-    (grouped K-fold over cities when there are more than ``inner_folds``)."""
+    """The candidate with the lowest mean (over inner held-out cities) MSE in a leave-group-out CV on ``train``
+    (campaign groups, :func:`campaign_groups`, when the table has a ``group`` column, else cities; grouped K-fold
+    when there are more than ``inner_folds``)."""
     from sklearn.model_selection import GroupKFold, LeaveOneGroupOut
 
-    groups = train["slug"].to_numpy()
+    groups = train["group" if "group" in train else "slug"].to_numpy()
+    slugs = train["slug"].to_numpy()
     k = np.unique(groups).size
     split = LeaveOneGroupOut() if k <= s.inner_folds else GroupKFold(n_splits=s.inner_folds)
     X, y = train[cols].to_numpy(float), train["dTa"].to_numpy(float)
-    w = _weights(groups)
+    w = _weights(slugs)
     rows = []
     folds = list(split.split(X, y, groups))
     for kind, params in _candidates(s):
         per_city = []
         for tr, te in folds:
             p = centre(_fit_predict(kind, params, X[tr], y[tr], w[tr], X[te], s.seed), train["run_id"].to_numpy()[te]
-                       + "|" + groups[te])
-            for c in np.unique(groups[te]):
-                sel = groups[te] == c
+                       + "|" + slugs[te])
+            for c in np.unique(slugs[te]):
+                sel = slugs[te] == c
                 per_city.append(float(np.mean((p[sel] - y[te][sel]) ** 2)))
         rows.append({"model": kind, "params": params, "inner_mse": float(np.mean(per_city))})
     best = min(rows, key=lambda r: r["inner_mse"])
@@ -490,7 +534,7 @@ def within_city(df: pd.DataFrame, s: Settings) -> dict:
 # The harness                                                                  #
 # --------------------------------------------------------------------------- #
 def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path | None = None) -> tuple[dict, pd.DataFrame]:
-    """Leave-one-city-out A, B, C (and C0) on one run window; (results, per-cell predictions)."""
+    """Leave-one-campaign-group-out A, B, C (and C0) on one run window; (results, per-cell predictions)."""
     t0 = time.perf_counter()
     tabs = [c.table[c.table["run"] == run] for c in cities]
     keep = [c for c, t in zip(cities, tabs) if len(t) >= MIN_CELLS]
@@ -510,6 +554,15 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
         res.update(status="not run", reason=f"{len(slugs)} cities with ≥ {MIN_CELLS} cells with every predictor")
         return res, pd.DataFrame()
     df = df[df["slug"].isin(slugs)].reset_index(drop=True)
+    groups = campaign_groups([by_city[c] for c in slugs])
+    df["group"] = df["slug"].map(groups)
+    units = sorted(set(groups.values()))
+    res["groups"] = {g: [c for c in slugs if groups[c] == g] for g in units}
+    if len(units) < MIN_CITIES:
+        res.update(status="not run", reason=f"{len(units)} independent campaign groups (need {MIN_CITIES}): "
+                                            f"{', '.join(units)}")
+        return res, pd.DataFrame()
+    key = (df["slug"] + "|" + df["run_id"]).to_numpy()                 # a run of a city: the centring unit
     preds = {m: np.full(len(df), np.nan) for m in ("A", "B", "C", "C0")}
     chosen = {}
     fits = {}
@@ -518,48 +571,62 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
             fits[v] = physics_fits([by_city[c] for c in slugs], run, v == "C", s,
                                    None if cache is None else cache / "physics")
     per_city = []
-    for h in slugs:
-        te = (df["slug"] == h).to_numpy()
-        train = _subsample(df[~te], s.max_rows_per_city, s.seed)
-        rec = {"slug": h, "city": str(df.loc[te, "city"].iloc[0]), "n": int(te.sum())}
+    for g in units:                                                    # hold out a whole campaign group
+        members = res["groups"][g]
+        te_g = (df["group"] == g).to_numpy()
+        train = _subsample(df[~te_g], s.max_rows_per_city, s.seed)
+        recs = {h: {"slug": h, "city": str(df.loc[df["slug"] == h, "city"].iloc[0]),
+                    "n": int((df["slug"] == h).sum()), "group": g} for h in members}
         for name, cols in (("A", A_COLS), ("B", B_COLS)):
             (kind, params), table = inner_select(train, cols, s)
             p = _fit_predict(kind, params, train[cols].to_numpy(float), train["dTa"].to_numpy(float),
-                             _weights(train["slug"].to_numpy()), df.loc[te, cols].to_numpy(float), s.seed)
-            preds[name][te] = centre(p, df.loc[te, "run_id"].to_numpy())
-            chosen.setdefault(name, []).append({"held_out": h, "model": kind, "params": params, "inner": table})
-            rec[name] = city_metrics(df.loc[te, "dTa"], preds[name][te])
-            rec[name]["model"] = kind
+                             _weights(train["slug"].to_numpy()), df.loc[te_g, cols].to_numpy(float), s.seed)
+            preds[name][te_g] = centre(p, key[te_g])
+            chosen.setdefault(name, []).append({"held_out": g, "model": kind, "params": params, "inner": table})
+            for h in members:
+                te = (df["slug"] == h).to_numpy()
+                recs[h][name] = city_metrics(df.loc[te, "dTa"], preds[name][te])
+                recs[h][name]["model"] = kind
         for v, fv in fits.items():
-            others = [f for k, f in fv.items() if k != h and "error" not in f]
-            if len(others) < MIN_CITIES - 1:
-                rec[v] = {"error": f"{len(others)} training cities with a physics fit"}
-                continue
-            tp = transfer_params(others, v == "C")
-            try:
-                pc = predict_physics(by_city[h], run, v == "C", tp, s)
-            except Exception as exc:                  # noqa: BLE001
-                rec[v] = {"error": str(exc).splitlines()[0][:200] if str(exc) else repr(exc)}
-                continue
-            # the physics predicts every driven cell; score the cells A and B are scored on
-            t_all = by_city[h].table[by_city[h].table["run"] == run]
-            m = pd.Series(pc, index=pd.MultiIndex.from_arrays([t_all["run_id"], t_all["cell"]]))
-            idx = pd.MultiIndex.from_arrays([df.loc[te, "run_id"], df.loc[te, "cell"]])
-            preds[v][te] = centre(m.reindex(idx).to_numpy(), df.loc[te, "run_id"].to_numpy())
-            rec[v] = city_metrics(df.loc[te, "dTa"], preds[v][te])
-            rec[v]["transfer"] = {"a_phys": tp["a_phys"], "L_m": tp["natural"]["L"], **({"h_lst": tp["h_lst"]}
-                                                                                       if v == "C" else {})}
-        if "lst_offset_days" in df:
-            off = df.loc[te, "lst_offset_days"]
-            rec["lst_offset_days"] = None if off.isna().all() else float(off.abs().median())
-        per_city.append(rec)
+            others = [f for k, f in fv.items() if k not in members and "error" not in f]
+            for h in members:
+                rec = recs[h]
+                te = (df["slug"] == h).to_numpy()
+                if len(others) < MIN_CITIES - 1:
+                    rec[v] = {"error": f"{len(others)} training cities with a physics fit"}
+                    continue
+                tp = transfer_params(others, v == "C")
+                try:
+                    pc = predict_physics(by_city[h], run, v == "C", tp, s)
+                except Exception as exc:              # noqa: BLE001
+                    rec[v] = {"error": str(exc).splitlines()[0][:200] if str(exc) else repr(exc)}
+                    continue
+                # the physics predicts every driven cell; score the cells A and B are scored on
+                t_all = by_city[h].table[by_city[h].table["run"] == run]
+                m = pd.Series(pc, index=pd.MultiIndex.from_arrays([t_all["run_id"], t_all["cell"]]))
+                idx = pd.MultiIndex.from_arrays([df.loc[te, "run_id"], df.loc[te, "cell"]])
+                preds[v][te] = centre(m.reindex(idx).to_numpy(), key[te])
+                rec[v] = city_metrics(df.loc[te, "dTa"], preds[v][te])
+                rec[v]["transfer"] = {"a_phys": tp["a_phys"], "L_m": tp["natural"]["L"],
+                                      **({"h_lst": tp["h_lst"]} if v == "C" else {})}
+        for h in members:
+            if "lst_offset_days" in df:
+                off = df.loc[df["slug"] == h, "lst_offset_days"]
+                recs[h]["lst_offset_days"] = None if off.isna().all() else float(off.abs().median())
+            per_city.append(recs[h])
     res["per_city"] = per_city
     res["chosen"] = {k: [{kk: vv for kk, vv in c.items() if kk != "inner"} for c in v] for k, v in chosen.items()}
     res["inner_cv"] = {k: [c["inner"] for c in v] for k, v in chosen.items()}
 
     def pair(x: str, base: str) -> tuple[np.ndarray, np.ndarray]:
-        rows = [r for r in per_city if "mse" in (r.get(x) or {}) and "mse" in (r.get(base) or {})]
-        return np.array([r[x]["mse"] for r in rows]), np.array([r[base]["mse"] for r in rows])
+        """Per campaign group (the independent unit): the mean over its cities of each model's MSE."""
+        xs, bs = [], []
+        for g in units:
+            rows = [r for r in per_city if r["group"] == g]
+            if rows and all("mse" in (r.get(x) or {}) and "mse" in (r.get(base) or {}) for r in rows):
+                xs.append(float(np.mean([r[x]["mse"] for r in rows])))
+                bs.append(float(np.mean([r[base]["mse"] for r in rows])))
+        return np.array(xs), np.array(bs)
 
     res["summary"] = {}
     for m in ("A", "B", "C", "C0"):
@@ -695,6 +762,6 @@ def _json(o):
 
 
 __all__ = ["Settings", "design", "A_COLS", "B_COLS", "LST_COLS", "city_metrics", "paired", "sign_flip", "centre",
-           "inner_select",
+           "inner_select", "campaign_groups",
            "fit_city_physics", "transfer_params", "predict_physics", "physics_fits", "evaluate_window", "evaluate",
            "results_markdown", "run_evaluation", "TRANSFER_RULE", "MIN_VERDICT_CITIES"]

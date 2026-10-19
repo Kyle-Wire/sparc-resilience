@@ -199,3 +199,42 @@ def test_cli_evaluate_writes_results(tmp_path):
     md = (tmp_path / "res" / "results.md").read_text()
     assert md.startswith("# LST → air temperature") and "Transfer rule" in md and "| Toy 0 |" in md
     assert (tmp_path / "res" / "predictions.parquet").exists() and (tmp_path / "res" / "physics").is_dir()
+
+
+def _renamed(c: D.CityData, slug: str, dx_m: float = 0.0, meta: dict | None = None) -> D.CityData:
+    g = D.CityGrid(**{**c.grid.as_dict(), "x0": c.grid.x0 + dx_m})
+    t = c.table.assign(slug=slug, city=slug, x=c.table["x"] + dx_m)
+    return D.CityData(slug=slug, meta={**c.meta, "slug": slug, **(meta or {})}, table=t, grid=g, rasters=c.rasters)
+
+
+def test_campaign_groups_link_one_campaign_and_neighbouring_grids():
+    """R2: Bronx and Manhattan are folders of one OSF node and campaign; New York sits beside its boroughs."""
+    a = toy_city(0, n=24)
+    far = toy_city(3, n=24)                                                 # 120 km east
+    same = _renamed(toy_city(5, n=24), "bronx", meta={"catalog": {"node": "j6eqr"}, "campaign_date": "2021-07-20"})
+    man = _renamed(toy_city(6, n=24), "manhattan", meta={"catalog": {"node": "j6eqr"}, "campaign_date": "2021-07-20"})
+    near = _renamed(a, "next_door", dx_m=1500.0)                            # overlapping grid
+    g = E.campaign_groups([a, far, same, man, near])
+    assert g["toy_0"] == g["next_door"] == "next_door+toy_0"
+    assert g["bronx"] == g["manhattan"] == "bronx+manhattan" and g["toy_3"] == "toy_3"
+    other_day = _renamed(toy_city(6, n=24), "manhattan", meta={"catalog": {"node": "j6eqr"}, "campaign_date": "2022-07-20"})
+    assert E.campaign_groups([same, other_day])["bronx"] == "bronx"
+
+
+def test_a_campaign_group_is_held_out_whole_and_counted_once():
+    cities = [toy_city(k, n=32) for k in range(4)]
+    other = toy_city(4, n=32)                                               # another city's data, moved next to toy_0
+    shift = cities[0].grid.x0 + 600.0 - other.grid.x0
+    cities.append(_renamed(other, "toy_0_twin", dx_m=shift))
+    s = E.Settings(**{**FAST.__dict__, "within_city": False, "physics": False})
+    res, pred = E.evaluate_window(cities, "af", s)
+    assert res["groups"]["toy_0+toy_0_twin"] == ["toy_0", "toy_0_twin"]
+    assert res["paired"]["B-A"]["n_cities"] == 4                            # 4 independent units, not 5 cities
+    # the twin's labels never reach toy_0's predictions (held out together, never in each other's training)
+    tw = cities[-1]
+    alt = D.CityData(slug=tw.slug, meta=tw.meta, grid=tw.grid, rasters=tw.rasters,
+                     table=tw.table.assign(dTa=np.random.default_rng(0).permutation(tw.table["dTa"].to_numpy())))
+    _, pred2 = E.evaluate_window(cities[:-1] + [alt], "af", s)
+    a = pred[pred["slug"] == "toy_0"].sort_values("cell")
+    b = pred2[pred2["slug"] == "toy_0"].sort_values("cell")
+    assert np.allclose(a["pred_A"], b["pred_A"]) and np.allclose(a["pred_B"], b["pred_B"])
