@@ -98,6 +98,7 @@ def test_claim_rates_and_the_rate_mode():
     assert r["informative"]["B-A"]["rate"] == 0.75 and "calibrated" not in r["informative"]["B-A"]
     bad = S.claim_rates([row("null", i, claim if i < 8 else "not shown") for i in range(40)])
     assert bad["null"]["B-A"]["calibrated"] is False
+    assert "calibrated" not in r["null"]["C-A"] and "calibrated" in r["null"]["C-C0"]
 
 
 @pytest.mark.slow

@@ -180,9 +180,10 @@ def _clopper_pearson(k: int, n: int, level: float = 0.95) -> list[float]:
 
 
 def claim_rates(rows: list[dict]) -> dict:
-    """Per world and comparison: runs, claims, rate and its Clopper–Pearson 95% interval; for the null worlds
-    (``null``; ``redundant`` for B − A) whether the claim count is consistent with the one-sided level
-    (at most the binomial 99th percentile at rate 0.025)."""
+    """Per world and comparison: runs, claims, rate and its Clopper–Pearson 95% interval; where the comparison's
+    null holds (``null``: B − A and C − C0; ``redundant``: B − A) whether the claim count is consistent with the
+    one-sided level (at most the binomial 99th percentile at rate 0.025).  C − A compares the physics with land
+    cover, which the physics-shaped synthetic air can favour in any world: it is never a null comparison."""
     from scipy.stats import binom
 
     from sparc.core.lstair.evaluate import ALPHA
@@ -197,7 +198,8 @@ def claim_rates(rows: list[dict]) -> dict:
             if not n:
                 continue
             rec[k] = {"n": n, "claims": c, "rate": c / n, "ci95": _clopper_pearson(c, n)}
-            if (sc == "null") or (sc == "redundant" and k == "B-A"):
+            # the comparisons whose null holds in the world (C − A is physics vs land cover: no null anywhere)
+            if (sc == "null" and k in ("B-A", "C-C0")) or (sc == "redundant" and k == "B-A"):
                 limit = int(binom.ppf(0.99, n, ALPHA))
                 rec[k].update(level=ALPHA, max_claims_at_level=limit, calibrated=c <= limit)
         out[sc] = rec
