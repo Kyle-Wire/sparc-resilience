@@ -599,3 +599,49 @@ def test_the_download_record_is_not_read_as_a_traverse_file(tmp_path):
     (folder / "af_trav.csv.part").write_text("partial")
     _, report = scan_traverses(folder)
     assert not any(r["file"].startswith("_download") or r["file"].endswith(".part") for r in report)
+
+
+def _to_utc_clock(folder, hours):
+    """Rewrite a write_campaign folder's clocks as UTC (``hours`` ahead) under a plain ``datetime`` column."""
+    for f in folder.glob("*_trav.csv"):
+        df = pd.read_csv(f)
+        col = "dttm_lc" if "dttm_lc" in df else "datetime"
+        df["datetime"] = (pd.to_datetime(df[col]) + pd.Timedelta(hours=hours)).dt.strftime("%Y-%m-%d %H:%M:%S")
+        df.drop(columns=[c for c in ("dttm_lc",) if c in df]).to_csv(f, index=False)
+
+
+@pytest.mark.parametrize("city,centre,tz_hours", [("Providence, RI", (-71.41, 41.82), 4),
+                                                   ("Los Angeles, CA", (-118.24, 34.05), 7)])
+def test_utc_clocks_are_detected_from_the_protocol_windows(tmp_path, city, centre, tz_hours):
+    """R13: the old check only caught Eastern/Central UTC stamps; a Pacific campaign stamped in UTC put the
+    06–07 morning run at 13 h and was labelled the afternoon run."""
+    folder = tmp_path / "trav" / D.slugify(city)
+    write_campaign(folder, centre)
+    _to_utc_clock(folder, tz_hours)
+    s = D.build_dataset([city], tmp_path / "o", traverses_dir=tmp_path / "trav", features=synthetic_features,
+                        lst=False, era5=False, probe_opener=_no_network)
+    assert s["cities"][city]["status"] == "ok", s
+    c = D.load_city(tmp_path / "o" / "cities" / D.slugify(city))
+    starts = {r["run"]: r["start"] for r in c.meta["runs"]}
+    assert set(starts) == {"am", "af"}
+    assert starts["af"][11:13] == "15" and starts["am"][11:13] == "06"
+    assert any("timestamps are UTC" in w for w in c.meta["warnings"])
+
+
+def test_a_clock_outside_every_protocol_window_is_refused():
+    pts = pd.DataFrame({"time": pd.date_range("2020-07-29 12:00", periods=600, freq="6s"), "clock": None})
+    with pytest.raises(ValueError, match="protocol windows"):
+        D.check_clock(pts, "America/New_York")
+    local = pd.DataFrame({"time": pd.date_range("2020-07-29 15:00", periods=600, freq="6s"), "clock": None})
+    out, note = D.check_clock(local, "America/New_York")
+    assert note is None and out is local
+
+
+def test_a_utc_only_capa_table_is_converted_with_its_own_tz_column(tmp_path):
+    from sparc.core.identify.traverses import scan_traverses
+
+    df = pd.DataFrame({"dttm_tc": pd.date_range("2020-07-29 19:00", periods=50, freq="10s").strftime("%Y-%m-%d %H:%M:%S"),
+                       "tz": "America/New_York", "lat": 41.82, "lon": np.linspace(-71.42, -71.40, 50), "t_c": 30.0})
+    df.to_csv(tmp_path / "af_trav.csv", index=False)
+    pts, rep = scan_traverses(tmp_path)
+    assert pts["time"].min() == pd.Timestamp("2020-07-29 15:00:00") and "America/New_York" in rep[0]["clock"]

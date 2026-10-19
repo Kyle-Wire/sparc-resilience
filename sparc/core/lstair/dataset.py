@@ -723,7 +723,7 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     clock_date = campaign_date or spec.catalog_date
     points, report = scan_traverses(traverses, timezone=spec.tz, utc_to=utc_to, exclude=tuple(skip_files or ()),
                                     campaign_date=clock_date)
-    hms = [r for r in report if r.get("clock")]
+    hms = [r for r in report if str(r.get("clock") or "").startswith("time_n")]
     n_dup = int(sum(r.get("duplicates", 0) for r in report))
     if n_dup:
         warnings.append(f"{n_dup:,} readings repeat another file's (same sensor, time and position): read once")
@@ -733,9 +733,9 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     points = points.dropna(subset=["lat", "lon", "temp_f"])
     ctx = make_city_grid(points["lon"].to_numpy(float), points["lat"].to_numpy(float), spec.crs, cell_m, margin_m)
     cfg, layout = ctx.identify_cfg(), ctx.identify_layout()
-    hours = pd.to_datetime(points["time"]).dt.hour
-    if hours.notna().any() and ((hours >= 9) & (hours < 12)).mean() > 0.25 and not hours.between(14, 17).any():
-        warnings.append("no readings at 14–17 h but many at 9–12 h: the times may be UTC (rerun with --utc)")
+    points, clock_note = check_clock(points, spec.tz, utc_given=bool(utc_to))
+    if clock_note:
+        warnings.append(clock_note)
 
     runs, frames = [], []
     for info in runs_summary(points):
@@ -856,6 +856,60 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
             "built_utc": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
     _write_atomic(out / "meta.json", json.dumps(meta, indent=1, default=_json_default).encode())
     return meta
+
+
+#: CAPA Heat Watch drives 6–7, 15–16 and 19–20 local time (Providence also 0–1): windows in local hours with a
+#: half-hour to an hour of slack, the night one wrapping midnight.
+PROTOCOL_HOURS = ((5.5, 8.0), (14.5, 17.0), (18.5, 21.0), (23.5, 26.0))
+
+
+def protocol_share(times: pd.Series) -> float:
+    """Share of the readings whose local clock time falls in a CAPA protocol window (:data:`PROTOCOL_HOURS`)."""
+    t = pd.to_datetime(times, errors="coerce").dropna()
+    if not len(t):
+        return float("nan")
+    h = (t.dt.hour + t.dt.minute / 60.0).to_numpy(float)
+    ok = np.zeros(h.size, bool)
+    for lo, hi in PROTOCOL_HOURS:
+        ok |= ((h >= lo) & (h < hi)) | ((h + 24.0 >= lo) & (h + 24.0 < hi))
+    return float(ok.mean())
+
+
+def check_clock(points: pd.DataFrame, tz: str | None, utc_given: bool = False) -> tuple[pd.DataFrame, str | None]:
+    """Is the traverse clock local?  The readings' hours are compared with the CAPA protocol windows (6–7, 15–16,
+    19–20 h, and 0–1 h) as read and after reading them as UTC converted to ``tz``; the clock that puts more
+    readings in the windows is used (ties: as read).  Readings whose clock is known (a ``clock`` note from
+    :func:`~sparc.core.identify.traverses.scan_traverses`: time_n, or a UTC column converted with the file's
+    zone) are left alone.  Returns (points, a note when converted); ValueError when neither clock puts half the
+    readings in the windows.  Without ``tz`` only the old heuristic warning is given.  With ``utc_given``
+    (``--utc``) nothing is checked."""
+    if utc_given:
+        return points, None
+    t = pd.to_datetime(points["time"], errors="coerce")
+    free = t.notna() & (points["clock"].isna() if "clock" in points else True)
+    if not free.any():
+        return points, None
+    if not tz:
+        h = t[free].dt.hour
+        if ((h >= 9) & (h < 12)).mean() > 0.25 and not h.between(14, 17).any():
+            return points, "no readings at 14–17 h but many at 9–12 h: the times may be UTC (rerun with --utc)"
+        return points, None
+    as_read = protocol_share(t[free])
+    conv = t[free].dt.tz_localize("UTC").dt.tz_convert(tz).dt.tz_localize(None)
+    as_utc = protocol_share(conv)
+    if max(as_read, as_utc) < 0.5:
+        raise ValueError(f"the traverse clock fits neither reading of the CAPA protocol windows (6–7, 15–16, 19–20 h "
+                         f"local): {as_read:.0%} of the readings fall in them as recorded and {as_utc:.0%} read as "
+                         f"UTC in {tz}; check the files' time column (or pass --utc if it is UTC)")
+    if as_utc > as_read:
+        from sparc.core.identify.traverses import assign_runs
+
+        pts = points.copy()
+        pts.loc[free, "time"] = conv
+        pts = assign_runs(pts.drop(columns=["run"], errors="ignore").reset_index(drop=True))
+        return pts, (f"the timestamps are UTC: {as_utc:.0%} of the readings fall in the CAPA protocol windows after "
+                     f"conversion to {tz} against {as_read:.0%} as recorded; converted")
+    return points, None
 
 
 def _no_run_reason(runs: list[dict], report: list[dict], spec: CitySpec) -> str:

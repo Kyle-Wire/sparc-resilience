@@ -89,6 +89,23 @@ def utc_hms_to_local(hms, local_date: str, tz: str) -> pd.Series:
     return out
 
 
+def _file_zone(df: pd.DataFrame, norm: dict) -> str | None:
+    """The IANA zone a table names in a ``tz`` / ``timezone`` column (one value), else None."""
+    col = next((norm[n] for n in ("tz", "timezone", "time_zone", "tzone") if n in norm), None)
+    if col is None:
+        return None
+    vals = pd.Series(df[col]).dropna().astype(str).str.strip().unique()
+    if len(vals) != 1:
+        return None
+    try:
+        import zoneinfo
+
+        zoneinfo.ZoneInfo(vals[0])
+        return vals[0]
+    except Exception:  # noqa: BLE001 - not a zone name
+        return None
+
+
 def _window_hint_2019(name: str) -> str | None:
     """Run names of the 2019 NIHHIS traverse files (``AM_…``, ``PM_…``, ``Eve_…``; ``Boston_am``, ``Boston_pm…``,
     ``Boston_ev``): PM there is the 15–16 h afternoon run and Eve/ev the 19–20 h evening one."""
@@ -118,11 +135,21 @@ def _standardise(df: pd.DataFrame, timezone: str | None = None, campaign_date: s
         for n in ("datetime", "date_time", "timestamp", "time_stamp", "time", "date"):
             if n in norm and norm[n] != local:
                 ren[norm[n]] = f"gps_{n}"                 # the UTC GPS clock: kept, not used as the time
-    elif not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp", "local_time", "time_local")):
+    clock = None
+    if local is None and not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp", "local_time",
+                                                     "time_local")):
         utc = next((norm[n] for n in _UTC_TIME if n in norm), None)
         if utc is not None:
-            ren[utc] = "datetime"
-    clock = None
+            # the GPS clock in UTC is the only time: convert it with the file's own zone (CAPA tables carry a
+            # ``tz`` column, e.g. America/New_York) or the caller's; without either it is read as recorded
+            zone = _file_zone(df, norm) or timezone
+            if zone:
+                t = pd.to_datetime(df[utc], errors="coerce", utc=True).dt.tz_convert(zone).dt.tz_localize(None)
+                df = df.assign(datetime=t.dt.strftime("%Y-%m-%d %H:%M:%S").to_numpy())
+                ren[utc] = f"gps_{_norm(utc)}"
+                clock = f"{utc} (UTC) converted to {zone}"
+            else:
+                ren[utc] = "datetime"
     if "time_n" in norm and not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp",
                                                          "local_time", "time_local", "time", "date")
                                     + _LOCAL_TIME + _UTC_TIME):
@@ -163,7 +190,7 @@ def _parse_frame(df: pd.DataFrame, source: str, timezone: str | None, campaign_d
 
     df = _standardise(df, timezone, campaign_date)
     clock = df.attrs.get("clock")
-    hint = _window_hint_2019(source) if clock else _window_hint_from_name(source)
+    hint = _window_hint_2019(source) if str(clock or "").startswith("time_n") else _window_hint_from_name(source)
     idc = _id_column(df)
     groups = [(None, df)] if idc is None else list(df.groupby(idc, sort=False))
     out = []
@@ -171,7 +198,7 @@ def _parse_frame(df: pd.DataFrame, source: str, timezone: str | None, campaign_d
         t = parse_traverse_table(part.reset_index(drop=True), timezone=timezone, window_hint=hint)
         if timezone and len(t) and getattr(pd.to_datetime(t["time"], errors="coerce").dt, "tz", None) is not None:
             t["time"] = pd.to_datetime(t["time"]).dt.tz_convert(timezone).dt.tz_localize(None)   # local wall clock
-        t["clock"] = "local (from UTC HHMMSS)" if clock and "datetime" in df.columns else None
+        t["clock"] = clock if clock and "datetime" in df.columns else None
         t["source_file"] = source
         t["vehicle_key"] = f"{source}:{key}" if key is not None else source
         t["vehicle_id"] = None if key is None else str(key)       # the id as published (same in every copy of a file)
