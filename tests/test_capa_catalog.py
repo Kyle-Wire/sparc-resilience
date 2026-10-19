@@ -68,7 +68,7 @@ def test_download_capa_files_keeps_the_folder_layout_and_resumes(tmp_path, monke
                {"name": "../../evil.csv", "id": "4", "path": "/../../evil.csv", "size": 3}]
     got = []
     monkeypatch.setattr(capa, "_scan_storage", lambda node, top_level_filter=None: listing)
-    monkeypatch.setattr(capa, "_http_get", lambda url: got.append(url) or b"abc")
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: got.append(url) or part.write_bytes(b"abc"))
     rec = capa.download_capa_files("wu9v7", tmp_path / "raw")
     assert (tmp_path / "raw" / "Providence" / "traverses" / "af_trav.shp").read_bytes() == b"abc"
     assert (tmp_path / "raw" / "Providence" / "traverses" / "af_trav.dbf").exists()
@@ -110,7 +110,7 @@ def test_download_with_a_folder_hint_reads_only_that_folder_and_refuses_a_missin
             "fb": [("Boston_am.csv", "file", "b1", 3)], "fi": [("AM_Boise.csv", "file", "i1", 3)]}
     get, calls = _fake_osf(tree)
     monkeypatch.setattr(capa, "_http_get", get)
-    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: part.write_bytes(b"abc"), raising=False)
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: part.write_bytes(b"abc"))
     with pytest.raises(LookupError) as exc:
         capa.download_capa_files("tdsy7", tmp_path / "ny", folder_hint="New York")
     assert "Boston, MA" in str(exc.value) and "Boise, ID" in str(exc.value)
@@ -134,3 +134,71 @@ def test_tdsy7_cities_without_a_folder_are_marked_unavailable():
         e = C.CAPA_CATALOG[city]
         assert any(e["folder_hint"].lower() in f.lower() for f in C.TDSY7_FOLDERS), city
         assert C.availability(e)["traverse_points"] is None
+
+
+def test_fetch_file_resumes_a_cut_off_transfer_with_a_range_request(tmp_path, monkeypatch):
+    """R16: a 38 MB archive cut off mid-transfer (IncompleteRead) used to fail the city and be fetched again
+    from the start; it is now retried and resumed where it stopped."""
+    import http.client
+    import urllib.request
+
+    from sparc.data.collect import capa
+
+    body = bytes(range(256)) * 400
+    seen = []
+
+    class Resp:
+        def __init__(self, data, status, cut=None):
+            self.data, self.status, self.cut, self.pos = data, status, cut, 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self, n=-1):
+            if self.cut is not None and self.pos >= self.cut:
+                raise http.client.IncompleteRead(b"", len(self.data) - self.pos)
+            end = len(self.data) if n < 0 else min(self.pos + n, len(self.data))
+            if self.cut is not None:
+                end = min(end, self.cut)
+            out, self.pos = self.data[self.pos:end], end
+            return out
+
+    def fake(req, timeout=None):
+        rng = req.headers.get("Range")
+        seen.append(rng)
+        if rng is None:
+            return Resp(body, 200, cut=40_000)                     # the first transfer is cut off
+        start = int(rng.split("=")[1].rstrip("-"))
+        return Resp(body[start:], 206)
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake)
+    monkeypatch.setattr("time.sleep", lambda s: None)                    # no back-off wait in the test
+    part = tmp_path / "x.zip.part"
+    capa._fetch_file("https://files.osf.io/v1/resources/n/providers/osfstorage/f", part, len(body))
+    assert part.read_bytes() == body and seen[0] is None and seen[1].startswith("bytes=")
+
+    def gone(req, timeout=None):
+        import urllib.error
+
+        raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(urllib.request, "urlopen", gone)
+    with pytest.raises(Exception) as exc:
+        capa._fetch_file("https://files.osf.io/v1/x", tmp_path / "y.part", 10)
+    assert getattr(exc.value, "code", None) == 404 and exc.value.sparc_url == "https://files.osf.io/v1/x"
+
+
+def test_raster_archives_are_not_downloaded(tmp_path, monkeypatch):
+    from sparc.data.collect import capa
+
+    listing = [{"name": n, "id": str(i), "path": "/" + n, "size": 3} for i, n in enumerate(
+        ["traverses_chw_brockton_092823.zip", "rasters_chw_brockton_092823.zip",
+         "Surface Models (LA)/la_surface.zip", "Area-wide_Boise.zip"])]
+    monkeypatch.setattr(capa, "_scan_storage", lambda node, top_level_filter=None: listing)
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: part.write_bytes(b"abc"))
+    rec = capa.download_capa_files("rk75w", tmp_path)
+    assert [f["path"] for f in rec["files"]] == ["traverses_chw_brockton_092823.zip"]
+    assert len(rec["skipped"]) == 3 and all("maps, not traverse points" in s["reason"] for s in rec["skipped"])

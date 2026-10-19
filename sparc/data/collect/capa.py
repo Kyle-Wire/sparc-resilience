@@ -827,6 +827,65 @@ def download_capa_traverses(
 #: Rasters, PDFs and images are not needed for the traverse points and are skipped.
 TRAVERSE_FILE_EXTS = (".zip", ".csv", ".txt", ".tsv", ".geojson", ".json", ".gpkg", ".kml",
                       ".shp", ".shx", ".dbf", ".prj", ".cpg")
+#: Path patterns (case-insensitive) of archives that hold CAPA's interpolated maps, not traverse points
+#: (Providence ``rasters_chw_*``, LA's and Boise's "Surface Models" / ``Area-wide_*`` zips).
+RASTER_ARCHIVE_PATTERNS = ("rasters_", "surface models", "surface_models", "area-wide", "area_wide")
+DOWNLOAD_RETRIES = 4
+_CHUNK = 1 << 20
+
+
+def _fetch_file(url: str, part: "object", size: Optional[int] = None, retries: int = DOWNLOAD_RETRIES) -> None:
+    """Stream ``url`` into the file ``part``, resuming a partial file with an HTTP Range request and retrying
+    cut-off transfers (``IncompleteRead``, resets, timeouts, 5xx) with back-off; a 4xx answer raises at once.
+    When ``size`` is known the finished file must have it.  Failures carry ``exc.sparc_url``."""
+    import http.client
+    import pathlib
+    import time
+    import urllib.error
+
+    part = pathlib.Path(part)
+    last: Optional[BaseException] = None
+    for attempt in range(retries + 1):
+        have = part.stat().st_size if part.exists() else 0
+        if size is not None and have == int(size):
+            return
+        if size is not None and have > int(size):
+            part.unlink()
+            have = 0
+        headers = {"User-Agent": "SPARC-DataCollection/1.0"}
+        if have:
+            headers["Range"] = f"bytes={have}-"
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=HTTP_TIMEOUT) as r:
+                status = int(getattr(r, "status", None) or 200)
+                mode = "ab" if have and status == 206 else "wb"      # a 200 to a Range request: start over
+                with open(part, mode) as fh:
+                    while True:
+                        chunk = r.read(_CHUNK)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+            got = part.stat().st_size
+            if size is not None and got != int(size):
+                raise http.client.IncompleteRead(b"", int(size) - got)
+            return
+        except urllib.error.HTTPError as exc:
+            if exc.code == 416 and size is not None and part.exists() and part.stat().st_size == int(size):
+                return
+            if exc.code < 500:
+                exc.sparc_url = getattr(exc, "url", None) or url
+                raise
+            last = exc
+        except (http.client.HTTPException, ConnectionError, TimeoutError, urllib.error.URLError, OSError) as exc:
+            last = exc
+        if attempt < retries:
+            log.warning("capa download: %s cut off (%s); retry %d/%d", url, last, attempt + 1, retries)
+            time.sleep(min(2.0 ** attempt, 30.0))
+    try:
+        last.sparc_url = url                                         # type: ignore[union-attr]
+    except Exception:
+        pass
+    raise last                                                       # type: ignore[misc]
 
 
 def download_capa_files(
@@ -836,15 +895,18 @@ def download_capa_files(
     folder_hint: Optional[str] = None,
     exts: tuple = TRAVERSE_FILE_EXTS,
     max_file_bytes: int = 2_000_000_000,
+    skip_patterns: tuple = RASTER_ARCHIVE_PATTERNS,
 ) -> dict:
     """Download the raw files of an OSF node (traverse tables, point layers, archives) into ``dest``.
 
     Unlike :func:`download_capa_traverses` this keeps the files as published, in their OSF folder
     layout, so a shapefile's ``.shp``/``.dbf``/``.shx``/``.prj`` stay together and
     :func:`sparc.core.identify.traverses.scan_traverses` can read the folder as it is.  Only files whose
-    extension is in ``exts`` are fetched (rasters, PDFs and images are skipped and listed).  Each file is
-    written to a temporary name and renamed when complete; ``dest/_download.json`` records the listing
-    and is written last, so a folder with it is complete and a rerun returns it without downloading.
+    extension is in ``exts`` are fetched (rasters, PDFs and images are skipped and listed), and none whose path
+    contains a pattern of ``skip_patterns`` (default the raster archives, :data:`RASTER_ARCHIVE_PATTERNS`).
+    Each file is streamed to ``<name>.part`` (:func:`_fetch_file`: cut-off transfers are retried and resumed
+    with HTTP Range, also after a restart) and renamed when complete; ``dest/_download.json`` records the
+    listing and is written last, so a folder with it is complete and a rerun returns it without downloading.
 
     With ``folder_hint`` (a multi-city node) only the root folders whose name contains it are read, and the
     node's root-level files are skipped (they belong to no city in particular; listed under ``skipped``); when
@@ -890,15 +952,19 @@ def download_capa_files(
         if not low.endswith(tuple(exts)):
             skipped.append({"path": "/".join(parts), "reason": "not a table, vector layer or archive"})
             continue
+        pat = next((q for q in skip_patterns or () if q.lower() in "/".join(parts).lower()), None)
+        if pat is not None:
+            skipped.append({"path": "/".join(parts), "reason": f"name contains {pat!r} (maps, not traverse points)"})
+            continue
         if size is not None and int(size) > max_file_bytes:
             skipped.append({"path": "/".join(parts), "reason": f"larger than {max_file_bytes} bytes"})
             continue
         target = root.joinpath(*parts)
         target.parent.mkdir(parents=True, exist_ok=True)
         if not (target.exists() and size is not None and target.stat().st_size == int(size)):
-            data = _http_get(OSF_WATERBUTLER.format(node_id=node_id, file_id=f["id"]))
             tmp = target.with_name(target.name + ".part")
-            tmp.write_bytes(data)
+            _fetch_file(OSF_WATERBUTLER.format(node_id=node_id, file_id=f["id"]), tmp,
+                        None if size is None else int(size))
             tmp.replace(target)
         kept.append({"path": "/".join(parts), "id": f["id"], "size": size})
     if not kept:

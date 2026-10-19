@@ -1147,10 +1147,11 @@ def _download_traverses(spec: CitySpec, dest: Path) -> dict:
     import urllib.error
     from urllib.parse import urlparse
 
-    from sparc.data.collect.capa import download_capa_files
+    from sparc.data.collect.capa import RASTER_ARCHIVE_PATTERNS, download_capa_files
 
     try:
-        return download_capa_files(spec.node, dest, folder_hint=spec.folder_hint)
+        return download_capa_files(spec.node, dest, folder_hint=spec.folder_hint,
+                                   skip_patterns=RASTER_ARCHIVE_PATTERNS + SKIP_FILES)
     except urllib.error.HTTPError as exc:
         url = getattr(exc, "sparc_url", None) or getattr(exc, "url", None) or ""
         raise RuntimeError(f"OSF answered HTTP {exc.code} ({exc.reason}) for {url or 'a request'} "

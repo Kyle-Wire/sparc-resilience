@@ -512,7 +512,7 @@ def test_an_osf_http_error_fails_one_city_and_a_blocked_files_host_is_named(buil
     monkeypatch.setattr(capa, "_scan_storage", scan)
     src = (root / "traverses" / "providence_ri" / "af_trav.csv").read_bytes()
     monkeypatch.setattr(capa, "_http_get", lambda url: src)
-    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: part.write_bytes(src), raising=False)
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: part.write_bytes(src))
     kw = dict(features=synthetic_features, lst=False, era5=False, probe_opener=_osf_opener)
     s = D.build_dataset(["Boston, MA", "Providence, RI"], tmp_path / "o", **kw)
     assert s["cities"]["Boston, MA"]["status"] == "failed" and "HTTP 404" in s["cities"]["Boston, MA"]["error"]
@@ -524,7 +524,7 @@ def test_an_osf_http_error_fails_one_city_and_a_blocked_files_host_is_named(buil
         raise exc
 
     monkeypatch.setattr(capa, "_http_get", refused)
-    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: refused(url), raising=False)
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: refused(url))
     with pytest.raises(D.NetworkBlocked) as exc:
         D.build_dataset(["Providence, RI"], tmp_path / "o2", **kw)
     assert exc.value.host == "files.osf.io"
