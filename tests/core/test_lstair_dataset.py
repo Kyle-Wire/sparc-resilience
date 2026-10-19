@@ -259,16 +259,7 @@ def test_traverses_are_downloaded_when_no_local_folder_is_given(built, tmp_path)
 
     def ok(req, timeout=None):
         seen.append(req.full_url)
-
-        class R:
-            status = 200
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                return False
-        return R()
+        return _osf_opener(req, timeout)
 
     def download(spec, dest):
         assert spec.node == "wu9v7" and spec.folder_hint is None
@@ -276,7 +267,8 @@ def test_traverses_are_downloaded_when_no_local_folder_is_given(built, tmp_path)
 
     s = D.build_dataset(["Providence, RI"], tmp_path / "out", features=synthetic_features, lst=False, era5=False,
                         probe_opener=ok, download=download)
-    assert s["cities"]["Providence, RI"]["status"] == "ok" and seen == ["https://api.osf.io/v2/"]
+    assert s["cities"]["Providence, RI"]["status"] == "ok" and seen[0] == "https://api.osf.io/v2/"
+    assert any(u.startswith("https://files.osf.io/v1/resources/wu9v7/") for u in seen)      # a real download probed
     assert (tmp_path / "out" / "raw" / "providence_ri" / "af_trav.csv").exists()
 
 
@@ -473,3 +465,66 @@ def test_the_landsat_probe_signs_and_lists_the_blob_container():
     assert any("/api/sas/v1/token/landsateuwest/landsat-c2" in u for u in seen)
     assert any("restype=container&comp=list" in u and "sig=y" in u for u in seen)
     assert D.check_hosts(["landsat"], opener=_ok_opener) == {"landsat": "ok"}
+
+
+_LISTING = json.dumps({"data": [{"id": "f1", "attributes": {"kind": "file", "name": "Read Me.txt", "size": 309}},
+                                {"id": "f2", "attributes": {"kind": "file", "name": "All Data.zip", "size": 9e7}}],
+                       "links": {}}).encode()
+_ORACLE = "https://idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com/cos-prod-osf-1-files-ash/abc"
+
+
+def _osf_opener(req, timeout=None, oracle_blocked=False):
+    """OSF as it answers: the API listing, a 302 from files.osf.io to the Oracle object store, the file there."""
+    u = req.full_url
+    if u.startswith("https://api.osf.io/v2/nodes/"):
+        return _Resp(_LISTING)
+    if u.startswith("https://files.osf.io/"):
+        raise urllib.error.HTTPError(u, 302, "Found", {"Location": _ORACLE}, None)
+    if u.startswith(_ORACLE) and oracle_blocked:
+        raise urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))
+    return _Resp(b"x")
+
+
+def test_osf_downloads_redirect_to_oracle_storage_and_the_probe_names_that_host():
+    """R10: files.osf.io redirects every download to OSF's Oracle Cloud object store; with only the OSF hosts
+    allowed the probe must name the storage host, which is also in the hosts list."""
+    assert D.check_hosts(["osf"], opener=_osf_opener) == {"osf": "ok"}
+    with pytest.raises(D.NetworkBlocked) as exc:
+        D.check_hosts(["osf"], opener=lambda r, timeout=None: _osf_opener(r, timeout, oracle_blocked=True))
+    host = "idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com"
+    assert exc.value.host == host and host in str(exc.value)
+    assert host in D.required_host_names() and host in D.HOSTS["osf"][1]
+
+
+def test_an_osf_http_error_fails_one_city_and_a_blocked_files_host_is_named(built, tmp_path, monkeypatch):
+    """R21: a 404 for one city's node is that city's failure, not a blocked api.osf.io; a connection refused at
+    files.osf.io names files.osf.io."""
+    from sparc.data.collect import capa
+
+    root, _, _ = built
+
+    def scan(node, top_level_filter=None, **kw):
+        if node == "tdsy7":
+            raise urllib.error.HTTPError("https://api.osf.io/v2/nodes/tdsy7/files/osfstorage/", 404, "NOT FOUND",
+                                         {}, None)
+        return [{"name": "af_trav.csv", "id": "9", "path": "/af_trav.csv", "size": None}]
+
+    monkeypatch.setattr(capa, "_scan_storage", scan)
+    src = (root / "traverses" / "providence_ri" / "af_trav.csv").read_bytes()
+    monkeypatch.setattr(capa, "_http_get", lambda url: src)
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: part.write_bytes(src), raising=False)
+    kw = dict(features=synthetic_features, lst=False, era5=False, probe_opener=_osf_opener)
+    s = D.build_dataset(["Boston, MA", "Providence, RI"], tmp_path / "o", **kw)
+    assert s["cities"]["Boston, MA"]["status"] == "failed" and "HTTP 404" in s["cities"]["Boston, MA"]["error"]
+    assert s["cities"]["Providence, RI"]["status"] == "ok"
+
+    def refused(url):
+        exc = urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))
+        exc.sparc_url = url
+        raise exc
+
+    monkeypatch.setattr(capa, "_http_get", refused)
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: refused(url), raising=False)
+    with pytest.raises(D.NetworkBlocked) as exc:
+        D.build_dataset(["Providence, RI"], tmp_path / "o2", **kw)
+    assert exc.value.host == "files.osf.io"

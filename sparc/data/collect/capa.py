@@ -69,6 +69,8 @@ OSF_API        = "https://api.osf.io/v2/nodes/{node_id}/files/osfstorage/"
 # Waterbutler direct-download URL — faster and more reliable than osf.io/download/
 # Retrieved from item["links"]["move"] in the API response (same base URL, GET = download)
 OSF_WATERBUTLER = "https://files.osf.io/v1/resources/{node_id}/providers/osfstorage/{file_id}"
+# files.osf.io answers a download with a 302 to OSF's object storage (checked 2026-10 for wu9v7 and tdsy7 files)
+OSF_STORAGE_HOST = "idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com"
 
 # Match _MMDDYY followed by any non-digit (covers both ZIP names and report filenames)
 _DATE_RE = re.compile(r"_(\d{2})(\d{2})(\d{2})(?=[^\d]|$)", re.IGNORECASE)
@@ -368,11 +370,20 @@ def _load_raster_data(source: dict) -> dict:
 
 
 def _http_get(url: str) -> bytes:
+    """GET ``url`` (redirects followed).  A failure re-raises with ``exc.sparc_url`` = ``url``, so callers can
+    name the host that failed (an HTTPError's own ``url`` is the redirect target when a redirect was followed)."""
     req = urllib.request.Request(
         url, headers={"User-Agent": "SPARC-DataCollection/1.0"}
     )
-    with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
-        return resp.read()
+    try:
+        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT) as resp:
+            return resp.read()
+    except Exception as exc:
+        try:
+            exc.sparc_url = getattr(exc, "url", None) or url
+        except Exception:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------

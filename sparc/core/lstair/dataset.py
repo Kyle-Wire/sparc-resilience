@@ -53,6 +53,7 @@ import logging
 import math
 import re
 import time
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -98,6 +99,10 @@ class NetworkBlocked(RuntimeError):
 
     def __init__(self, host: str, reason: str, purpose: str, remedy: str = ""):
         self.host, self.reason, self.purpose = host, reason, purpose
+        if re.match(r"^HTTP 5\d\d", str(reason)):          # the host answered: a server error, not a block
+            super().__init__(f"{host} answered {reason} (a server error, not a network block: try again later): "
+                             f"it serves {purpose}.")
+            return
         super().__init__(f"cannot reach {host} ({reason}): it serves {purpose}." + (f" {remedy}" if remedy else ""))
 
 
@@ -119,13 +124,59 @@ def _probe_landsat_blob(opener: Callable | None = None, timeout: float = 10.0) -
     return "landsateuwest.blob.core.windows.net", why
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):              # a 3xx surfaces as HTTPError: the probe follows it itself
+        return None
+
+
+def _probe_osf_download(opener: Callable | None = None, timeout: float = 10.0, node: str = "wu9v7"
+                        ) -> tuple[str, str | None]:
+    """A real OSF file download: the smallest file of ``node`` listed on api.osf.io, fetched from files.osf.io
+    with its redirect to OSF's object storage followed hop by hop, so the host that fails is the one named."""
+    import urllib.error
+    import urllib.request
+    from urllib.parse import urljoin, urlparse
+
+    from sparc.data.collect.capa import OSF_API, OSF_WATERBUTLER
+
+    ua = {"User-Agent": "SPARC-lstair/1.0"}
+    get = opener or urllib.request.build_opener(_NoRedirect()).open
+    try:
+        with get(urllib.request.Request(OSF_API.format(node_id=node), headers=ua), timeout=timeout) as r:
+            items = json.loads(r.read().decode("utf-8")).get("data", [])
+        files = [i for i in items if i["attributes"].get("kind") == "file"]
+        fid = min(files, key=lambda i: i["attributes"].get("size") or 0)["id"]
+    except Exception as exc:                          # noqa: BLE001 - any failure is the reason
+        return "api.osf.io", probe_reason(exc)
+    url = OSF_WATERBUTLER.format(node_id=node, file_id=fid)
+    for _ in range(6):
+        host = urlparse(url).hostname or url
+        try:
+            with get(urllib.request.Request(url, headers={**ua, "Range": "bytes=0-0"}), timeout=timeout) as r:
+                code = int(getattr(r, "status", None) or 200)
+                return host, None if code < 400 else f"HTTP {code}"
+        except urllib.error.HTTPError as exc:
+            loc = exc.headers.get("Location") if exc.headers is not None else None
+            if exc.code in (301, 302, 303, 307, 308) and loc:
+                url = urljoin(url, loc)
+                continue
+            return host, probe_reason(exc)
+        except Exception as exc:                      # noqa: BLE001
+            return host, probe_reason(exc)
+    return host, "too many redirects"
+
+
 #: name → (probes, host(s) the real run needs, what they serve, remedy).  A probe is a URL that answers HTTP < 400
 #: when reachable (an API root or a public-bucket listing; the failing URL's host is named) or a callable
 #: ``(opener, timeout) → (host, reason or None)``.
 HOSTS = {
-    "osf": (("https://api.osf.io/v2/",), ("api.osf.io", "files.osf.io"),
-            "the CAPA Heat Watch traverse files (OSF API listing; downloads from files.osf.io)",
-            "Allow api.osf.io and files.osf.io, or download the campaign folders and pass --traverses-dir."),
+    "osf": (("https://api.osf.io/v2/", _probe_osf_download),
+            ("api.osf.io", "files.osf.io", "idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com"),
+            "the CAPA Heat Watch traverse files (OSF API listing; downloads from files.osf.io, which redirects them "
+            "to OSF's object storage on Oracle Cloud)",
+            "Allow api.osf.io, files.osf.io and idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com (or "
+            "*.objectstorage.us-ashburn-1.oraclecloud.com), or download the campaign folders and pass "
+            "--traverses-dir."),
     "landsat": (("https://planetarycomputer.microsoft.com/api/stac/v1/", _probe_landsat_blob),
                 ("planetarycomputer.microsoft.com", "landsateuwest.blob.core.windows.net"),
                 "Landsat Collection 2 Level-2 scenes (STAC search and SAS-token signing; COGs on Azure blob storage)",
@@ -888,17 +939,25 @@ def _downloaded(out: Path, spec: CitySpec) -> bool:
 
 
 def _download_traverses(spec: CitySpec, dest: Path) -> dict:
+    """The city's OSF files into ``dest``.  An HTTP answer (404 for a moved node, 410, 5xx) fails this city only;
+    a connection that cannot be made (proxy refusal, DNS, timeout) raises :class:`NetworkBlocked` naming the host
+    of the URL that failed."""
+    import urllib.error
+    from urllib.parse import urlparse
+
     from sparc.data.collect.capa import download_capa_files
 
     try:
         return download_capa_files(spec.node, dest, folder_hint=spec.folder_hint)
-    except Exception as exc:                          # noqa: BLE001 - name the host
-        import urllib.error
-
-        if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError)):
-            url, hosts, purpose, remedy = HOSTS["osf"]
-            raise NetworkBlocked(hosts[0], str(getattr(exc, "reason", exc))[:160], purpose, remedy) from exc
-        raise
+    except urllib.error.HTTPError as exc:
+        url = getattr(exc, "sparc_url", None) or getattr(exc, "url", None) or ""
+        raise RuntimeError(f"OSF answered HTTP {exc.code} ({exc.reason}) for {url or 'a request'} "
+                           f"(node {spec.node})") from exc
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        _, hosts, purpose, remedy = HOSTS["osf"]
+        url = getattr(exc, "sparc_url", None) or getattr(exc, "filename", None) or ""
+        host = (urlparse(url).hostname if isinstance(url, str) and url else None) or hosts[0]
+        raise NetworkBlocked(host, str(getattr(exc, "reason", exc))[:160], purpose, remedy) from exc
 
 
 # --------------------------------------------------------------------------- #
