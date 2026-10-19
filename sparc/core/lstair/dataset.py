@@ -27,7 +27,8 @@ For every city (a CAPA catalog name, or a local folder given by the user):
 5. **Predictors** (rasters on the city grid, sampled at the cells): canopy and impervious (%), NDVI, albedo,
    elevation (m) and distance to water (m) from :mod:`sparc.core.features_open` (WorldCover, Sentinel-2,
    Copernicus DEM), with Gaussian focal means (σ = radius/2, as the core's focal features) at 100, 300 and
-   1000 m; LST (°C) of the clear Landsat 8/9 scene nearest the campaign date
+   1000 m; LST (°C) of the Landsat 8/9 scene nearest the campaign date that is ≥ 80% clear over the study
+   area (else the clearest ≥ 50%)
    (:func:`sparc.data.collect.landsat.campaign_lst`) with focal means at 100 and 300 m, the scene date and its
    offset in days.  Predictors are computed from rasters only; the traverse temperatures never enter them.
 
@@ -599,7 +600,7 @@ def open_features(ctx: CityGrid, campaign_date: dt.date, max_cloud: float = 20.0
 
 
 def landsat_lst(ctx: CityGrid, campaign_date: dt.date, study: np.ndarray, window_days: int = 16,
-                min_clear: float = 0.5, cache_dir: Path | None = None) -> dict:
+                min_clear: float = 0.5, cache_dir: Path | None = None, prefer_clear: float = 0.8) -> dict:
     """Campaign-matched Landsat LST (°C) on the city grid (:func:`sparc.data.collect.landsat.campaign_lst`).
 
     A search or read that a host refused raises :class:`NetworkBlocked` naming that host; when no scene could be
@@ -609,14 +610,16 @@ def landsat_lst(ctx: CityGrid, campaign_date: dt.date, study: np.ndarray, window
 
     try:
         res = campaign_lst(ctx.bounds_lonlat(0.005), campaign_date, window_days=window_days, min_clear=min_clear,
-                           target=ctx.target, study_mask=ctx.to_northup(study), cache_dir=cache_dir)
+                           prefer_clear=prefer_clear, target=ctx.target, study_mask=ctx.to_northup(study),
+                           cache_dir=cache_dir)
     except Exception as exc:                          # noqa: BLE001 - name a blocked host, else fail the city
         _raise_lst_failure([{"kind": io_error_kind(exc), "host": _failed_host(exc), "error": str(exc)[:200]}])
         raise
     check_lst_result(res)
     lst = None if res["lst_c"] is None else ctx.from_northup(res["lst_c"])
     return {"lst_c": lst, "scenes": res["scenes"], "candidates": res["candidates"], "window_days": window_days,
-            "min_clear": min_clear, "qa_masked": res["qa_masked"], "status": res.get("status")}
+            "min_clear": min_clear, "prefer_clear": prefer_clear, "selection": res.get("selection"),
+            "qa_masked": res["qa_masked"], "status": res.get("status")}
 
 
 def _failed_host(exc: BaseException) -> str | None:
@@ -734,7 +737,7 @@ class _Partial:
 
 #: build_city settings that change a city's table (the fingerprint a cached city is compared with).
 SETTING_DEFAULTS = {"cell_m": CELL_M, "margin_m": MARGIN_M, "drift": "fe", "drift_degree": 1, "utc_to": None,
-                    "lst_window_days": 16, "lst_min_clear": 0.5, "skip_files": list(SKIP_FILES),
+                    "lst_window_days": 16, "lst_min_clear": 0.5, "lst_prefer_clear": 0.8, "skip_files": list(SKIP_FILES),
                     "campaign_date": None, "lst": True, "era5": True}
 
 
@@ -747,6 +750,7 @@ def build_settings(**kw) -> dict:
             out[k] = (v is not False) if k in ("lst", "era5") else (list(v) if isinstance(v, tuple) else v)
     out["cell_m"], out["margin_m"] = float(out["cell_m"]), float(out["margin_m"])
     out["lst_window_days"], out["lst_min_clear"] = int(out["lst_window_days"]), float(out["lst_min_clear"])
+    out["lst_prefer_clear"] = float(out["lst_prefer_clear"])
     out["schema"] = SCHEMA
     return out
 
@@ -775,7 +779,8 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
                lst: Callable | None = None, era5: Callable | None = None, cell_m: float = CELL_M,
                margin_m: float = MARGIN_M, drift: str = "fe", drift_degree: int = 1, utc_to: str | None = None,
                lst_window_days: int = 16, lst_min_clear: float = 0.5, cache_dir: Path | None = None,
-               skip_files: tuple[str, ...] = SKIP_FILES, campaign_date: str | None = None) -> dict:
+               skip_files: tuple[str, ...] = SKIP_FILES, campaign_date: str | None = None,
+               lst_prefer_clear: float = 0.8) -> dict:
     """Build one city's table and rasters from a local traverse folder; returns its meta (also written).
 
     ``features(ctx, campaign_date) → (rasters, provenance)``, ``lst(ctx, campaign_date, study) → {"lst_c",
@@ -793,7 +798,8 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
 
     t0 = time.perf_counter()
     settings = build_settings(cell_m=cell_m, margin_m=margin_m, drift=drift, drift_degree=drift_degree, utc_to=utc_to,
-                              lst_window_days=lst_window_days, lst_min_clear=lst_min_clear, skip_files=skip_files,
+                              lst_window_days=lst_window_days, lst_min_clear=lst_min_clear,
+                              lst_prefer_clear=lst_prefer_clear, skip_files=skip_files,
                               campaign_date=campaign_date, lst=lst, era5=era5)
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -874,13 +880,13 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     lst_res = None
     if lst is not False:
         lkey = partial.key("lst", ctx.as_dict(), campaign.isoformat(), _provider_id(lst, "landsat_lst"),
-                           lst_window_days, lst_min_clear, np.packbits(study).tobytes().hex())
+                           lst_window_days, lst_min_clear, lst_prefer_clear, np.packbits(study).tobytes().hex())
         got = partial.load("lst", lkey)
         if got is not None:
             lst_res = {**got[1], "lst_c": got[0].get("lst_c")}
         else:
-            lst_res = (lst or (lambda c, d, s: landsat_lst(c, d, s, lst_window_days, lst_min_clear, cache_dir)))(
-                ctx, campaign, study)
+            lst_res = (lst or (lambda c, d, s: landsat_lst(c, d, s, lst_window_days, lst_min_clear, cache_dir,
+                                                           lst_prefer_clear)))(ctx, campaign, study)
             check_lst_result(lst_res)                 # a provider's read failures never pass as "no clear scene"
             partial.save("lst", lkey, None if lst_res.get("lst_c") is None else {"lst_c": lst_res["lst_c"]},
                          {k: v for k, v in lst_res.items() if k != "lst_c"})

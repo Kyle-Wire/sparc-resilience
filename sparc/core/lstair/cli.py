@@ -48,6 +48,8 @@ def add_lstair_parser(subs) -> None:
                         "them (SE ≤ 0.3 °C/h; else CAPA's line through the hour), protocol (always the line), none")
     d.add_argument("--lst-window-days", type=int, default=16, help="Landsat search window ± days (default 16)")
     d.add_argument("--lst-min-clear", type=float, default=0.5, help="minimum clear fraction over the study area")
+    d.add_argument("--lst-prefer-clear", type=float, default=0.8,
+                   help="the nearest scene at least this clear is taken; else the clearest above --lst-min-clear")
     d.add_argument("--cache", default=None, help="Landsat COG window cache (default OUT/cache/landsat)")
     d.set_defaults(func=_tracked(cmd_dataset))
 
@@ -128,7 +130,7 @@ def cmd_dataset(args) -> int:
     out = Path(args.out)
     cities = _cities(args.cities)
     kw = dict(cell_m=args.cell, margin_m=args.margin, drift=args.drift, lst_window_days=args.lst_window_days,
-              lst_min_clear=args.lst_min_clear, cache_dir=Path(args.cache) if args.cache else out / "cache" / "landsat",
+              lst_min_clear=args.lst_min_clear, lst_prefer_clear=args.lst_prefer_clear, cache_dir=Path(args.cache) if args.cache else out / "cache" / "landsat",
               skip_files=() if args.keep_appendix else D.SKIP_FILES, campaign_dates=_dates(args.campaign_date))
     try:
         # one call for every city (each converts a --utc clock with its own time zone), so a city is never built

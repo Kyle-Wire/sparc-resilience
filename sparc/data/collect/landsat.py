@@ -597,6 +597,7 @@ def campaign_lst(
     window_days: int = 16,
     min_clear: float = 0.5,
     n_scenes: int = 1,
+    prefer_clear: float = 0.8,
     platforms: tuple[str, ...] = LST_PLATFORMS,
     cloud_cover_max: float = 100.0,
     target: Optional[dict] = None,
@@ -611,10 +612,14 @@ def campaign_lst(
     Method.  Scenes of ``platforms`` acquired within ``campaign_date ± window_days`` are ordered by their
     distance in days from the campaign (ties broken by scene id).  For each, in that order, QA_PIXEL is read over the study area and
     reprojected onto ``target`` (nearest), and its **clear fraction** is the share of study-area cells
-    with none of ``qa_bits`` set and inside the scene's footprint.  The first ``n_scenes`` scenes with a
-    clear fraction ≥ ``min_clear`` are kept; their ST_B10 is scaled to kelvin, masked with QA and
-    reprojected (bilinear), and with more than one scene the pixel-wise median of the masked scenes is
-    the LST.  Scene-level ``eo:cloud_cover`` describes the whole 185 km scene, so it only pre-filters
+    with none of ``qa_bits`` set and inside the scene's footprint.  With one scene (default) the kept scene
+    is the **nearest with a clear fraction ≥ ``prefer_clear``** (0.8), else, when none is that clear, the
+    **clearest** with ≥ ``min_clear`` (ties: the nearer): the nearest-date rule kept a 60%-clear scene over a
+    fully clear one 8 days further (LA 2019: 38% of the driven cells lost LST), and a scene a week further
+    is a smaller error than a third of the city missing.  With ``n_scenes`` > 1 the first ``n_scenes``
+    scenes with ≥ ``min_clear`` in date order are kept and their median fills each other's gaps.  The kept
+    scenes' ST_B10 is scaled to kelvin, masked with QA and reprojected (bilinear), and with more than one
+    scene the pixel-wise median of the masked scenes is the LST; ``selection`` states the rule that chose.  Scene-level ``eo:cloud_cover`` describes the whole 185 km scene, so it only pre-filters
     (``cloud_cover_max``, default no filter); the study-area clear fraction decides.
 
     ``study_mask`` (bool, ``target`` shape) defines the study area; default the target cells inside
@@ -660,13 +665,20 @@ def campaign_lst(
     scenes = [s for s in scenes if abs(s["_offset"]) <= window_days]
     scenes.sort(key=lambda s: (abs(s["_offset"]), str(s.get("id"))))
 
-    candidates, kept, stack = [], [], []
-    for s in scenes:
+    candidates, kept, stack, ok = [], [], [], []
+    single = int(n_scenes) == 1
+
+    def enough() -> bool:
+        if single:
+            return any(c["clear_fraction"] >= prefer_clear for c, _ in ok)
+        return len(ok) >= int(n_scenes)
+
+    for s in scenes:                                 # QA of each scene, nearest first, until the rule is met
         rec = {"id": s.get("id"), "date": s["_date"].isoformat(), "datetime": s.get("datetime"),
                "platform": s.get("platform"), "offset_days": int(s["_offset"]),
                "cloud_cover": s.get("cloud_cover"), "clear_fraction": None, "inspected": False, "selected": False}
         candidates.append(rec)
-        if len(kept) >= n_scenes:
+        if enough():
             continue
         rec["inspected"] = True
         qa_href = _asset_href(s, "qa")
@@ -683,20 +695,41 @@ def campaign_lst(
             qa_t = reproject_array(np.asarray(qa_arr).astype(np.uint16), qa_tr, qa_crs, target, "nearest",
                                    nodata=1)
             bad = qa_mask(qa_t, qa_bits)
-            clear = float(np.mean(~bad[study_mask]))
-            rec["clear_fraction"] = clear
-            if clear < min_clear:
-                continue
+            rec["clear_fraction"] = float(np.mean(~bad[study_mask]))
+        except Exception as exc:                     # noqa: BLE001 - a broken scene is recorded, not fatal
+            rec["error"] = str(exc).splitlines()[0][:200] if str(exc) else repr(exc)[:200]
+            rec["error_kind"] = io_error_kind(exc) or "data"
+            rec["host"] = href_host(qa_href)
+            log.warning("landsat: skipping %s (%s: %s)", s.get("id"), rec["error_kind"], rec["error"])
+            continue
+        if rec["clear_fraction"] >= min_clear:
+            ok.append((rec, {"scene": s, "st_href": st_href, "qa": (qa_arr, qa_tr, qa_crs), "bad": bad}))
+    if single:
+        good = [x for x in ok if x[0]["clear_fraction"] >= prefer_clear]
+        first = good[0] if good else None
+        order = ([first] if first else []) + sorted([x for x in ok if x is not first],
+                                                    key=lambda x: (-x[0]["clear_fraction"], abs(x[0]["offset_days"])))
+        selection = (f"the nearest scene ≥ {prefer_clear:.0%} clear" if good else
+                     f"no scene ≥ {prefer_clear:.0%} clear: the clearest ≥ {min_clear:.0%}")
+    else:
+        order = ok
+        selection = f"the {int(n_scenes)} nearest scenes ≥ {min_clear:.0%} clear (median)"
+    for rec, d in order:                             # thermal of the chosen scene(s); the next if one fails
+        if len(kept) >= int(n_scenes):
+            break
+        s, st_href = d["scene"], d["st_href"]
+        qa_arr, qa_tr, qa_crs = d["qa"]
+        try:
             st_arr, st_tr, st_crs = _cached_read(s, "lwir11", st_href, bbox, reader, cache_dir)
             k_native = st_to_kelvin(st_arr)
             qa_native = _qa_on(st_arr, st_tr, st_crs, qa_arr, qa_tr, qa_crs)
             k_native[qa_mask(qa_native, qa_bits)] = np.nan
             k_t = reproject_array(k_native, st_tr, st_crs, target, "bilinear")
-            k_t[bad] = np.nan
+            k_t[d["bad"]] = np.nan
         except Exception as exc:                     # noqa: BLE001 - a broken scene is recorded, not fatal
             rec["error"] = str(exc).splitlines()[0][:200] if str(exc) else repr(exc)[:200]
             rec["error_kind"] = io_error_kind(exc) or "data"
-            rec["host"] = href_host(st_href if rec.get("clear_fraction") is not None else qa_href)
+            rec["host"] = href_host(st_href)
             log.warning("landsat: skipping %s (%s: %s)", s.get("id"), rec["error_kind"], rec["error"])
             continue
         rec["selected"] = True
@@ -720,7 +753,8 @@ def campaign_lst(
     return {"lst_k": lst_k, "lst_c": None if lst_k is None else lst_k - KELVIN, "georef": target,
             "scenes": kept, "candidates": candidates, "campaign_date": campaign_date.isoformat(),
             "window_days": int(window_days), "min_clear": float(min_clear), "qa_masked": list(qa_bits),
-            "platforms": list(platforms), "status": status, "io_errors": io_errors}
+            "platforms": list(platforms), "status": status, "io_errors": io_errors,
+            "selection": selection if kept else None, "prefer_clear": float(prefer_clear)}
 
 
 def _qa_on(arr, tr, crs, qa_arr, qa_tr, qa_crs) -> np.ndarray:

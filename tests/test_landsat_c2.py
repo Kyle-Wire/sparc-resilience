@@ -319,3 +319,31 @@ def test_campaign_lst_default_search_is_planetary_computer_with_required_signing
     L.search_pc((0, 0, 1, 1), date(2020, 7, 1), date(2020, 7, 31))
     (args, kw), = calls
     assert args[0] == L.PC_STAC and kw == {"sign_assets": True, "require_signing": True}
+
+
+def test_a_fully_clear_scene_a_week_further_beats_a_partly_cloudy_nearer_one():
+    """R19 (LA 2019): the nearest-date rule kept LC08 2019-09-19 (+4 d, 60% clear) over 2019-09-03 (−12 d, 99.9%
+    clear), and 38% of the driven cells lost their LST."""
+    T = from_origin(X0, Y1, 30.0, 30.0)
+    n = 40
+    data = {}
+
+    def add(sid, day, cloudy_rows):
+        qa = np.full((n, n), 1 << 6, dtype=np.uint16)
+        qa[:cloudy_rows] = 1 << 3
+        data[f"mem://{sid}/qa"] = qa
+        data[f"mem://{sid}/st"] = np.full((n, n), int((300.0 - 149.0) / 0.00341802), dtype=np.uint16)
+        return {"id": sid, "datetime": f"{day}T18:30:00Z", "cloud_cover": 10.0, "platform": "landsat-8",
+                "assets": {"qa_pixel": {"href": f"mem://{sid}/qa"}, "lwir11": {"href": f"mem://{sid}/st"}}}
+
+    tgt = {"transform": T, "crs": UTM, "shape": (n, n)}
+    kw = dict(window_days=16, min_clear=0.5, target=tgt, study_mask=np.ones((n, n), bool),
+              reader=lambda h, b: (data[h], T, UTM))
+    near, far = add("p_plus4", "2019-09-19", 16), add("c_minus12", "2019-09-03", 0)       # 60% vs 100% clear
+    res = L.campaign_lst((-118.3, 34.0, -118.2, 34.1), date(2019, 9, 15), search=lambda b, d0, d1: [near, far], **kw)
+    assert [s["id"] for s in res["scenes"]] == ["c_minus12"] and "nearest scene ≥ 80% clear" in res["selection"]
+    assert np.isfinite(res["lst_c"]).all()
+    # no scene 80% clear: the clearest one ≥ min_clear, not the nearest
+    a, b = add("a_plus2", "2019-09-17", 16), add("b_minus5", "2019-09-10", 12)             # 60% vs 70%
+    res2 = L.campaign_lst((-118.3, 34.0, -118.2, 34.1), date(2019, 9, 15), search=lambda b_, d0, d1: [a, b], **kw)
+    assert [s["id"] for s in res2["scenes"]] == ["b_minus5"] and "clearest" in res2["selection"]
