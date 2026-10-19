@@ -19,6 +19,42 @@ scale of the city, but only from the vehicle traverses, not from the gridded tem
 Providence traverses are on OSF (project `wu9v7`). The method is built, validated on Providence's own
 layout, and runs on the downloaded folder as it is ([below](#running-it-on-the-real-traverses)).
 
+## Result on the real Providence traverses (2026-10-19)
+
+**Data and runs.**
+- OSF `wu9v7`, "All Data_Heat Watch RI_100620.zip": read as downloaded, 4 runs of about 15,000 one-second readings each, from 6 vehicles.
+- **Readings used.** 9,007 cell visits on 81 passes by 12 vehicle runs, covering 3,165 cells (6% of the grid).
+- **Validation.** The lab was rerun on this layout, and every verdict below comes from it.
+
+| Canopy raised by +10 pp | Estimate (all runs) | 95% CI | Lab verdict on this layout |
+|---|---|---|---|
+| within 100 m of a street point | **−0.03 °F** | −0.07 to +0.02 | trustworthy |
+| within 300 m | −0.11 °F | −0.17 to −0.04 | direction only (cooling) |
+| within 1 km | −0.26 °F | −0.47 to −0.04 | not trustworthy |
+| city-wide | cools street air by **at least 0.05 °F** | one-sided 95% floor | validated as a floor |
+
+By run, canopy within 100 m:
+
+| Run | Estimate | 95% CI |
+|---|---|---|
+| morning (06–07) | −0.03 °F | −0.09 to +0.04 |
+| **afternoon (15–16)** | **+0.02 °F** | −0.13 to +0.17 |
+| evening (19–20) | −0.08 °F | −0.11 to −0.04 |
+| night (00–01) | −0.02 °F | −0.04 to +0.01 |
+
+The lab validates the design for the afternoon run (see Limits); the other runs use the same design.
+
+**Wind-shift test.** The 4 runs had winds 70° apart at most. The test reads +0.08 °F (95% CI −0.01 to +0.17; rotation p = 0.56), so it is not detected. The kilometre lab under these four winds gives it 0% power, so this campaign cannot speak to advected cooling.
+
+**What this means.**
+- **Afternoon block scale.** There is no detectable canopy effect: an afternoon block-scale effect larger than about 0.1 °F per 10 pp is unlikely.
+- **Agreement with the physics.** This matches the physics model's identifiability study (PHYSICS_PLAN §9, 2026-10-16): on the data alone, afternoon shading is 0, with a one-sided bound of s ≤ 0.35.
+- **Evening.** A small block-scale cooling is detected in the evening run.
+- **Neighbourhood and city scale.** Canopy within 300 m cools in direction, and a city-wide planting is bounded below at 0.05 °F per 10 pp.
+- **The model's −0.19 °F.** The map-based model's −0.19 °F for +10 pp (S5) cannot be confirmed or refuted at the kilometre scale from this campaign. It is not supported at the block scale in the afternoon.
+
+Outputs: `identify_estimate.{json,md}`, `identify_lab.{json,md}` and `identify_kmlab.{json,md}`, written to the folder given by `--out`.
+
 Code: `sparc/core/identify/`. Lab output: `output/core/providence/identify/identify_lab.{json,md}` and
 `identify_kmlab.{json,md}`.
 Results page: section "Can canopy's own effect be isolated?".

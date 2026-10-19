@@ -702,7 +702,7 @@ User guide: `docs/studio/USER_GUIDE.md`. Developer guide: `docs/studio/DEVELOPIN
 - New commands: `inspect` and `kmlab`.
 
 **Open.**
-- Run `estimate` on Providence's traverses (OSF `wu9v7`).
+- ~~Run `estimate` on Providence's traverses (OSF `wu9v7`).~~ Done 2026-10-19: see [canopy_identification.md](../results/canopy_identification.md#result-on-the-real-providence-traverses-2026-10-19). Canopy within 100 m: −0.03 °F per +10 pp (95% CI −0.07 to +0.02; afternoon +0.02); the 300 m design shows cooling in direction; the city-wide floor is 0.05 °F.
 - Pool the floor and the wind-shift test across many cities' Heat Watch campaigns: the only route to the kilometre-scale value.
 
 ## Appendix B — References
