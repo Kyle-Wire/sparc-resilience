@@ -12,6 +12,22 @@ Each entry:
   year        — Campaign year (omitted if unknown).
   state       — US state abbreviation.
 
+Optional, where the catalog knows it (see :func:`availability`,
+:func:`traverse_node`, :func:`campaign_date`):
+  traverse_node        — OSF node holding the raw traverse points, when it
+                         differs from or is confirmed apart from ``osf_node``.
+  campaign_date        — ISO date of the campaign day.
+  campaign_date_source — where that date comes from: "traverse timestamps"
+                         (the readings' own clock), "filename_guess" or
+                         "era5_matched" (circular for ERA5 features; see
+                         configs/multicity_pilot.yml).
+  availability         — {"traverse_points": bool | None, "rasters": bool | None}:
+                         whether the node is known to hold the raw traverse
+                         points (the measurements) and CAPA's interpolated
+                         area-wide rasters (a land-cover model of them, not a
+                         measurement); None = not known to the catalog.
+  availability_source  — where the availability statement comes from.
+
 Multi-city nodes:
   tdsy7  — 2019 NIHHIS campaign (~25 cities in one OSF project)
   3xvmg  — Virginia cities (Abingdon, Arlington, Farmville, Lynchburg, Petersburg)
@@ -50,8 +66,14 @@ CAPA_CATALOG: dict[str, dict] = {
         "utm_epsg": "EPSG:32619", "year": 2023, "state": "MA",
     },
     "Providence, RI": {
-        "osf_node": "tdsy7", "folder_hint": "Providence",
-        "utm_epsg": "EPSG:32619", "year": 2019, "state": "RI",
+        # 2020 RI Heat Watch (not the 2019 NIHHIS project tdsy7): the traverses are OSF wu9v7,
+        # four runs on 2020-07-29 (am/af/pm, plus mi 00-01 on 07-30) dated by the readings' own clock.
+        "osf_node": "wu9v7", "folder_hint": None, "traverse_node": "wu9v7",
+        "utm_epsg": "EPSG:32619", "year": 2020, "state": "RI",
+        "campaign_date": "2020-07-29", "campaign_date_source": "traverse timestamps",
+        "availability": {"traverse_points": True, "rasters": None},
+        "availability_source": "docs/results/canopy_identification.md (the wu9v7 download: am/af/pm/mi_trav "
+                               "point shapefiles); rasters in wu9v7 not verified",
     },
 
     # ── MID-ATLANTIC ───────────────────────────────────────────────────────
@@ -322,6 +344,35 @@ CAPA_CATALOG: dict[str, dict] = {
 # ---------------------------------------------------------------------------
 # Public helpers
 # ---------------------------------------------------------------------------
+
+AVAILABILITY_KEYS = ("traverse_points", "rasters")
+
+
+def availability(entry: dict) -> dict:
+    """``{"traverse_points": bool | None, "rasters": bool | None}`` for a catalog entry.
+
+    True / False only where the catalog states it (``entry["availability"]``); None means not known
+    (the node may or may not hold that kind of file).  Traverse points are the vehicle measurements;
+    rasters are CAPA's interpolated area-wide maps, a land-cover model of those measurements."""
+    av = (entry or {}).get("availability") or {}
+    return {k: (None if av.get(k) is None else bool(av.get(k))) for k in AVAILABILITY_KEYS}
+
+
+def traverse_node(entry: dict) -> tuple[str | None, str | None]:
+    """(OSF node, folder hint) to search for the raw traverse points of a catalog entry."""
+    entry = entry or {}
+    if entry.get("traverse_node"):
+        same = entry["traverse_node"] == entry.get("osf_node")
+        return entry["traverse_node"], (entry.get("folder_hint") if same else entry.get("traverse_folder_hint"))
+    return entry.get("osf_node"), entry.get("folder_hint")
+
+
+def campaign_date(entry: dict) -> tuple[str | None, str | None]:
+    """(ISO campaign date, its source) when the catalog records one, else (None, None)."""
+    entry = entry or {}
+    d = entry.get("campaign_date")
+    return (str(d), entry.get("campaign_date_source") or "unknown") if d else (None, None)
+
 
 def list_cities() -> list[str]:
     """Return all city names in the catalog, sorted alphabetically."""
