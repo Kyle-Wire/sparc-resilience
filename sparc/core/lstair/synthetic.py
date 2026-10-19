@@ -210,9 +210,11 @@ def validation_markdown(v: dict) -> str:
     def f(x):
         return "—" if x is None else f"{x:+.4f}"
 
+    def ci(p):
+        return "—" if not p.get("ci95") else f"{p['ci95'][0]:+.4f} to {p['ci95'][1]:+.4f}"
+
     for r in v["rows"]:
         b, c = r["B-A"], r["C-A"]
-        ci = (lambda p: "—" if not p.get("ci95") else f"{p['ci95'][0]:+.4f} to {p['ci95'][1]:+.4f}")
         extra = ""
         if "share_of_informative_gain" in r:
             sh = r["share_of_informative_gain"]
