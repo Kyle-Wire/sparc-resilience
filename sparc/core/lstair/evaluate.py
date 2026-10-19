@@ -29,7 +29,9 @@ Models
   transferred in physical units, a/forcing, and the LST term as the median over cities of the product
   a_phys·h_lst (the air's K-per-K response to LST, which the data determine; a and c_lst trade off within a fit),
   both converted back with the held-out city's own forcing (ERA5 SW↓ of the run, else a default per run); the
-  intercept and the linear trend are city-specific and set to 0.  No label of the held-out city is used.
+  intercept and the linear trend are city-specific and set to 0.  The regime is fixed per window (af and am day,
+  pm and ni night: :data:`WINDOW_REGIME`), so every city of a window is fitted, and transferred, with one source
+  formula; parameters the regime's source does not use are listed as unused, never transferred as information.  No label of the held-out city is used.
   ``C0`` is the same physics without LST (secondary).  C − C0 shows what LST adds *inside the physics*, not
   beyond land cover: the physics' land-cover source has a fixed form, and an LST that is only a function of land
   cover can still make up for what that form misses (the toy worlds of the tests show it).  The test of the
@@ -348,14 +350,26 @@ def physics_inputs(city: CityData, run: str, use_lst: bool, cell_m: float, run_i
     y[s.index.to_numpy()] = s.to_numpy()
     coords = np.column_stack([x0 + ix * dx, y0 + iy * dx]).astype(float)
     sw, lw, fsrc = _forcing(city, run, run_id)
-    return {"grid": grid, "frame": frame, "y": y, "coords": coords, "coarse": coarse, "roles": roles,
+    return {"grid": grid, "frame": frame, "y": y, "coords": coords, "coarse": coarse, "roles": roles, "run": run,
             "factor": k, "sw": sw, "lw": lw, "forcing_source": fsrc, "table": t, "run_id": run_id,
             "background": float(t["ta_background"].iloc[0]) if len(t) else 0.0}
 
 
+#: The physics regime of each Heat Watch window, fixed per window (not per city's ERA5 SW: the 6–7 h and 19–20 h
+#: runs straddle any SW threshold, and a transfer would then mix the day and night source formulas).
+WINDOW_REGIME = {"af": "day", "am": "day", "pm": "night", "ni": "night"}
+#: The parameters each regime's source uses (the others keep their starting values in a fit: never transferred).
+REGIME_KEYS = {"day": ("L", "s", "kc", "a1", "e0", "e1", "e2", "e3", "w"),
+               "night": ("L", "a1n", "e0", "e1", "e2", "e3", "w")}
+
+
+def regime(run: str, sw: float) -> str:
+    return WINDOW_REGIME.get(str(run), "day" if sw > 50.0 else "night")
+
+
 def physics_cfg(inp: dict, s: Settings) -> dict:
-    day = inp["sw"] > 50.0
-    return {"roles": {r: r for r in inp["roles"]}, "window": "day" if day else "night", "sw_down": inp["sw"],
+    window = regime(inp.get("run", ""), inp["sw"])
+    return {"roles": {r: r for r in inp["roles"]}, "window": window, "sw_down": inp["sw"],
             "lw_net": inp["lw"], "fit_advection": False, "max_iter": int(s.physics_iter),
             "L_max_m": float(s.physics_L_max_m), "num_threads": 1, "lst_background": inp["background"]}
 
@@ -407,10 +421,16 @@ def transfer_params(fits: list[dict], use_lst: bool) -> dict:
     transferred LST gain is the **median of the per-city products** g = a_phys·h_lst (K per K), and h_lst is set
     to g / median(a_phys), so the held-out city gets a·c_lst = g; median(a_phys) itself serves the land-cover
     source only.  With median(a_phys) ≤ 0 the LST term cannot be carried and h_lst is 0 (recorded)."""
+    want = regime_of_fits(fits)
+    if want is not None:
+        fits = [f for f in fits if f.get("window", want) == want]          # one source formula, never a mix
+    keys = REGIME_KEYS.get(want or "day", TRANSFER_KEYS)
     nat = {k: float(np.median([f["natural"][k] for f in fits])) for k in TRANSFER_KEYS}
     a_med = float(np.median([f["a_phys"] for f in fits]))
     out = {"natural": nat, "a_phys": a_med, "gamma": float(np.median([f["gamma"] for f in fits])),
-           "n_cities": len(fits), "cities": [f["slug"] for f in fits]}
+           "n_cities": len(fits), "cities": [f["slug"] for f in fits], "regime": want,
+           "fitted_keys": list(keys),
+           "unused_keys": [k for k in TRANSFER_KEYS if k not in keys]}           # unused by the regime's source
     if use_lst:
         g = float(np.median([f.get("g_lst", f["a_phys"] * f["h_lst"]) for f in fits]))
         out["g_lst"] = g
@@ -418,6 +438,12 @@ def transfer_params(fits: list[dict], use_lst: bool) -> dict:
         if a_med <= 0:
             out["note"] = "median gain a_phys ≤ 0: the LST term cannot be carried (h_lst = 0)"
     return out
+
+
+def regime_of_fits(fits: list[dict]) -> str | None:
+    """The regime most of ``fits`` were fitted in (their ``window``), None when they do not say."""
+    w = [f.get("window") for f in fits if f.get("window")]
+    return max(set(w), key=w.count) if w else None
 
 
 def predict_physics(city: CityData, run: str, use_lst: bool, tp: dict, s: Settings) -> pd.Series:
@@ -853,6 +879,6 @@ def _json(o):
 
 
 __all__ = ["Settings", "design", "A_COLS", "B_COLS", "LST_COLS", "city_metrics", "paired", "sign_flip", "centre",
-           "inner_select", "campaign_groups", "recentre_target",
+           "inner_select", "campaign_groups", "recentre_target", "WINDOW_REGIME", "regime",
            "fit_city_physics", "transfer_params", "predict_physics", "physics_fits", "evaluate_window", "evaluate",
            "results_markdown", "run_evaluation", "TRANSFER_RULE", "MIN_VERDICT_CITIES"]

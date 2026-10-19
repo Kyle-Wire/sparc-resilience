@@ -321,3 +321,19 @@ def test_the_lst_gain_is_transferred_as_the_median_of_the_per_city_products():
     assert tp["a_phys"] * tp["h_lst"] == pytest.approx(3.0)                       # not median(a)·median(h) = 4
     zero = E.transfer_params([{**f, "a_phys": 0.0} for f in fits], True)
     assert zero["h_lst"] == 0.0 and "cannot" in zero["note"]
+
+
+def test_the_physics_regime_is_fixed_per_window_and_transfer_never_mixes_regimes():
+    """R5: am/pm runs straddle SW ≈ 50 W m⁻²; per-city regimes mixed the day and night source formulas in the
+    transfer and handed a night city starting values of parameters no night fit uses."""
+    base = {"grid": None, "roles": [], "lw": -80.0, "background": 0.0}
+    assert E.physics_cfg({**base, "run": "am", "sw": 30.0}, FAST)["window"] == "day"
+    assert E.physics_cfg({**base, "run": "pm", "sw": 80.0}, FAST)["window"] == "night"
+    assert E.physics_cfg({**base, "run": "af", "sw": 650.0}, FAST)["window"] == "day"
+    nat = {k: 1.0 for k in E.TRANSFER_KEYS}
+    fits = [{"slug": "n1", "window": "night", "natural": {**nat, "a1n": 0.4}, "a_phys": 1.0, "gamma": 0.0},
+            {"slug": "n2", "window": "night", "natural": {**nat, "a1n": 0.6}, "a_phys": 2.0, "gamma": 0.0},
+            {"slug": "d1", "window": "day", "natural": {**nat, "a1n": 0.5}, "a_phys": 99.0, "gamma": 0.0}]
+    tp = E.transfer_params(fits, False)
+    assert tp["regime"] == "night" and tp["cities"] == ["n1", "n2"] and tp["a_phys"] == pytest.approx(1.5)
+    assert tp["natural"]["a1n"] == pytest.approx(0.5) and {"s", "kc", "a1"} <= set(tp["unused_keys"])
