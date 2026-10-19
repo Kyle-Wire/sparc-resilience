@@ -36,15 +36,18 @@ own definition; it uses positions, not labels).
 Scores and verdict
 ------------------
 Per held-out city: RMSE (°C), R² (1 − SSE/SST about the city's mean anomaly) and the spatial Pearson r.  Paired
-comparisons B − A and C − A: the mean over held-out cities of the difference in MSE, with a 95% percentile
-bootstrap over cities (Efron & Tibshirani 1993).  The verdict "LST adds information beyond land cover" is given
-only when the 95% interval of B − A lies below 0 (C − A likewise for the physics); otherwise "not shown" (and,
-when the interval lies above 0, LST made predictions worse).  With fewer than :data:`MIN_VERDICT_CITIES` held-out
-cities the verdict is "not testable".  A secondary within-city block CV (1 km blocks) is reported and labelled
+comparisons B − A and C − A: the mean over held-out cities of the difference in MSE, with a 95% t-interval
+(n − 1 df) and a one-sided sign-flip test over cities (:func:`paired`; exact for up to 16 cities).  The verdict
+"LST adds information beyond land cover" is given only when the sign-flip p ≤ 0.025, the t-interval of B − A lies
+below 0 and the MSE falls by at least 5% (C − A likewise for the physics); otherwise "not shown" (and, when the
+interval lies above 0, LST made predictions worse).  With fewer than :data:`MIN_VERDICT_CITIES` (8) held-out
+cities the verdict is "not testable": with 5 the smallest sign-flip p is 1/32, and a percentile bootstrap over so
+few cities claimed at about three times its nominal rate under a true null.  A secondary within-city block CV (1 km blocks) is reported and labelled
 interpolation-prone: held-out blocks share the city's weather, streets and campaign with the training blocks, and
 CAPA's own maps are built this way (Shandas et al. 2019).
 
-References: Efron, B. & Tibshirani, R.J. (1993), *An Introduction to the Bootstrap*, Chapman & Hall; Hastie, T. &
+References: Fisher, R.A. (1935), *The Design of Experiments*, Oliver & Boyd (the randomisation test); Good, P.
+(2005), *Permutation, Parametric and Bootstrap Tests of Hypotheses*, 3rd ed., Springer; Hastie, T. &
 Tibshirani, R. (1990), *Generalized Additive Models*, Chapman & Hall; Ho et al. (2014), *RSE* 154, 38–45,
 doi:10.1016/j.rse.2014.08.012 (random forest for daytime maximum air temperature, RMSE 2.31 °C); Roberts et al.
 (2017), *Ecography* 40(8), 913–929, doi:10.1111/ecog.02881 (block cross-validation for dependent data).
@@ -69,7 +72,10 @@ from sparc.core.lstair.dataset import FEATURES, FOCAL_FEATURES, FOCAL_RADII, LST
 log = logging.getLogger(__name__)
 
 MIN_CITIES = 3                 # leave-one-city-out needs at least two training cities
-MIN_VERDICT_CITIES = 5         # fewer held-out cities: the bootstrap over cities is too coarse for a verdict
+MIN_VERDICT_CITIES = 8         # fewer held-out cities: no verdict (with 5 the smallest sign-flip p is 1/32)
+ALPHA = 0.025                  # one-sided level of the paired test (the claim is a one-sided improvement)
+MIN_REL_GAIN = 0.05            # the claim also needs a relative MSE reduction of at least 5%
+EXACT_SIGN_FLIP_MAX = 16       # up to this many cities every sign vector is enumerated (2^16)
 MIN_CELLS = 30                 # a run with fewer driven cells is not scored
 DEFAULT_FORCING = {"af": (650.0, -90.0), "am": (150.0, -60.0), "pm": (40.0, -80.0), "ni": (0.0, -80.0)}
 RHO_CP = 1170.0                # J m⁻³ K⁻¹ (air near 30 °C), for the implied r_a
@@ -374,30 +380,77 @@ def physics_fits(cities: list[CityData], run: str, use_lst: bool, s: Settings, c
 # --------------------------------------------------------------------------- #
 # Paired comparison and verdict                                                #
 # --------------------------------------------------------------------------- #
+def sign_flip(d: np.ndarray, draws: int = 4000, seed: int = 0) -> dict:
+    """One-sided sign-flip (randomisation) test of a mean paired difference over independent units.
+
+    Under the null that each unit's difference is symmetric about 0, every assignment of signs is equally
+    likely; the p-value of an improvement (mean < 0) is the share of the 2ⁿ sign vectors whose mean is at most
+    the observed one (Fisher 1935; Good 2005).  Exact (all 2ⁿ vectors) up to :data:`EXACT_SIGN_FLIP_MAX` units,
+    else ``draws`` random vectors plus the observed one.  With 5 units the smallest p is 1/32 > 0.025: no claim
+    is possible, which is the honest answer."""
+    d = np.asarray(d, float)
+    n = d.size
+    obs = float(d.mean())
+    if n <= EXACT_SIGN_FLIP_MAX:
+        signs = (((np.arange(2 ** n)[:, None] >> np.arange(n)) & 1) * 2 - 1).astype(float)
+        method = f"exact ({2 ** n} sign vectors)"
+    else:
+        rng = np.random.default_rng(seed)
+        signs = np.vstack([np.ones(n), rng.choice([-1.0, 1.0], size=(int(draws), n))])
+        method = f"Monte Carlo ({int(draws)} sign vectors + the observed)"
+    means = signs @ d / n
+    tol = 1e-12 * max(1.0, abs(obs))
+    return {"p_less": float(np.mean(means <= obs + tol)), "p_greater": float(np.mean(means >= obs - tol)),
+            "method": method}
+
+
 def paired(mse_x: np.ndarray, mse_a: np.ndarray, boot: int = 4000, seed: int = 0, label: str = "B − A",
            claim: str = "LST adds information beyond land cover") -> dict:
-    """Mean over cities of MSE_x − MSE_A with a 95% percentile bootstrap over cities, and the verdict."""
+    """Mean over held-out units (cities, or campaign groups) of MSE_x − MSE_A, its 95% t-interval (n − 1 df) and
+    a one-sided sign-flip test, and the verdict.
+
+    The claim is made only when all three hold: the sign-flip p of an improvement is at most :data:`ALPHA`
+    (0.025), the t-interval lies below 0, and the relative MSE change is at most −:data:`MIN_REL_GAIN` (5%).
+    With fewer than :data:`MIN_VERDICT_CITIES` units the verdict is "not testable".  (A percentile bootstrap over
+    5–10 cities ignored the n − 1 degrees of freedom and claimed at about three times its stated rate under a
+    true null.)  ``boot`` is the number of random sign vectors when the test cannot be enumerated."""
+    from scipy import stats
+
     d = np.asarray(mse_x, float) - np.asarray(mse_a, float)
     n = d.size
     out = {"comparison": label, "n_cities": int(n), "claim": claim}
     if n == 0:
         out.update(verdict="not testable", reason="no held-out city")
         return out
-    rng = np.random.default_rng(seed)
-    bm = d[rng.integers(0, n, size=(int(boot), n))].mean(axis=1)
-    lo, hi = (float(x) for x in np.percentile(bm, [2.5, 97.5]))
     mean = float(d.mean())
-    out.update(mean_diff_mse=mean, ci95=[lo, hi], rel_change=mean / float(np.mean(mse_a)) if np.mean(mse_a) > 0 else None,
-               n_better=int((d < 0).sum()), n_worse=int((d > 0).sum()), boot=int(boot))
+    base = float(np.mean(mse_a))
+    rel = mean / base if base > 0 else None
+    out.update(mean_diff_mse=mean, rel_change=rel, n_better=int((d < 0).sum()), n_worse=int((d > 0).sum()),
+               alpha_one_sided=ALPHA, min_rel_gain=MIN_REL_GAIN)
+    if n >= 2:
+        se = float(d.std(ddof=1)) / math.sqrt(n)
+        t = float(stats.t.ppf(1.0 - ALPHA, n - 1))
+        lo, hi = mean - t * se, mean + t * se
+        out.update(ci95=[float(lo), float(hi)], ci_method=f"t-interval, {n - 1} df")
+        sf = sign_flip(d, boot, seed)
+        out.update(p_sign_flip=sf["p_less"], p_sign_flip_worse=sf["p_greater"], sign_flip=sf["method"])
     if n < MIN_VERDICT_CITIES:
-        out.update(verdict="not testable", reason=f"{n} held-out cities (< {MIN_VERDICT_CITIES}): too few for a "
-                                                  "bootstrap over cities")
-    elif hi < 0:
-        out.update(verdict=claim, reason="the 95% interval of the paired MSE difference lies below 0")
-    elif lo > 0:
-        out.update(verdict="not shown", reason="the 95% interval lies above 0: adding it made predictions worse")
+        out.update(verdict="not testable", reason=f"{n} held-out units (< {MIN_VERDICT_CITIES}): too few for a test "
+                                                  "over cities")
+        return out
+    better = out["p_sign_flip"] <= ALPHA and out["ci95"][1] < 0
+    worse = out["p_sign_flip_worse"] <= ALPHA and out["ci95"][0] > 0
+    if better and rel is not None and rel <= -MIN_REL_GAIN:
+        out.update(verdict=claim, reason=f"sign-flip p = {out['p_sign_flip']:.3g} ≤ {ALPHA}, the 95% t-interval of "
+                                         f"the paired MSE difference lies below 0 and MSE falls by {-100 * rel:.0f}%")
+    elif better:
+        out.update(verdict="not shown", reason=f"significant (sign-flip p = {out['p_sign_flip']:.3g}) but the MSE falls "
+                                               f"by only {-100 * (rel or 0):.1f}% (< {100 * MIN_REL_GAIN:.0f}%)")
+    elif worse:
+        out.update(verdict="not shown", reason="the 95% t-interval lies above 0: adding it made predictions worse")
     else:
-        out.update(verdict="not shown", reason="the 95% interval of the paired MSE difference includes 0")
+        out.update(verdict="not shown", reason=f"sign-flip p = {out['p_sign_flip']:.3g} (one-sided) and the 95% "
+                                               f"t-interval {out['ci95'][0]:+.4f} to {out['ci95'][1]:+.4f}")
     return out
 
 
@@ -585,15 +638,16 @@ def results_markdown(res: dict) -> str:
             continue
         pb = w["paired"]["B-A"]
         L += [f"**Verdict: {pb['verdict']}.** {pb.get('reason', '')}.", ""]
-        L += ["| comparison | mean ΔMSE (°C²) | 95% CI (bootstrap over cities) | relative | cities better / worse | verdict |",
-              "|---|---|---|---|---|---|"]
+        L += ["| comparison | mean ΔMSE (°C²) | 95% CI (t, n − 1 df) | sign-flip p (one-sided) | relative | "
+              "units better / worse | verdict |",
+              "|---|---|---|---|---|---|---|"]
         for k, p in w["paired"].items():
             if "ci95" not in p:
-                L.append(f"| {p['comparison']} | — | — | — | — | {p['verdict']} |")
+                L.append(f"| {p['comparison']} | — | — | — | — | — | {p['verdict']} |")
                 continue
             rel = "—" if p.get("rel_change") is None else f"{100 * p['rel_change']:+.0f}%"
             L.append(f"| {p['comparison']} | {p['mean_diff_mse']:+.4f} | {p['ci95'][0]:+.4f} to {p['ci95'][1]:+.4f} | "
-                     f"{rel} | {p['n_better']} / {p['n_worse']} | {p['verdict']} |")
+                     f"{p['p_sign_flip']:.3g} | {rel} | {p['n_better']} / {p['n_worse']} | {p['verdict']} |")
         L += ["", "| held-out city | cells | A RMSE | B RMSE | C RMSE | C0 RMSE | A R² | B R² | C R² | A r | B r | C r |",
               "|---|---|---|---|---|---|---|---|---|---|---|---|"]
         for r in w["per_city"]:
@@ -640,6 +694,7 @@ def _json(o):
     return str(o)
 
 
-__all__ = ["Settings", "design", "A_COLS", "B_COLS", "LST_COLS", "city_metrics", "paired", "centre", "inner_select",
+__all__ = ["Settings", "design", "A_COLS", "B_COLS", "LST_COLS", "city_metrics", "paired", "sign_flip", "centre",
+           "inner_select",
            "fit_city_physics", "transfer_params", "predict_physics", "physics_fits", "evaluate_window", "evaluate",
            "results_markdown", "run_evaluation", "TRANSFER_RULE", "MIN_VERDICT_CITIES"]

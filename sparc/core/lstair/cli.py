@@ -55,7 +55,8 @@ def add_lstair_parser(subs) -> None:
     e.add_argument("--data", required=True, help="the dataset folder (the --out of lstair dataset)")
     e.add_argument("--out", required=True, help="results folder (results.json, results.md, predictions.parquet)")
     e.add_argument("--windows", default="af,am,pm,ni", help="run windows in order (default af,am,pm,ni)")
-    e.add_argument("--boot", type=int, default=4000, help="bootstrap resamples over cities (default 4000)")
+    e.add_argument("--boot", type=int, default=4000,
+                   help="random sign vectors of the sign-flip test over more than 16 cities (default 4000)")
     e.add_argument("--seed", type=int, default=0)
     e.add_argument("--max-rows", type=int, default=6000, help="training cells per city (default 6000; 0 = all)")
     e.add_argument("--no-gbm", action="store_true", help="additive spline ridge only (no gradient boosting)")
@@ -70,7 +71,7 @@ def add_lstair_parser(subs) -> None:
     v.add_argument("--cities", type=int, default=8, help="cities per world (default 8)")
     v.add_argument("--seeds", default="0", help="comma list of world seeds (default 0)")
     v.add_argument("--size", type=int, default=64, help="grid cells per side of each city (default 64)")
-    v.add_argument("--fast", action="store_true", help="spline ridge only, short physics fits, 1000 bootstraps")
+    v.add_argument("--fast", action="store_true", help="spline ridge only, short physics fits")
     v.set_defaults(func=_tracked(cmd_validate))
 
     h = s.add_parser("hosts", help="list the hosts a real run needs and probe them")

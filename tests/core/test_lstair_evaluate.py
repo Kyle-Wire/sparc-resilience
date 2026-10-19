@@ -75,17 +75,38 @@ def test_design_centres_within_runs_and_keeps_targets_out():
 
 
 def test_paired_verdicts():
-    a = np.array([1.0, 1.2, 0.9, 1.1, 1.3, 1.0])
-    yes = E.paired(a - 0.2, a)
+    a = np.array([1.0, 1.2, 0.9, 1.1, 1.3, 1.0, 0.95, 1.15, 1.05, 1.25])
+    yes = E.paired(a - 0.2 + 0.01 * np.arange(10), a)
     assert yes["verdict"] == "LST adds information beyond land cover" and yes["ci95"][1] < 0
-    assert yes["n_better"] == 6 and yes["rel_change"] == pytest.approx(-0.2 / a.mean())
-    mixed = E.paired(a + np.array([-0.2, 0.2, -0.1, 0.15, -0.05, 0.1]), a)
+    assert yes["n_better"] == 10 and yes["p_sign_flip"] == pytest.approx(1 / 1024)
+    assert yes["sign_flip"].startswith("exact") and yes["ci_method"] == "t-interval, 9 df"
+    mixed = E.paired(a + np.array([-0.2, 0.2, -0.1, 0.15, -0.05, 0.1, -0.1, 0.05, 0.1, -0.15]), a)
     assert mixed["verdict"] == "not shown" and mixed["ci95"][0] < 0 < mixed["ci95"][1]
     worse = E.paired(a + 0.3, a)
     assert worse["verdict"] == "not shown" and "worse" in worse["reason"]
-    few = E.paired(a[:4] - 0.2, a[:4])
-    assert few["verdict"] == "not testable"
+    tiny = E.paired(a - 0.02 + 0.001 * np.arange(10), a)                   # significant but a 2% change
+    assert tiny["verdict"] == "not shown" and "only" in tiny["reason"] and tiny["p_sign_flip"] <= E.ALPHA
+    few = E.paired(a[:7] - 0.2, a[:7])
+    assert few["verdict"] == "not testable" and E.MIN_VERDICT_CITIES == 8
     assert E.paired(a - 0.2, a, claim="x")["verdict"] == "x"
+    # five cities: even when every one improves, the smallest sign-flip p is 1/32 > 0.025
+    assert E.sign_flip(-np.ones(5))["p_less"] == pytest.approx(1 / 32)
+
+
+def test_the_paired_test_holds_its_level_under_a_true_null_at_the_city_counts_of_the_pilot():
+    """R1: the percentile bootstrap claimed 'LST adds information' for 7.7% of null draws at 5–6 cities and 6.2% at 8
+    (nominal 2.5%).  The sign-flip p and the verdict must hold the level at 8 and 10 cities."""
+    rng = np.random.default_rng(1)
+    N = 1500
+    for n in (8, 10):
+        for draw in (lambda: rng.standard_normal(n), lambda: rng.standard_t(3, n)):
+            p_hits = claims = 0
+            for i in range(N):
+                d = 0.05 * draw()
+                p_hits += E.sign_flip(d)["p_less"] <= E.ALPHA
+                claims += E.paired(1.0 + d, np.ones(n), seed=i)["verdict"] == "LST adds information beyond land cover"
+            tol = 3 * np.sqrt(E.ALPHA * (1 - E.ALPHA) / N)
+            assert p_hits / N <= E.ALPHA + tol and claims / N <= E.ALPHA + tol, (n, p_hits / N, claims / N)
 
 
 def test_city_metrics_and_centring():
@@ -98,21 +119,21 @@ def test_city_metrics_and_centring():
 
 @pytest.fixture(scope="module")
 def informative():
-    cities = [toy_city(k) for k in range(6)]
+    cities = [toy_city(k) for k in range(8)]
     res, pred = E.evaluate_window(cities, "af", FAST)
     return cities, res, pred
 
 
 def test_lst_that_carries_a_hidden_source_beats_land_cover_out_of_city(informative):
     _, res, pred = informative
-    assert res["status"] == "done" and len(res["per_city"]) == 6
+    assert res["status"] == "done" and len(res["per_city"]) == 8
     assert res["verdict"] == "LST adds information beyond land cover"
-    assert res["paired"]["C-A"]["n_cities"] == 6 and res["paired"]["C-A"]["mean_diff_mse"] < 0
+    assert res["paired"]["C-A"]["n_cities"] == 8 and res["paired"]["C-A"]["mean_diff_mse"] < 0
     assert {"pred_A", "pred_B", "pred_C", "pred_C0"} <= set(pred.columns)
     for r in res["per_city"]:
         assert r["B"]["r"] > r["A"]["r"]
     wc = res["within_city"]
-    assert "interpolation-prone" in wc["label"] and len(wc["cities"]) == 6
+    assert "interpolation-prone" in wc["label"] and len(wc["cities"]) == 8
     fits = {f["slug"]: f for f in res["physics_fits"]["C"]}
     assert all(f["c_lst"] > 0 and f["h_lst"] == pytest.approx(f["c_lst"] * f["norm"]) for f in fits.values())
     assert all(f["forcing"][2] == "ERA5" for f in fits.values())

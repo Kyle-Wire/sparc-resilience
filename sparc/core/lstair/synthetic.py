@@ -148,7 +148,7 @@ def write_world(cities: list[CityData], root: str | Path) -> Path:
     return root
 
 
-EXPECTED = {"informative": "B and C beat A (95% intervals below 0)", "redundant": "not shown (B − A and C − C0)",
+EXPECTED = {"informative": "B and C beat A (claims)", "redundant": "B − A not shown",
             "mismatch": "degraded relative to informative (reported)"}
 
 
@@ -175,7 +175,9 @@ def validate(scenarios=SCENARIOS, n_cities: int = 8, seeds=(0,), settings=None, 
             if sc == "informative":
                 row["as_expected"] = b == "LST adds information beyond land cover" and c == "physics with LST beats land cover"
             elif sc == "redundant":
-                row["as_expected"] = b == "not shown" and row["C-C0"]["verdict"] in ("not shown", None)
+                # C − C0 is descriptive here: an LST that is a function of land cover can stand in for what the
+                # physics' fixed land-cover source form misses (evaluate's docstring); B − A is the claim's test
+                row["as_expected"] = b == "not shown"
             rows.append(row)
     for seed in seeds:
         inf = next((r for r in rows if r["scenario"] == "informative" and r["seed"] == seed), None)
