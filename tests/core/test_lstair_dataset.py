@@ -578,3 +578,24 @@ def test_no_run_reason_is_never_empty():
     assert "no file could be read" in msg and "a.csv" in msg
     msg = D._no_run_reason([{"run_id": "r1", "error": "no cells"}], [], spec)
     assert msg.endswith("r1: no cells")
+
+
+def test_catalog_cities_without_traverses_are_reported_not_downloaded(built, tmp_path):
+    """R12: New York's tdsy7 folder does not exist; the city is reported unavailable, nothing is fetched."""
+    root, _, _ = built
+    s = D.build_dataset(["New York, NY", "Providence, RI"], tmp_path / "o", traverses_dir=root / "traverses",
+                        features=synthetic_features, lst=False, era5=False, probe_opener=_no_network,
+                        download=lambda spec, dest: pytest.fail("no download for an unavailable city"))
+    assert s["cities"]["New York, NY"]["status"] == "unavailable" and "no traverse points" in s["cities"]["New York, NY"]["error"]
+    assert s["cities"]["Providence, RI"]["status"] == "ok"
+
+
+def test_the_download_record_is_not_read_as_a_traverse_file(tmp_path):
+    from sparc.core.identify.traverses import scan_traverses
+
+    folder = tmp_path / "raw"
+    write_campaign(folder, CENTRES["Providence, RI"])
+    (folder / "_download.json").write_text(json.dumps({"node": "x", "files": [], "complete": True}))
+    (folder / "af_trav.csv.part").write_text("partial")
+    _, report = scan_traverses(folder)
+    assert not any(r["file"].startswith("_download") or r["file"].endswith(".part") for r in report)

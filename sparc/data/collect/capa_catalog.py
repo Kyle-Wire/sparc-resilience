@@ -50,6 +50,18 @@ import difflib
 # Catalog
 # ---------------------------------------------------------------------------
 
+#: The 2019 NIHHIS project tdsy7 has 13 root folders (OSF listing checked 2026-10-19: Boston, Honolulu,
+#: Worcester, Yonkers, West Palm Beach, Fort Lauderdale, San Juan, Los Angeles, Victorville, Oakland-Berkeley,
+#: San Bernardino, Sacramento, Boise).  Entries mapped to tdsy7 whose hint matches none of them hold no data there.
+TDSY7_FOLDERS = ("Boston, MA", "Honolulu, HI", "Worcester, MA", "Yonkers, NY", "West Palm Beach, FL",
+                 "Fort Lauderdale, FL", "San Juan, PR", "Los Angeles, CA", "Victorville, CA", "Oakland-Berkeley, CA",
+                 "San Bernardino (CA)", "Sacramento (CA)", "Boise, ID")
+_NO_TDSY7_FOLDER = {
+    "availability": {"traverse_points": False, "rasters": False},
+    "availability_source": "OSF tdsy7 root listing (checked 2026-10-19): no folder for this city; its campaign "
+                           "data are not in tdsy7 (node unknown)",
+}
+
 CAPA_CATALOG: dict[str, dict] = {
 
     # ── NEW ENGLAND ────────────────────────────────────────────────────────
@@ -80,6 +92,7 @@ CAPA_CATALOG: dict[str, dict] = {
     "New York, NY": {
         "osf_node": "tdsy7", "folder_hint": "New York",
         "utm_epsg": "EPSG:32618", "year": 2019, "state": "NY",
+        **_NO_TDSY7_FOLDER,
     },
     "Manhattan, NY": {
         "osf_node": "j6eqr", "folder_hint": "Manhattan",
@@ -124,6 +137,7 @@ CAPA_CATALOG: dict[str, dict] = {
     "Baltimore, MD": {
         "osf_node": "tdsy7", "folder_hint": "Baltimore",
         "utm_epsg": "EPSG:32618", "year": 2019, "state": "MD",
+        **_NO_TDSY7_FOLDER,
     },
 
     # ── SOUTH ATLANTIC ─────────────────────────────────────────────────────
@@ -194,16 +208,19 @@ CAPA_CATALOG: dict[str, dict] = {
     "Miami, FL": {
         "osf_node": "tdsy7", "folder_hint": "Miami",
         "utm_epsg": "EPSG:32617", "year": 2019, "state": "FL",
+        **_NO_TDSY7_FOLDER,
     },
 
     # ── SOUTH CENTRAL ──────────────────────────────────────────────────────
     "Louisville, KY": {
         "osf_node": "tdsy7", "folder_hint": "Louisville",
         "utm_epsg": "EPSG:32616", "year": 2019, "state": "KY",
+        **_NO_TDSY7_FOLDER,
     },
     "Jackson, MS": {
         "osf_node": "tdsy7", "folder_hint": "Jackson",
         "utm_epsg": "EPSG:32615", "year": 2019, "state": "MS",
+        **_NO_TDSY7_FOLDER,
     },
     "New Orleans, LA": {
         "osf_node": "eau82", "folder_hint": None,
@@ -212,10 +229,12 @@ CAPA_CATALOG: dict[str, dict] = {
     "Dallas, TX": {
         "osf_node": "tdsy7", "folder_hint": "Dallas",
         "utm_epsg": "EPSG:32614", "year": 2019, "state": "TX",
+        **_NO_TDSY7_FOLDER,
     },
     "El Paso, TX": {
         "osf_node": "tdsy7", "folder_hint": "El Paso",
         "utm_epsg": "EPSG:32613", "year": 2019, "state": "TX",
+        **_NO_TDSY7_FOLDER,
     },
     "Austin, TX": {
         "osf_node": "h8cte", "folder_hint": None,
@@ -242,6 +261,7 @@ CAPA_CATALOG: dict[str, dict] = {
     "Kansas City, MO": {
         "osf_node": "tdsy7", "folder_hint": "Kansas City",
         "utm_epsg": "EPSG:32615", "year": 2019, "state": "MO",
+        **_NO_TDSY7_FOLDER,
     },
     "Kansas City, KS": {
         "osf_node": "hxyrv", "folder_hint": None,
@@ -266,12 +286,14 @@ CAPA_CATALOG: dict[str, dict] = {
     "Anchorage, AK": {
         "osf_node": "tdsy7", "folder_hint": "Anchorage",
         "utm_epsg": "EPSG:32604", "year": 2019, "state": "AK",
+        **_NO_TDSY7_FOLDER,
     },
 
     # ── MOUNTAIN ───────────────────────────────────────────────────────────
     "Denver, CO": {
         "osf_node": "tdsy7", "folder_hint": "Denver",
         "utm_epsg": "EPSG:32613", "year": 2019, "state": "CO",
+        **_NO_TDSY7_FOLDER,
     },
     "Boulder, CO": {
         "osf_node": "ek7r5", "folder_hint": None,

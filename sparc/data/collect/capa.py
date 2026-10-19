@@ -255,6 +255,8 @@ def _scan_storage(
     folder_id: str = "",
     depth: int = 0,
     top_level_filter: Optional[str] = None,
+    info: Optional[dict] = None,
+    root_files: bool = True,
 ) -> list[dict]:
     """Recursively list every file in an OSF node's storage.
 
@@ -267,6 +269,12 @@ def _scan_storage(
                        name contains this substring (case-insensitive).  Useful
                        for multi-city project nodes like ``"tdsy7"`` where each
                        city lives in its own top-level folder.
+    info             : when given, filled with ``top_folders`` (every root
+                       folder's name), ``matched`` (those the filter kept)
+                       and ``root_files_skipped`` (see ``root_files``).
+    root_files       : keep the files at the node's root (default).  With a
+                       filter they belong to no city in particular; False
+                       skips them (listed in ``info``).
     """
     if depth > 6:
         return []
@@ -281,13 +289,21 @@ def _scan_storage(
             name: str = item["attributes"]["name"]
             fid:  str = item["id"]
             if kind == "folder":
+                if depth == 0 and info is not None:
+                    info.setdefault("top_folders", []).append(name)
                 # At depth 0, apply the city-folder filter if provided
                 if depth == 0 and top_level_filter:
                     if top_level_filter.lower() not in name.lower():
                         continue  # skip this top-level folder
+                    if info is not None:
+                        info.setdefault("matched", []).append(name)
                 files.extend(_scan_storage(node_id, fid, depth + 1, top_level_filter))
             else:
                 attrs = item["attributes"]
+                if depth == 0 and not root_files:
+                    if info is not None:
+                        info.setdefault("root_files_skipped", []).append(name)
+                    continue
                 files.append({"name": name, "id": fid,
                               "path": attrs.get("materialized_path") or name, "size": attrs.get("size")})
         url = payload.get("links", {}).get("next")
@@ -830,8 +846,14 @@ def download_capa_files(
     written to a temporary name and renamed when complete; ``dest/_download.json`` records the listing
     and is written last, so a folder with it is complete and a rerun returns it without downloading.
 
+    With ``folder_hint`` (a multi-city node) only the root folders whose name contains it are read, and the
+    node's root-level files are skipped (they belong to no city in particular; listed under ``skipped``); when
+    no root folder matches, LookupError names the folders there are, and nothing is recorded as complete.  The
+    completion record is keyed on (node, folder_hint): changing the hint downloads again.
+
     Returns the record: ``{"node", "folder_hint", "files": [...], "skipped": [...], "complete": True}``.
-    Raises on network failure (the caller decides whether that is fatal).
+    Raises on network failure (the caller decides whether that is fatal), and ValueError when nothing to keep
+    was found.
     """
     import pathlib
 
@@ -839,11 +861,25 @@ def download_capa_files(
     done = root / "_download.json"
     if done.exists():
         rec = json.loads(done.read_text(encoding="utf-8"))
-        if rec.get("complete") and rec.get("node") == node_id:
+        if rec.get("complete") and rec.get("node") == node_id and rec.get("folder_hint") == folder_hint:
             return rec
+        for f in rec.get("files") or []:                # another node or hint: its files are not this city's
+            parts = [q for q in str(f.get("path", "")).split("/") if q not in ("", ".", "..")]
+            if parts:
+                root.joinpath(*parts).unlink(missing_ok=True)
+        done.unlink()
+    info: dict = {}
+    if folder_hint:
+        files = _scan_storage(node_id, top_level_filter=folder_hint, info=info, root_files=False)
+        if not info.get("matched"):
+            raise LookupError(f"OSF node {node_id} has no root folder matching {folder_hint!r} (folders: "
+                              f"{', '.join(info.get('top_folders') or []) or 'none'})")
+    else:
+        files = _scan_storage(node_id, top_level_filter=None)
     root.mkdir(parents=True, exist_ok=True)
-    files = _scan_storage(node_id, top_level_filter=folder_hint)
     kept, skipped = [], []
+    for name in info.get("root_files_skipped") or []:
+        skipped.append({"path": name, "reason": "root-level file of a multi-city node (not assigned to this city)"})
     for f in files:
         rel = str(f.get("path") or f["name"]).replace("\\", "/").lstrip("/")
         parts = [p for p in rel.split("/") if p not in ("", ".", "..")]
@@ -865,7 +901,11 @@ def download_capa_files(
             tmp.write_bytes(data)
             tmp.replace(target)
         kept.append({"path": "/".join(parts), "id": f["id"], "size": size})
-    rec = {"node": node_id, "folder_hint": folder_hint, "files": kept, "skipped": skipped, "complete": True}
+    if not kept:
+        raise ValueError(f"OSF node {node_id}" + (f" folder {', '.join(info.get('matched') or [])!r}" if folder_hint
+                                                  else "") + " holds no table, vector layer or archive")
+    rec = {"node": node_id, "folder_hint": folder_hint, "matched_folders": info.get("matched"), "files": kept,
+           "skipped": skipped, "complete": True}
     tmp = done.with_name(done.name + ".part")
     tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
     tmp.replace(done)

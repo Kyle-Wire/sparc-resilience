@@ -79,3 +79,58 @@ def test_download_capa_files_keeps_the_folder_layout_and_resumes(tmp_path, monke
     n = len(got)
     capa.download_capa_files("wu9v7", tmp_path / "raw")
     assert len(got) == n                                                              # finished: no new requests
+
+
+def _fake_osf(tree):
+    """``_http_get`` for an OSF node: ``tree`` maps a folder id ('' = root) to its items (name, kind, id, size)."""
+    import json
+
+    from sparc.data.collect import capa
+
+    root_url = capa.OSF_API.format(node_id="tdsy7")
+    calls = []
+
+    def get(url):
+        calls.append(url)
+        if url.startswith(root_url):
+            fid = url[len(root_url):].strip("/")
+            items = [{"id": i, "attributes": {"name": n, "kind": k, "size": z, "materialized_path":
+                                              f"/{n}" if fid == "" else f"/{fid}/{n}"}} for n, k, i, z in tree[fid]]
+            return json.dumps({"data": items, "links": {}}).encode()
+        return b"abc"
+    return get, calls
+
+
+def test_download_with_a_folder_hint_reads_only_that_folder_and_refuses_a_missing_one(tmp_path, monkeypatch):
+    """R12: a hint matching no root folder used to give an empty download recorded as complete."""
+    from sparc.data.collect import capa
+
+    tree = {"": [("Boston, MA", "folder", "fb", None), ("Boise, ID", "folder", "fi", None),
+                 ("shared.csv", "file", "s1", 3)],
+            "fb": [("Boston_am.csv", "file", "b1", 3)], "fi": [("AM_Boise.csv", "file", "i1", 3)]}
+    get, calls = _fake_osf(tree)
+    monkeypatch.setattr(capa, "_http_get", get)
+    monkeypatch.setattr(capa, "_fetch_file", lambda url, part, size=None: part.write_bytes(b"abc"), raising=False)
+    with pytest.raises(LookupError) as exc:
+        capa.download_capa_files("tdsy7", tmp_path / "ny", folder_hint="New York")
+    assert "Boston, MA" in str(exc.value) and "Boise, ID" in str(exc.value)
+    assert not (tmp_path / "ny" / "_download.json").exists()
+    rec = capa.download_capa_files("tdsy7", tmp_path / "b", folder_hint="Boston")
+    assert [f["path"] for f in rec["files"]] == ["fb/Boston_am.csv"] and rec["matched_folders"] == ["Boston, MA"]
+    assert any(s["path"] == "shared.csv" and "root-level" in s["reason"] for s in rec["skipped"])
+    # the completion record is keyed on (node, hint): another hint downloads again and drops the old files
+    rec2 = capa.download_capa_files("tdsy7", tmp_path / "b", folder_hint="Boise")
+    assert [f["path"] for f in rec2["files"]] == ["fi/AM_Boise.csv"]
+    assert not (tmp_path / "b" / "fb" / "Boston_am.csv").exists()
+
+
+def test_tdsy7_cities_without_a_folder_are_marked_unavailable():
+    for city in ("New York, NY", "Baltimore, MD", "Miami, FL", "Louisville, KY", "Jackson, MS", "Dallas, TX",
+                 "El Paso, TX", "Kansas City, MO", "Anchorage, AK", "Denver, CO"):
+        e = C.CAPA_CATALOG[city]
+        assert C.availability(e) == {"traverse_points": False, "rasters": False}, city
+        assert not any(e["folder_hint"].lower() in f.lower() for f in C.TDSY7_FOLDERS), city
+    for city in ("Boston, MA", "Boise, ID", "Los Angeles, CA", "Fort Lauderdale, FL", "Sacramento, CA"):
+        e = C.CAPA_CATALOG[city]
+        assert any(e["folder_hint"].lower() in f.lower() for f in C.TDSY7_FOLDERS), city
+        assert C.availability(e)["traverse_points"] is None

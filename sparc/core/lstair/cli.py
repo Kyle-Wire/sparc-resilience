@@ -146,6 +146,7 @@ def cmd_dataset(args) -> int:
         print(f"lstair dataset: {exc}", file=sys.stderr)
         return 2
     ok = [c for c, v in summary["cities"].items() if v["status"] == "ok"]
+    na = [c for c, v in summary["cities"].items() if v["status"] == "unavailable"]
     for c, v in summary["cities"].items():
         line = f"{c}: {v['status']}"
         if v["status"] == "ok":
@@ -153,7 +154,8 @@ def cmd_dataset(args) -> int:
         else:
             line += f" — {v.get('error')}"
         print(line)
-    print(f"{len(ok)} of {len(summary['cities'])} cities ready in {out / 'cities'}")
+    print(f"{len(ok)} of {len(summary['cities'])} cities ready in {out / 'cities'}"
+          + (f" ({len(na)} have no traverse points in the catalog)" if na else ""))
     return 0 if ok else 1
 
 

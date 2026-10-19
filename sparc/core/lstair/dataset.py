@@ -929,16 +929,21 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
     single = len(specs) == 1
     todo = [s for s in specs if force or city_status(out / "cities" / s.slug) != "ok"]
     local = {s.slug: local_traverses(s, traverses_dir, single) for s in todo}
-    need_dl = [s for s in todo if local[s.slug] is None and not _downloaded(out, s)]
+    unavailable = {s.slug: _unavailable(s) for s in todo if local[s.slug] is None and _unavailable(s)}
+    need_dl = [s for s in todo if local[s.slug] is None and s.slug not in unavailable and not _downloaded(out, s)]
     for s in need_dl:
         if not s.node:
             raise ValueError(f"{s.name}: not in the CAPA catalog and no local folder under --traverses-dir")
+    todo = [s for s in todo if s.slug not in unavailable]
     names = hosts_needed(bool(need_dl), features is None and bool(todo), lst is None and bool(todo),
                          era5 is None and bool(todo))
     probes = check_hosts(names, opener=probe_opener) if names else {}
     summary = {"schema": SCHEMA, "cities": {}, "probes": probes}
     for s in specs:
         cdir = out / "cities" / s.slug
+        if s.slug in unavailable:
+            summary["cities"][s.name] = {"slug": s.slug, "status": "unavailable", "error": unavailable[s.slug]}
+            continue
         if s not in todo:
             summary["cities"][s.name] = {"slug": s.slug, "status": "ok", "skipped": "cached"}
             continue
@@ -975,8 +980,25 @@ def _lookup(mapping: dict | None, spec: CitySpec):
                 None)
 
 
+def _unavailable(spec: CitySpec) -> str | None:
+    """Why the catalog says this city has no traverse points to download, else None."""
+    if (spec.availability or {}).get("traverse_points") is False:
+        return (f"the CAPA catalog lists no traverse points for {spec.name} (OSF node {spec.node}"
+                + (f", folder {spec.folder_hint!r}" if spec.folder_hint else "") + "); pass --traverses-dir with "
+                "its campaign folder if you have it")
+    return None
+
+
 def _downloaded(out: Path, spec: CitySpec) -> bool:
-    return (out / "raw" / spec.slug / "_download.json").exists()
+    """A finished download for this city's (node, folder hint) (a record for another node or hint is stale)."""
+    p = out / "raw" / spec.slug / "_download.json"
+    if not p.exists():
+        return False
+    try:
+        rec = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return bool(rec.get("complete")) and rec.get("node") == spec.node and rec.get("folder_hint") == spec.folder_hint
 
 
 def _download_traverses(spec: CitySpec, dest: Path) -> dict:

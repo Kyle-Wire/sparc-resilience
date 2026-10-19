@@ -196,6 +196,10 @@ def _read_any(f: Path) -> pd.DataFrame:
     return gpd.read_file(f)
 
 
+#: The download record :func:`sparc.data.collect.capa.download_capa_files` writes next to the files it fetched.
+_BOOKKEEPING = ("_download.json",)
+
+
 def _excluded(name: str, exclude: tuple[str, ...]) -> str | None:
     low = name.lower()
     return next((p for p in exclude if p and p.lower() in low), None)
@@ -207,8 +211,8 @@ def _walk(root: Path, tmp: Path, depth: int = 0, exclude: tuple[str, ...] = ()):
     files = sorted(q for q in root.rglob("*") if q.is_file()) if root.is_dir() else [root]
     for f in files:
         name = f.relative_to(root).as_posix() if root.is_dir() else f.name
-        if f.name.startswith(".") or "__macosx" in name.lower():
-            continue
+        if f.name.startswith(".") or "__macosx" in name.lower() or f.name in _BOOKKEEPING or f.suffix == ".part":
+            continue                                  # hidden files and a download's own records / partial files
         pat = _excluded(name, exclude)
         if pat is not None:
             yield f, name, f"excluded (name contains {pat!r})"
