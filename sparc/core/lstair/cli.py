@@ -53,7 +53,7 @@ def add_lstair_parser(subs) -> None:
     d.add_argument("--cache", default=None, help="Landsat COG window cache (default OUT/cache/landsat)")
     d.set_defaults(func=_tracked(cmd_dataset))
 
-    e = s.add_parser("evaluate", help="leave-one-city-out: A land cover, B + LST, C physics with LST → results")
+    e = s.add_parser("evaluate", help="leave-one-campaign-out: A land cover, B + LST, C physics with LST → results")
     e.add_argument("--data", required=True, help="the dataset folder (the --out of lstair dataset)")
     e.add_argument("--out", required=True, help="results folder (results.json, results.md, predictions.parquet)")
     e.add_argument("--windows", default="af,am,pm,ni", help="run windows in order (default af,am,pm,ni)")

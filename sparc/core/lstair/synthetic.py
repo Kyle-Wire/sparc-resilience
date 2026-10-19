@@ -283,7 +283,7 @@ def validate(scenarios=SCENARIOS, n_cities: int = 8, seeds=(0,), settings=None, 
 
 def validation_markdown(v: dict) -> str:
     L = ["# LST pilot: synthetic validation of the harness", "",
-         f"{v['n_cities']} cities per world, seeds {v['seeds']}; leave-one-city-out, run af.", "",
+         f"{v['n_cities']} cities per world, seeds {v['seeds']}; leave-one-campaign-out, run af.", "",
          "| world | seed | B − A ΔMSE | 95% CI | B verdict | C − A ΔMSE | 95% CI | C verdict | C − C0 ΔMSE | 95% CI | "
          "expected | as expected |",
          "|---|---|---|---|---|---|---|---|---|---|---|---|"]

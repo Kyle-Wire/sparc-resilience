@@ -806,7 +806,7 @@ def _f(x, nd=2):
 
 
 def results_markdown(res: dict) -> str:
-    L = ["# LST → air temperature: leave-one-city-out", "",
+    L = ["# LST → air temperature: leave-one-campaign-out", "",
          f"Target: {res['target']}.  {res['n_cities']} cities.  Models: A land cover + focal features; B A + LST; "
          "C physics with LST in the heat source; C0 physics without LST (secondary).", "",
          f"Transfer rule (C): {res['transfer_rule']}", ""]
@@ -817,6 +817,10 @@ def results_markdown(res: dict) -> str:
             continue
         pb = w["paired"]["B-A"]
         L += [f"**Verdict: {pb['verdict']}.** {pb.get('reason', '')}.", ""]
+        multi = {g: m for g, m in (w.get("groups") or {}).items() if len(m) > 1}
+        L += [f"Held-out units: {len(w.get('groups') or {})} campaign groups"
+              + (" (held out together: " + "; ".join(", ".join(m) for m in multi.values()) + ")" if multi else "")
+              + ".  Claim rule: sign-flip p ≤ 0.025, 95% t-interval below 0 and an MSE reduction of at least 5%.", ""]
         L += ["| comparison | mean ΔMSE (°C²) | 95% CI (t, n − 1 df) | sign-flip p (one-sided) | relative | "
               "units better / worse | verdict |",
               "|---|---|---|---|---|---|---|"]

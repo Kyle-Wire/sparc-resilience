@@ -17,7 +17,7 @@ predictors explained little of the daily maximum air temperature measured by cit
 * :mod:`~sparc.core.lstair.dataset` builds one long table of traverse cells (city × run × 30 m cell) with the
   run's cell-mean air temperature, its anomaly from the run's city background, land-cover predictors with
   focal means, and campaign-matched Landsat LST; one cache per city, so reruns skip finished cities.
-* :mod:`~sparc.core.lstair.evaluate` scores three models leave-one-city-out: (A) land cover + focal
+* :mod:`~sparc.core.lstair.evaluate` scores three models leave-one-campaign-out: (A) land cover + focal
   features, (B) A + LST, (C) SPARC's physics model with LST entering the heat source as surface–air coupling,
   and turns the city-paired MSE differences into a verdict.
 * :mod:`~sparc.core.lstair.synthetic` plants worlds where the answer is known (LST informative, redundant,
