@@ -144,7 +144,9 @@ def test_held_out_labels_never_reach_their_own_predictions(informative):
     h = cities[2]
     rng = np.random.default_rng(5)
     shuffled = h.table.copy()
-    shuffled["dTa"] = rng.permutation(shuffled["dTa"].to_numpy())
+    perm = rng.permutation(len(shuffled))
+    shuffled["dTa"] = shuffled["dTa"].to_numpy()[perm]
+    shuffled["Ta"] = shuffled["Ta"].to_numpy()[perm]                       # the labels the target is centred from
     alt = D.CityData(slug=h.slug, meta=h.meta, table=shuffled, grid=h.grid, rasters=h.rasters)
     s = E.Settings(**{**FAST.__dict__, "within_city": False})
     _, pred2 = E.evaluate_window(cities[:2] + [alt] + cities[3:], "af", s)
@@ -232,9 +234,29 @@ def test_a_campaign_group_is_held_out_whole_and_counted_once():
     assert res["paired"]["B-A"]["n_cities"] == 4                            # 4 independent units, not 5 cities
     # the twin's labels never reach toy_0's predictions (held out together, never in each other's training)
     tw = cities[-1]
+    perm = np.random.default_rng(0).permutation(len(tw.table))
     alt = D.CityData(slug=tw.slug, meta=tw.meta, grid=tw.grid, rasters=tw.rasters,
-                     table=tw.table.assign(dTa=np.random.default_rng(0).permutation(tw.table["dTa"].to_numpy())))
+                     table=tw.table.assign(dTa=tw.table["dTa"].to_numpy()[perm], Ta=tw.table["Ta"].to_numpy()[perm]))
     _, pred2 = E.evaluate_window(cities[:-1] + [alt], "af", s)
     a = pred[pred["slug"] == "toy_0"].sort_values("cell")
     b = pred2[pred2["slug"] == "toy_0"].sort_values("cell")
     assert np.allclose(a["pred_A"], b["pred_A"]) and np.allclose(a["pred_B"], b["pred_B"])
+
+
+def test_the_target_is_recentred_on_the_cells_scored():
+    """R6: an LST cloud over the cooler cells left the scored target with a non-zero median (an offset in every
+    model's error); the target is now centred on the scored cells, as the predictions are."""
+    cities = [toy_city(k, n=32) for k in range(4)]
+    for c in cities:                                                        # cloud over the coolest third
+        t = c.table
+        cool = t["dTa"] < t["dTa"].quantile(0.33)
+        for k in ("lst", "lst_f100", "lst_f300"):
+            t.loc[cool, k] = np.nan
+    s = E.Settings(**{**FAST.__dict__, "within_city": False, "physics": False})
+    res, pred = E.evaluate_window(cities, "af", s)
+    for _, g in pred.groupby(["slug", "run_id"]):
+        assert abs(g["dTa"].median()) < 1e-9
+    rows = res["target_recentred"]
+    assert len(rows) == 4 and all(r["share_dropped"] > 0.3 and r["shift_c"] > 0 for r in rows)
+    shifted, _ = E.recentre_target(E.design(cities[0].table).dropna(subset=E.B_COLS))
+    assert np.allclose(shifted["dTa"] + shifted["Ta"].median(), shifted["Ta"])

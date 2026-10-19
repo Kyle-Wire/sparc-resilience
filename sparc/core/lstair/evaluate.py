@@ -33,8 +33,9 @@ Models
   cover can still make up for what that form misses (the toy worlds of the tests show it).  The test of the
   claim is B − A, whose land-cover model is flexible and tuned.
 
-Every model's predictions on the held-out city are centred to median zero over that run's cells (the target's
-own definition; it uses positions, not labels).
+Every model's predictions on the held-out city are centred to median zero over that run's scored cells (the
+target's own definition; it uses positions, not labels), and the target is re-centred on the same cells
+(:func:`recentre_target`): cells dropped for a missing predictor would otherwise leave the scored target off zero.
 
 Scores and verdict
 ------------------
@@ -190,6 +191,26 @@ def city_metrics(y: np.ndarray, p: np.ndarray) -> dict:
     r = float(np.corrcoef(y, p)[0, 1]) if y.size > 2 and np.std(p) > 0 and np.std(y) > 0 else float("nan")
     return {"n": int(y.size), "mse": mse, "rmse": math.sqrt(mse), "r2": 1.0 - float(np.sum(e ** 2)) / sst if sst > 0
             else float("nan"), "r": r}
+
+
+def recentre_target(df: pd.DataFrame, n_all: pd.Series | None = None) -> tuple[pd.DataFrame, list[dict]]:
+    """``dTa`` re-centred on the cells actually scored: Ta minus its median over each run's scored cells.
+
+    The dataset centres ``dTa`` on the median over all of a run's driven cells, but cells missing a predictor
+    (an LST cloud gap over part of the city) are dropped before scoring and the predictions are centred on the
+    cells that remain; without re-centring the target, a cloud over the cooler cells left the scored target with
+    a non-zero median, an offset that inflated every model's MSE.  Returns the table and, per (city, run), the
+    shift applied and the share of its cells dropped (``n_all``: the run's cells before the predictor filter)."""
+    out = df.copy()
+    g = out.groupby(["slug", "run_id"], sort=False)
+    shift = g["Ta"].transform("median") - out["ta_background"]
+    out["dTa"] = out["Ta"] - g["Ta"].transform("median")
+    rows = []
+    for (sl, rid), part in out.groupby(["slug", "run_id"], sort=True):
+        n0 = int(n_all.get((sl, rid), len(part))) if n_all is not None else len(part)
+        rows.append({"slug": sl, "run_id": rid, "shift_c": float(shift.loc[part.index].iloc[0]),
+                     "n_scored": int(len(part)), "share_dropped": float(1.0 - len(part) / max(n0, 1))})
+    return out, rows
 
 
 def campaign_groups(cities: list[CityData], near_km: float = GROUP_KM) -> dict[str, str]:
@@ -547,6 +568,7 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
     ok = np.isfinite(df[B_COLS + ["dTa"]].to_numpy(float)).all(axis=1)
     res["n_cells_total"] = int(len(df))
     res["n_cells_dropped_missing_predictor"] = int((~ok).sum())
+    n_all = df.groupby(["slug", "run_id"]).size()
     df = df[ok].reset_index(drop=True)
     by_city = {c.slug: c for c in keep}
     slugs = [c for c in sorted(df["slug"].unique()) if (df["slug"] == c).sum() >= MIN_CELLS]
@@ -554,6 +576,7 @@ def evaluate_window(cities: list[CityData], run: str, s: Settings, cache: Path |
         res.update(status="not run", reason=f"{len(slugs)} cities with ≥ {MIN_CELLS} cells with every predictor")
         return res, pd.DataFrame()
     df = df[df["slug"].isin(slugs)].reset_index(drop=True)
+    df, res["target_recentred"] = recentre_target(df, n_all)
     groups = campaign_groups([by_city[c] for c in slugs])
     df["group"] = df["slug"].map(groups)
     units = sorted(set(groups.values()))
@@ -762,6 +785,6 @@ def _json(o):
 
 
 __all__ = ["Settings", "design", "A_COLS", "B_COLS", "LST_COLS", "city_metrics", "paired", "sign_flip", "centre",
-           "inner_select", "campaign_groups",
+           "inner_select", "campaign_groups", "recentre_target",
            "fit_city_physics", "transfer_params", "predict_physics", "physics_fits", "evaluate_window", "evaluate",
            "results_markdown", "run_evaluation", "TRANSFER_RULE", "MIN_VERDICT_CITIES"]
