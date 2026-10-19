@@ -39,3 +39,14 @@ def test_compare_features_and_data_join(tmp_path, synthetic_city):
     assert "open_canopy" in data.frame and np.isfinite(data.frame["open_canopy"]).all()
     cmp = FO.compare_features(pd.DataFrame({"canopy": data.frame["open_canopy"]}), data, {"canopy": "canopy"})
     assert cmp[0]["pearson_r"] > 0.8 and cmp[0]["role"] == "canopy"
+
+
+def test_mgrs_square_without_the_mgrs_package():
+    # 100 km squares of known places (Sentinel-2 tile names): Providence's two, New York, Los Angeles, Chicago
+    assert FO.mgrs_square(-71.0, 41.8) == "19TCG" and FO.mgrs_square(-71.6, 41.8) == "19TBG"
+    assert FO.mgrs_square(-74.0, 40.7) == "18TWL" and FO.mgrs_square(-118.24, 34.05) == "11SLT"
+    assert FO.mgrs_square(-87.63, 41.88) == "16TDM"
+    tiles = FO.mgrs_tiles((-71.5, 41.75, -71.35, 41.9), 0)
+    assert set(tiles) >= {"19TBG", "19TCG"} and all(len(t) == 5 for t in tiles)
+    with pytest.raises(ValueError):
+        FO.mgrs_square(0.0, 85.0)

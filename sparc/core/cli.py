@@ -7,6 +7,8 @@
     sparc core mechanisms -r RUN_DIR [-p CONFIG]  (physics mechanism register of a finished run)
     sparc core identifiability -r RUN_DIR [-p CONFIG] [--params L,s,...] [--coarse M] [--max-points N]
                                [--draws N] [--seed S]   (physics profile likelihood, prior sensitivity, conflict)
+    sparc core lstair dataset --cities "Providence, RI" ... --out DIR [--traverses-dir DIR]
+    sparc core lstair evaluate --data DIR --out DIR   (LST pilot: traverse dataset, three-model harness)
     sparc core studio [...]                         (SPARC Studio; same as `sparc studio`)
     python -m sparc.core run --project ...          (same, without the legacy CLI)
 
@@ -199,6 +201,11 @@ def add_core_subparsers(core_parser: argparse.ArgumentParser) -> None:
 
     for p in subs.choices.values():
         _add_progress_args(p)
+
+    # the LST → air temperature pilot (its own sub-commands, each with the progress arguments)
+    from sparc.core.lstair.cli import add_lstair_parser
+
+    add_lstair_parser(subs)
 
     # Listed for --help only: `studio` argv is handed to Studio before argparse runs (run_studio)
     p_st = subs.add_parser("studio", add_help=False,

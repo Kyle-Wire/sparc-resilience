@@ -285,7 +285,9 @@ def _scan_storage(
                         continue  # skip this top-level folder
                 files.extend(_scan_storage(node_id, fid, depth + 1, top_level_filter))
             else:
-                files.append({"name": name, "id": fid})
+                attrs = item["attributes"]
+                files.append({"name": name, "id": fid,
+                              "path": attrs.get("materialized_path") or name, "size": attrs.get("size")})
         url = payload.get("links", {}).get("next")
     return files
 
@@ -792,6 +794,71 @@ def download_capa_traverses(
     if not frames:
         return empty
     return pd.concat(frames, ignore_index=True)
+
+
+#: Files a traverse download keeps: tables, vector layers (with their shapefile sidecars) and archives.
+#: Rasters, PDFs and images are not needed for the traverse points and are skipped.
+TRAVERSE_FILE_EXTS = (".zip", ".csv", ".txt", ".tsv", ".geojson", ".json", ".gpkg", ".kml",
+                      ".shp", ".shx", ".dbf", ".prj", ".cpg")
+
+
+def download_capa_files(
+    node_id: str,
+    dest: "str | object",
+    *,
+    folder_hint: Optional[str] = None,
+    exts: tuple = TRAVERSE_FILE_EXTS,
+    max_file_bytes: int = 2_000_000_000,
+) -> dict:
+    """Download the raw files of an OSF node (traverse tables, point layers, archives) into ``dest``.
+
+    Unlike :func:`download_capa_traverses` this keeps the files as published, in their OSF folder
+    layout, so a shapefile's ``.shp``/``.dbf``/``.shx``/``.prj`` stay together and
+    :func:`sparc.core.identify.traverses.scan_traverses` can read the folder as it is.  Only files whose
+    extension is in ``exts`` are fetched (rasters, PDFs and images are skipped and listed).  Each file is
+    written to a temporary name and renamed when complete; ``dest/_download.json`` records the listing
+    and is written last, so a folder with it is complete and a rerun returns it without downloading.
+
+    Returns the record: ``{"node", "folder_hint", "files": [...], "skipped": [...], "complete": True}``.
+    Raises on network failure (the caller decides whether that is fatal).
+    """
+    import pathlib
+
+    root = pathlib.Path(dest)
+    done = root / "_download.json"
+    if done.exists():
+        rec = json.loads(done.read_text(encoding="utf-8"))
+        if rec.get("complete") and rec.get("node") == node_id:
+            return rec
+    root.mkdir(parents=True, exist_ok=True)
+    files = _scan_storage(node_id, top_level_filter=folder_hint)
+    kept, skipped = [], []
+    for f in files:
+        rel = str(f.get("path") or f["name"]).replace("\\", "/").lstrip("/")
+        parts = [p for p in rel.split("/") if p not in ("", ".", "..")]
+        if not parts:
+            continue
+        low = parts[-1].lower()
+        size = f.get("size")
+        if not low.endswith(tuple(exts)):
+            skipped.append({"path": "/".join(parts), "reason": "not a table, vector layer or archive"})
+            continue
+        if size is not None and int(size) > max_file_bytes:
+            skipped.append({"path": "/".join(parts), "reason": f"larger than {max_file_bytes} bytes"})
+            continue
+        target = root.joinpath(*parts)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not (target.exists() and size is not None and target.stat().st_size == int(size)):
+            data = _http_get(OSF_WATERBUTLER.format(node_id=node_id, file_id=f["id"]))
+            tmp = target.with_name(target.name + ".part")
+            tmp.write_bytes(data)
+            tmp.replace(target)
+        kept.append({"path": "/".join(parts), "id": f["id"], "size": size})
+    rec = {"node": node_id, "folder_hint": folder_hint, "files": kept, "skipped": skipped, "complete": True}
+    tmp = done.with_name(done.name + ".part")
+    tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    tmp.replace(done)
+    return rec
 
 
 # ---------------------------------------------------------------------------

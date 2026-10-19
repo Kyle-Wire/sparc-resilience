@@ -55,3 +55,27 @@ def test_traverse_node_can_differ_from_the_raster_node():
 def test_no_other_city_lost_its_entry():
     assert len(C.CAPA_CATALOG) >= 60
     assert all("osf_node" in e and "utm_epsg" in e and "state" in e for e in C.CAPA_CATALOG.values())
+
+
+def test_download_capa_files_keeps_the_folder_layout_and_resumes(tmp_path, monkeypatch):
+    import json
+
+    from sparc.data.collect import capa
+
+    listing = [{"name": "af_trav.shp", "id": "1", "path": "/Providence/traverses/af_trav.shp", "size": 3},
+               {"name": "af_trav.dbf", "id": "2", "path": "/Providence/traverses/af_trav.dbf", "size": 3},
+               {"name": "af_t_f.tif", "id": "3", "path": "/Providence/rasters/af_t_f.tif", "size": 3},
+               {"name": "../../evil.csv", "id": "4", "path": "/../../evil.csv", "size": 3}]
+    got = []
+    monkeypatch.setattr(capa, "_scan_storage", lambda node, top_level_filter=None: listing)
+    monkeypatch.setattr(capa, "_http_get", lambda url: got.append(url) or b"abc")
+    rec = capa.download_capa_files("wu9v7", tmp_path / "raw")
+    assert (tmp_path / "raw" / "Providence" / "traverses" / "af_trav.shp").read_bytes() == b"abc"
+    assert (tmp_path / "raw" / "Providence" / "traverses" / "af_trav.dbf").exists()
+    assert not (tmp_path / "raw" / "Providence" / "rasters").exists()             # rasters are not fetched
+    assert (tmp_path / "raw" / "evil.csv").exists() and not (tmp_path / "evil.csv").exists()
+    assert [s["path"] for s in rec["skipped"]] == ["Providence/rasters/af_t_f.tif"]
+    assert json.loads((tmp_path / "raw" / "_download.json").read_text())["complete"] is True
+    n = len(got)
+    capa.download_capa_files("wu9v7", tmp_path / "raw")
+    assert len(got) == n                                                              # finished: no new requests

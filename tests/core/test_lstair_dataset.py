@@ -1,0 +1,323 @@
+"""LST pilot dataset (L3): synthetic traverse folders in the CAPA layout + synthetic feature/LST rasters → the
+long table (rows, units, backgrounds, drift and vehicle offsets, no target leakage), the per-city cache, the
+fail-fast network check and the CLI."""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import shutil
+import urllib.error
+
+import numpy as np
+import pandas as pd
+import pytest
+
+from sparc.core.lstair import dataset as D
+
+CENTRES = {"Providence, RI": (-71.41, 41.82), "Boston, MA": (-71.06, 42.36)}
+UTM19 = "EPSG:32619"
+
+
+def _truth(x, y, x0, y0):
+    """Planted afternoon air temperature (°C): a 1 °C/km west–east gradient plus a warm blob."""
+    return 28.0 + 0.001 * (x - x0) + 1.5 * np.exp(-((x - x0 - 600) ** 2 + (y - y0 - 300) ** 2) / (2 * 250.0 ** 2))
+
+
+def _routes(x0, y0, size=2400.0, spacing=300.0, step=10.0):
+    """Street lines every ``spacing`` m (east–west and north–south), sampled every ``step`` m."""
+    segs = []
+    s = np.arange(-size / 2, size / 2 + 1e-9, step)
+    for off in np.arange(-size / 2, size / 2 + 1e-9, spacing):
+        segs.append((x0 + s, np.full(s.size, y0 + off)))
+        segs.append((np.full(s.size, x0 + off), y0 + s))
+    return segs
+
+
+def write_campaign(folder, centre, date="2020-07-29", drift_c_per_h=1.2, offsets=(0.4, -0.3, 0.0), seed=0,
+                   temp_shift=None, capa_layout_run="am"):
+    """A campaign folder as CAPA publishes one: one table per run; the afternoon as ``datetime, lat, lon, T_F,
+    car`` and the morning as CAPA's logger table (``file`` with the sensor id, ``dttm_lc`` local clock, ``t_c``)."""
+    from pyproj import Transformer
+
+    rng = np.random.default_rng(seed)
+    folder.mkdir(parents=True, exist_ok=True)
+    to_xy = Transformer.from_crs("EPSG:4326", UTM19, always_xy=True)
+    to_ll = Transformer.from_crs(UTM19, "EPSG:4326", always_xy=True)
+    x0, y0 = to_xy.transform(*centre)
+    segs = _routes(x0, y0)
+    for run, start, base in (("af", "15:00:00", 0.0), ("am", "06:05:00", -6.0)):
+        rows = []
+        t_veh = [0.0] * len(offsets)
+        for k, (xs, ys) in enumerate(segs):
+            v = k % len(offsets)
+            n = xs.size
+            ts = t_veh[v] + np.arange(n) * 1.0                                   # 1 Hz at 10 m/s
+            t_veh[v] = ts[-1] + 20.0
+            T = _truth(xs, ys, x0, y0) + base
+            if temp_shift is not None:
+                T = T + temp_shift(xs, ys)
+            T = T + drift_c_per_h * (ts - 1800.0) / 3600.0 + offsets[v] + 0.05 * rng.standard_normal(n)
+            lon, lat = to_ll.transform(xs, ys)
+            rows.append(pd.DataFrame({"t": ts, "lat": lat, "lon": lon, "T": T, "car": v + 1}))
+        df = pd.concat(rows, ignore_index=True)
+        df = df[df["t"] < 3500.0]                                                # one hour of driving
+        when = pd.Timestamp(f"{date} {start}") + pd.to_timedelta(df["t"], unit="s")
+        if run == capa_layout_run:
+            sensor = df["car"].map({1: "CAPA1061", 2: "CAPA1079", 3: "CAPA1085"})
+            out = pd.DataFrame({"file": sensor + "_290720_060000_0.csv", "dttm_lc": when.dt.strftime("%Y-%m-%d %H:%M:%S"),
+                                "t_c": df["T"].round(3), "lat": df["lat"].round(7), "lon": df["lon"].round(7)})
+        else:
+            out = pd.DataFrame({"datetime": when.dt.strftime("%Y-%m-%d %H:%M:%S"), "lat": df["lat"].round(7),
+                                "lon": df["lon"].round(7), "T_F": (df["T"] * 9 / 5 + 32).round(3), "car": df["car"]})
+        out.to_csv(folder / f"{run}_trav.csv", index=False)
+    (folder / "af_t_f.tif").write_bytes(b"II*\x00")                                 # a raster: skipped
+    return x0, y0
+
+
+def synthetic_features(ctx, campaign_date):
+    X, Y = ctx.centres()
+    xr, yr = X - X.mean(), Y - Y.mean()
+    feats = {"canopy": np.clip(30 + 20 * np.sin(xr / 500.0), 0, 100), "impervious": np.clip(50 + 30 * np.cos(yr / 700.0), 0, 100),
+             "ndvi": 0.3 + 0.1 * np.sin(xr / 500.0), "albedo": 0.15 + 0.02 * np.cos(yr / 300.0),
+             "elevation": 10.0 + 0.002 * yr, "water_distance": np.abs(xr - 1500.0)}
+    return feats, {"source": "synthetic"}
+
+
+def synthetic_lst(ctx, campaign_date, study):
+    X, Y = ctx.centres()
+    lst = 38.0 + 0.002 * (X - X.mean()) + 0.0 * Y
+    lst[:5] = np.nan                                                                # a cloudy strip
+    scene = {"id": "LC08_test", "date": (campaign_date - dt.timedelta(days=3)).isoformat(), "offset_days": -3,
+             "clear_fraction": 0.97, "selected": True}
+    assert study.shape == ctx.shape and study.any()
+    return {"lst_c": lst, "scenes": [scene], "candidates": [scene]}
+
+
+def fake_era5(lon, lat, tz, start, end):
+    assert tz == "America/New_York"
+    return {"ta_era5": 27.0 if start.hour >= 12 else 21.0, "sw_down": 650.0 if start.hour >= 12 else 150.0,
+            "lw_net": -90.0, "hours_local": [start.hour, start.hour + 1]}
+
+
+@pytest.fixture(scope="module")
+def built(tmp_path_factory):
+    root = tmp_path_factory.mktemp("lstair")
+    trav = root / "traverses"
+    for name, c in CENTRES.items():
+        write_campaign(trav / D.slugify(name), c, seed=len(name))
+    out = root / "data"
+    summary = D.build_dataset(list(CENTRES), out, traverses_dir=trav, features=synthetic_features, lst=synthetic_lst,
+                              era5=fake_era5, probe_opener=_no_network)
+    return root, out, summary
+
+
+def _no_network(req, timeout=None):
+    raise AssertionError(f"no host should be probed when every source is local or synthetic: {req.full_url}")
+
+
+def test_the_table_has_one_row_per_run_and_cell_in_celsius_with_run_backgrounds(built):
+    root, out, summary = built
+    assert {v["status"] for v in summary["cities"].values()} == {"ok"}
+    cities = D.load_dataset(out)
+    assert [c.slug for c in cities] == ["boston_ma", "providence_ri"]
+    for c in cities:
+        t = c.table
+        assert set(t["run"]) == {"am", "af"} and not t.duplicated(["run_id", "cell"]).any()
+        assert {"city", "campaign_date", "run", "cell", "x", "y", "lat", "lon", "n_readings", "Ta", "dTa",
+                "ta_era5"} <= set(t.columns)
+        assert t["campaign_date"].unique().tolist() == ["2020-07-29"]
+        af = t[t["run"] == "af"]
+        assert 20 < af["Ta"].median() < 35                                       # °C, not °F
+        for _, g in t.groupby("run_id"):
+            assert g["dTa"].median() == pytest.approx(0.0, abs=1e-9)
+            assert np.allclose(g["Ta"] - g["dTa"], g["ta_background"])
+        assert (t["n_readings"] >= t["n_visits"]).all() and t["n_readings"].median() >= 2
+        assert set(t.loc[t["run"] == "af", "ta_era5"]) == {27.0} and set(t.loc[t["run"] == "am", "ta_era5"]) == {21.0}
+        # the positions sit on the 30 m grid in UTM 19N, inside the lat/lon of the city
+        assert c.grid.crs == UTM19 and c.grid.dx == 30.0
+        lon0, lat0 = CENTRES[c.meta["city"]]
+        assert abs(t["lon"].median() - lon0) < 0.02 and abs(t["lat"].median() - lat0) < 0.02
+
+
+def test_drift_and_vehicle_offsets_are_removed_and_the_pattern_recovered(built):
+    from pyproj import Transformer
+
+    _, out, _ = built
+    c = D.load_city(out / "cities" / "providence_ri")
+    af = next(r for r in c.meta["runs"] if r["run"] == "af")
+    assert af["drift"]["method"] == "fe" and af["drift"]["drift_per_h"] == pytest.approx(1.2, abs=0.08)
+    offs = np.array(sorted(af["vehicle_offsets_c"].values()))
+    assert np.allclose(offs, np.sort(np.array([0.4, -0.3, 0.0]) - np.mean([0.4, -0.3, 0.0])), atol=0.06)
+    t = c.table[c.table["run"] == "af"]
+    x0, y0 = Transformer.from_crs("EPSG:4326", UTM19, always_xy=True).transform(*CENTRES["Providence, RI"])
+    truth = _truth(t["x"].to_numpy(), t["y"].to_numpy(), x0, y0)
+    resid = t["Ta"].to_numpy() - truth
+    assert np.corrcoef(t["Ta"], truth)[0, 1] > 0.99 and resid.std() < 0.08
+
+
+def test_predictors_are_the_rasters_at_the_cells_and_the_lst_is_matched(built):
+    _, out, _ = built
+    c = D.load_city(out / "cities" / "providence_ri")
+    t = c.table
+    feats, _ = synthetic_features(c.grid, None)
+    iy, ix = np.divmod(t["cell"].to_numpy(), c.grid.nx)
+    for k in D.FEATURES:
+        assert np.allclose(t[k], feats[k][iy, ix], atol=1e-4 * max(1.0, np.abs(feats[k]).max())), k
+    for k in ("canopy_f100", "canopy_f300", "canopy_f1000", "albedo_f1000", "lst", "lst_f100", "lst_f300"):
+        assert k in t and np.isfinite(t[k]).mean() > 0.9, k
+    # a 1000 m Gaussian focal mean is smoother than the 100 m one
+    assert t["canopy_f1000"].std() < t["canopy_f100"].std()
+    assert set(t["lst_scene_date"]) == {"2020-07-26"} and set(t["lst_offset_days"]) == {-3}
+    assert c.meta["lst"]["scenes"][0]["id"] == "LC08_test"
+    assert c.rasters["canopy"].shape == c.grid.shape and c.rasters["driven"].sum() == t["cell"].nunique()
+
+
+def test_no_target_enters_the_predictors(built, tmp_path):
+    root, out, _ = built
+    trav = tmp_path / "shifted"
+    write_campaign(trav / "providence_ri", CENTRES["Providence, RI"], seed=len("Providence, RI"),
+                   temp_shift=lambda x, y: 3.0 * np.sin(x / 200.0))
+    out2 = tmp_path / "data"
+    D.build_dataset(["Providence, RI"], out2, traverses_dir=trav, features=synthetic_features, lst=synthetic_lst,
+                    era5=fake_era5, probe_opener=_no_network)
+    a = D.load_city(out / "cities" / "providence_ri").table.sort_values(["run_id", "cell"]).reset_index(drop=True)
+    b = D.load_city(out2 / "cities" / "providence_ri").table.sort_values(["run_id", "cell"]).reset_index(drop=True)
+    assert a["cell"].tolist() == b["cell"].tolist()
+    targets = set(D.TARGET_COLUMNS) | {"ta_era5"}
+    preds = [k for k in a.columns if k not in targets and a[k].dtype.kind == "f" and k not in ("x", "y", "lat", "lon")]
+    assert {"canopy", "lst", "lst_f300", "impervious_f1000"} <= set(preds)
+    for k in preds:
+        assert np.array_equal(a[k].to_numpy(), b[k].to_numpy(), equal_nan=True), k
+    assert not np.allclose(a["dTa"], b["dTa"])
+
+
+def test_reruns_skip_finished_cities_and_retry_failed_ones(built, tmp_path):
+    root, out, _ = built
+    calls = []
+
+    def counting_features(ctx, d):
+        calls.append(ctx)
+        return synthetic_features(ctx, d)
+
+    s = D.build_dataset(list(CENTRES), out, traverses_dir=root / "traverses", features=counting_features,
+                        lst=synthetic_lst, era5=fake_era5, probe_opener=_no_network)
+    assert calls == [] and {v.get("skipped") for v in s["cities"].values()} == {"cached"}
+    bad = tmp_path / "data"
+    (bad / "cities" / "boston_ma").mkdir(parents=True)
+    (bad / "cities" / "boston_ma" / "meta.json").write_text(json.dumps({"status": "failed"}))
+    s2 = D.build_dataset(["Boston, MA"], bad, traverses_dir=root / "traverses", features=counting_features,
+                         lst=False, era5=False, probe_opener=_no_network)
+    assert s2["cities"]["Boston, MA"]["status"] == "ok" and len(calls) == 1
+    t = D.load_city(bad / "cities" / "boston_ma").table
+    assert t["lst"].isna().all() and t["ta_era5"].isna().all()
+
+
+def test_a_broken_city_is_recorded_and_the_others_still_build(built, tmp_path):
+    root, _, _ = built
+    trav = tmp_path / "trav"
+    shutil.copytree(root / "traverses" / "boston_ma", trav / "boston_ma")
+    (trav / "providence_ri").mkdir(parents=True)
+    (trav / "providence_ri" / "notes.txt").write_text("nothing here")
+    s = D.build_dataset(list(CENTRES), tmp_path / "out", traverses_dir=trav, features=synthetic_features,
+                        lst=False, era5=False, probe_opener=_no_network)
+    assert s["cities"]["Boston, MA"]["status"] == "ok"
+    assert s["cities"]["Providence, RI"]["status"] == "failed" and "no traverse points" in s["cities"]["Providence, RI"]["error"]
+
+
+def test_blocked_hosts_fail_fast_with_their_name(tmp_path):
+    calls = []
+
+    def blocked(req, timeout=None):
+        calls.append(req.full_url)
+        raise urllib.error.URLError("Tunnel connection failed: 403 Forbidden")
+
+    with pytest.raises(D.NetworkBlocked) as exc:
+        D.build_dataset(["Providence, RI"], tmp_path / "out", features=synthetic_features, lst=False, era5=False,
+                        probe_opener=blocked)
+    assert exc.value.host == "api.osf.io" and "api.osf.io" in str(exc.value) and "--traverses-dir" in str(exc.value)
+    assert calls == ["https://api.osf.io/v2/"]
+    assert not (tmp_path / "out" / "raw").exists()
+
+    def http403(req, timeout=None):
+        raise urllib.error.HTTPError(req.full_url, 403, "Forbidden", {}, None)
+
+    with pytest.raises(D.NetworkBlocked, match="planetarycomputer.microsoft.com"):
+        D.check_hosts(["landsat"], opener=http403)
+    assert set(D.hosts_needed(True, True, True, True)) == set(D.HOSTS)
+    req = D.required_host_names()
+    assert {"api.osf.io", "files.osf.io", "planetarycomputer.microsoft.com", "nsf-ncar-era5.s3.amazonaws.com"} <= set(req)
+
+
+def test_traverses_are_downloaded_when_no_local_folder_is_given(built, tmp_path):
+    root, _, _ = built
+    seen = []
+
+    def ok(req, timeout=None):
+        seen.append(req.full_url)
+
+        class R:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+        return R()
+
+    def download(spec, dest):
+        assert spec.node == "wu9v7" and spec.folder_hint is None
+        shutil.copytree(root / "traverses" / "providence_ri", dest)
+
+    s = D.build_dataset(["Providence, RI"], tmp_path / "out", features=synthetic_features, lst=False, era5=False,
+                        probe_opener=ok, download=download)
+    assert s["cities"]["Providence, RI"]["status"] == "ok" and seen == ["https://api.osf.io/v2/"]
+    assert (tmp_path / "out" / "raw" / "providence_ri" / "af_trav.csv").exists()
+
+
+def test_adjust_visits_recovers_drift_and_offsets_and_falls_back_without_repeats():
+    rng = np.random.default_rng(1)
+    n_cells, n = 400, 6000
+    cells = rng.integers(0, n_cells, n)
+    veh = rng.integers(0, 4, n)
+    t = rng.uniform(0, 3600, n)
+    mu = rng.normal(30, 1, n_cells)
+    off = np.array([0.5, -0.2, 0.1, -0.4])
+    temp = mu[cells] + 1.5 * (t - np.median(t)) / 3600 + off[veh] + 0.02 * rng.standard_normal(n)
+    v = pd.DataFrame({"cell": cells, "vehicle": veh, "t_s": t, "temp": temp})
+    adj, info = D.adjust_visits(v)
+    assert info["method"] == "fe" and info["drift_per_h"] == pytest.approx(1.5, abs=0.02)
+    got = np.array([info["vehicle_offsets"][str(k)] for k in range(4)])
+    assert np.allclose(got, off - np.average(off, weights=np.bincount(veh)), atol=0.01)
+    per_cell = pd.Series(adj).groupby(cells).mean()
+    assert np.allclose(per_cell - per_cell.mean(), mu[per_cell.index] - mu[per_cell.index].mean(), atol=0.03)
+    # one visit per cell: drift is not identified against cell effects → CAPA's protocol line through the hour
+    v1 = pd.DataFrame({"cell": np.arange(500), "vehicle": 0, "t_s": np.linspace(0, 3600, 500),
+                       "temp": 30 + 1.0 * np.linspace(-0.5, 0.5, 500)})
+    adj1, info1 = D.adjust_visits(v1)
+    assert info1["method"] == "protocol" and "fallback" in info1 and info1["drift_per_h"] == pytest.approx(1.0)
+    assert np.allclose(adj1, 30.0)
+
+
+def test_city_grid_orientation_and_target_georeference():
+    g = D.make_city_grid(np.array([-71.42, -71.40]), np.array([41.81, 41.83]), UTM19, 30.0, 300.0)
+    assert g.x0 % 30.0 == pytest.approx(15.0) and g.y0 % 30.0 == pytest.approx(15.0)
+    north = np.arange(g.ny * g.nx, dtype=float).reshape(g.ny, g.nx)[::-1]       # row 0 = north
+    arr = g.from_northup(north)
+    T = g.target["transform"]
+    X, Y = g.centres()
+    # the north-up pixel containing each cell centre is that cell
+    cols = ((X - T.c) / T.a).astype(int)
+    rows = ((Y - T.f) / T.e).astype(int)
+    assert np.array_equal(north[rows, cols], arr)
+    w, s, e, n = g.bounds_lonlat()
+    assert w < -71.42 and e > -71.40 and s < 41.81 and n > 41.83
+
+
+def test_cli_fails_fast_naming_the_blocked_host(tmp_path, monkeypatch, capsys):
+    from sparc.core.cli import main
+
+    monkeypatch.setattr(D, "probe", lambda url, timeout=10.0, opener=None: "URLError: Tunnel connection failed: 403")
+    rc = main(["lstair", "dataset", "--cities", "Providence, RI", "--out", str(tmp_path / "o")])
+    assert rc == 2 and "api.osf.io" in capsys.readouterr().err

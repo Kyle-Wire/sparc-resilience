@@ -59,19 +59,42 @@ def utm_epsg(lon: float, lat: float) -> int:
     return (32600 if lat >= 0 else 32700) + zone
 
 
+_MGRS_BANDS = "CDEFGHJKLMNPQRSTUVWX"                    # 8° latitude bands from 80°S (X spans 72–84°N)
+_MGRS_COLS = ("STUVWXYZ", "ABCDEFGH", "JKLMNPQR")       # 100 km column letters by UTM zone mod 3
+_MGRS_ROWS = "ABCDEFGHJKLMNPQRSTUV"                    # 100 km row letters (AA scheme; even zones offset by 5)
+
+
+def mgrs_square(lon: float, lat: float) -> str:
+    """MGRS 100 km square (e.g. ``19TCG``) of a point, without the optional ``mgrs`` package.
+
+    Method: the WGS-84 UTM zone and 8° latitude band, then the 100 km column letter (set chosen by zone
+    mod 3, from easting // 100 km) and row letter (northing // 100 km mod 20, shifted by 5 in even zones:
+    the "AA" lettering of WGS-84 MGRS).  Standard UTM zones only: the Norway/Svalbard exceptions and the
+    polar UPS areas are not handled (no Heat Watch city lies there)."""
+    from pyproj import Transformer
+
+    if not -80.0 <= lat < 84.0:
+        raise ValueError("MGRS squares are defined between 80°S and 84°N (UTM)")
+    zone = int((lon + 180.0) // 6.0) + 1
+    band = _MGRS_BANDS[min(int((lat + 80.0) // 8.0), 19)]
+    epsg = (32600 if lat >= 0 else 32700) + zone
+    e, n = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True).transform(lon, lat)
+    col = _MGRS_COLS[zone % 3][int(e // 100000.0) - 1]
+    row = _MGRS_ROWS[(int(n // 100000.0) + (5 if zone % 2 == 0 else 0)) % 20]
+    return f"{zone:02d}{band}{col}{row}"
+
+
 def mgrs_tiles(bounds, zone: int) -> list[str]:
-    """MGRS 100 km tile ids (zone + band + square) covering lon/lat ``bounds``."""
+    """MGRS 100 km tile ids (zone + band + square) covering lon/lat ``bounds`` (the ``mgrs`` package when
+    installed, else :func:`mgrs_square`), from a 5 × 5 lattice of points over the bounds."""
+    w, s, e, n = bounds
+    pts = [(lo, la) for lo in np.linspace(w, e, 5) for la in np.linspace(s, n, 5)]
     try:
         import mgrs  # optional dependency
         m = mgrs.MGRS()
-        out = set()
-        w, s, e, n = bounds
-        for lo in np.linspace(w, e, 5):
-            for la in np.linspace(s, n, 5):
-                out.add(m.toMGRS(la, lo, MGRSPrecision=0))
-        return sorted(out)
+        return sorted({m.toMGRS(la, lo, MGRSPrecision=0) for lo, la in pts})
     except ImportError:
-        return []
+        return sorted({mgrs_square(lo, la) for lo, la in pts})
 
 
 def _s2_tile_prefixes(bounds, tiles: list[str] | None) -> list[str]:
@@ -79,7 +102,7 @@ def _s2_tile_prefixes(bounds, tiles: list[str] | None) -> list[str]:
         return tiles
     t = mgrs_tiles(bounds, 0)
     if not t:
-        raise ValueError("pass features.s2_tiles (e.g. ['19TCG', '19TBG']) or install the 'mgrs' package")
+        raise ValueError("pass features.s2_tiles (e.g. ['19TCG', '19TBG'])")
     return t
 
 
