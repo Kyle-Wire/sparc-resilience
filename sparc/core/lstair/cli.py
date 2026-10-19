@@ -184,11 +184,17 @@ def cmd_hosts(args) -> int:
     from sparc.core.lstair import dataset as D
 
     rows = []
-    for name, (url, hosts, purpose, remedy) in D.HOSTS.items():
+    for name, (probes, hosts, purpose, remedy) in D.HOSTS.items():
         status = None
         if args.probe:
-            status = D.probe(url) or "ok"
-        rows.append({"source": name, "hosts": list(hosts), "serves": purpose, "probe": url, "status": status})
+            status = "ok"
+            for pr in probes:
+                host, why = D.run_probe(pr)
+                if why:
+                    status = f"{host}: {why}"
+                    break
+        rows.append({"source": name, "hosts": list(hosts), "serves": purpose,
+                     "probes": [D.probe_label(pr) for pr in probes], "status": status})
     print(json.dumps(rows, indent=1))
     return 0
 

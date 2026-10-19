@@ -258,3 +258,64 @@ def test_read_window_returns_the_window_transform_of_a_real_cog(tmp_path):
     xs = np.array([X0 + 2000.0 + 15.0])
     out = L.sample_raster(win, wt, xs, np.array([Y1 - 2000.0 - 15.0]))
     assert out[0] == pytest.approx(xs[0] / 1000.0, abs=0.0151)
+
+
+def test_campaign_lst_tells_read_failures_apart_from_no_clear_scene():
+    """R9/R20: a blocked or failing COG host must not look like 'no clear scene'."""
+    import urllib.error
+
+    search, reader, tgt, _, _ = _mock_world()
+    kw = dict(window_days=16, min_clear=0.5, target=tgt, study_mask=np.ones(tgt["shape"], bool), search=search)
+    bbox, day = (-71.5, 41.8, -71.4, 41.9), date(2020, 7, 29)
+    ok = L.campaign_lst(bbox, day, reader=reader, **kw)
+    assert ok["status"] == "ok" and ok["io_errors"] == []
+    cloudy = L.campaign_lst(bbox, date(2020, 7, 31), reader=reader, **{**kw, "window_days": 3})
+    assert cloudy["status"] == "no_clear_scene" and cloudy["io_errors"] == []
+    none = L.campaign_lst(bbox, date(2021, 7, 31), reader=reader, **kw)
+    assert none["status"] == "no_scene"
+
+    def blocked(href, b):
+        raise urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))
+
+    res = L.campaign_lst(bbox, day, reader=blocked, **kw)
+    assert res["lst_c"] is None and res["status"] == "io_error"
+    assert {e["kind"] for e in res["io_errors"]} == {"blocked"}
+    assert all(c.get("error_kind") == "blocked" for c in res["candidates"] if c["inspected"])
+
+    def flaky(href, b):
+        raise urllib.error.HTTPError(href, 503, "Service Unavailable", {}, None)
+
+    assert L.campaign_lst(bbox, day, reader=flaky, **kw)["io_errors"][0]["kind"] == "io"
+
+    def s3(b, d0, d1):
+        return [{**sc, "assets": {"qa_pixel": {"href": "s3://usgs-landsat/x_QA.TIF"},
+                                  "lwir11": {"href": "s3://usgs-landsat/x_ST.TIF"}}} for sc in search(b, d0, d1)]
+
+    r3 = L.campaign_lst(bbox, day, reader=reader, **{**kw, "search": s3})
+    assert r3["status"] == "io_error" and r3["io_errors"][0]["kind"] == "unreadable"
+
+
+def test_io_error_kind():
+    import urllib.error
+
+    assert L.io_error_kind(urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))) == "blocked"
+    assert L.io_error_kind(urllib.error.HTTPError("u", 403, "Forbidden", {}, None)) == "blocked"
+    assert L.io_error_kind(urllib.error.HTTPError("u", 500, "x", {}, None)) == "io"
+    assert L.io_error_kind(TimeoutError("timed out")) == "io"
+    assert L.io_error_kind(RuntimeError("STAC query failed")) is None
+    try:
+        try:
+            raise urllib.error.URLError(OSError("Tunnel connection failed: 403"))
+        except urllib.error.URLError as exc:
+            raise RuntimeError("STAC query failed (https://planetarycomputer.microsoft.com/api/stac/v1/search)") from exc
+    except RuntimeError as e:
+        assert L.io_error_kind(e) == "blocked"
+    assert L.io_error_kind(ValueError("bad shape")) is None
+
+
+def test_campaign_lst_default_search_is_planetary_computer_with_required_signing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(L, "_query_stac_endpoint", lambda *a, **k: calls.append((a, k)) or [])
+    L.search_pc((0, 0, 1, 1), date(2020, 7, 1), date(2020, 7, 31))
+    (args, kw), = calls
+    assert args[0] == L.PC_STAC and kw == {"sign_assets": True, "require_signing": True}

@@ -57,6 +57,7 @@ import hashlib
 import json
 import logging
 import math
+import re
 import urllib.request
 from datetime import date
 from pathlib import Path
@@ -110,6 +111,63 @@ LST_PLATFORMS = ("landsat-8", "landsat-9")
 
 Reader = Callable[[str, tuple], tuple]          # (href, lon/lat bbox) → (array, affine transform, crs)
 Search = Callable[[tuple, date, date], list]    # (lon/lat bbox, start, end) → scene dicts
+
+#: Planetary Computer SAS token for the Landsat Collection 2 container (what ``planetary_computer.sign`` fetches).
+PC_SAS_TOKEN = "https://planetarycomputer.microsoft.com/api/sas/v1/token/landsateuwest/landsat-c2"
+PC_BLOB = "https://landsateuwest.blob.core.windows.net/landsat-c2"
+
+_BLOCKED_TEXT = ("tunnel connection failed", "could not resolve host", "name or service not known",
+                 "temporary failure in name resolution", "connection refused", "network is unreachable",
+                 "from proxy after connect")
+_BLOCKED_URLERROR = _BLOCKED_TEXT + ("proxy", "403", "401", "407")
+_HTTP_CODE = re.compile(r"(?:http(?: response code| error)?[: ]*|status[: ]*)(\d{3})", re.IGNORECASE)
+
+
+def io_error_kind(exc: BaseException) -> str | None:
+    """How a read failed: ``"blocked"`` (the host refused or cannot be reached: HTTP 401/403/407, a proxy's
+    tunnel refusal, DNS or connection refused), ``"io"`` (any other network or file I/O failure: 5xx, 404,
+    timeouts, cut-off transfers, GDAL/rasterio I/O errors) or None (not an I/O error: a data problem).  The
+    exception's cause chain is inspected too (``RuntimeError(...) from URLError``)."""
+    import http.client
+    import urllib.error
+
+    seen = 0
+    e: BaseException | None = exc
+    kind = None
+    while e is not None and seen < 6:
+        seen += 1
+        msg = str(e).lower()
+        if isinstance(e, urllib.error.HTTPError):
+            return "blocked" if e.code in (401, 403, 407) else "io"
+        if isinstance(e, urllib.error.URLError):
+            if isinstance(e.reason, TimeoutError) or "timed out" in msg:
+                return "io"
+            return "blocked" if any(t in msg for t in _BLOCKED_URLERROR) or isinstance(e.reason, OSError) else "io"
+        name = type(e).__name__
+        if name in ("RasterioIOError", "CPLE_HttpResponseError", "CPLE_OpenFailedError", "CPLE_FileIOError",
+                    "CPLE_AWSError", "CPLE_AWSAccessDeniedError", "CPLE_AWSObjectNotFoundError"):
+            m = _HTTP_CODE.search(msg)
+            if (m and m.group(1) in ("401", "403", "407")) or any(t in msg for t in _BLOCKED_TEXT):
+                return "blocked"
+            kind = "io"
+        elif isinstance(e, (TimeoutError, ConnectionError, http.client.HTTPException)):
+            kind = kind or "io"
+        elif isinstance(e, OSError):
+            kind = kind or ("blocked" if any(t in msg for t in _BLOCKED_TEXT) else "io")
+        e = e.__cause__ or e.__context__
+    return kind
+
+
+def href_host(href: str | None) -> str | None:
+    from urllib.parse import urlparse
+
+    if not href:
+        return None
+    h = str(href)
+    for pre in ("/vsicurl/", "/vsis3/", "/vsiaz/"):
+        if h.startswith(pre):
+            h = h[len(pre):]
+    return urlparse(h).hostname
 
 
 # ---------------------------------------------------------------------------
@@ -561,8 +619,17 @@ def campaign_lst(
 
     ``study_mask`` (bool, ``target`` shape) defines the study area; default the target cells inside
     ``bbox``.  ``search`` ``(bbox, start, end) → scenes`` and ``reader`` ``(href, bbox) → (array,
-    transform, crs)`` default to the STAC search (:func:`_query_stac`) and :func:`read_window`; tests
-    pass mocks.
+    transform, crs)`` default to the Planetary Computer STAC search with signed assets
+    (:func:`search_pc`; no Element84 fallback: its hrefs sit on a requester-pays bucket) and
+    :func:`read_window`; tests pass mocks.
+
+    **Failures are not "no clear scene".**  A scene whose read raises is recorded with ``error`` and
+    ``error_kind`` (:func:`io_error_kind`: ``"blocked"``, ``"io"``, or ``"data"`` for anything else), and
+    ``s3://`` hrefs are refused (``"unreadable"``: a requester-pays bucket needs credentials).  ``status`` says what
+    happened: ``"ok"`` (a scene kept), ``"no_scene"`` (none in the window), ``"no_clear_scene"`` (every
+    inspected scene read and was too cloudy) or ``"io_error"`` (none kept and at least one inspected scene
+    failed on I/O, so whether a clear scene exists is unknown); ``io_errors`` lists those failures with the
+    host of each.  Callers must not treat ``"io_error"`` as a finished result.
 
     Returns ``{"lst_k", "lst_c", "georef", "scenes", "candidates", "campaign_date", "window_days",
     "min_clear", "qa_masked"}``: ``scenes`` are the kept scenes and ``candidates`` every scene inspected,
@@ -582,7 +649,7 @@ def campaign_lst(
     if not study_mask.any():
         raise ValueError("the study area has no cells on the target grid")
     start, end = campaign_date - timedelta(days=int(window_days)), campaign_date + timedelta(days=int(window_days))
-    search = search or (lambda b, d0, d1: _query_stac(b, d0, d1, cloud_cover_max))
+    search = search or (lambda b, d0, d1: search_pc(b, d0, d1))
     reader = reader or read_window
     scenes = [s for s in search(bbox, start, end) or []
               if (not platforms or str(s.get("platform") or "").lower() in platforms)
@@ -605,7 +672,11 @@ def campaign_lst(
         qa_href = _asset_href(s, "qa")
         st_href = _asset_href(s, "thermal")
         if not qa_href or not st_href:
-            rec["error"] = "scene has no qa_pixel or lwir11 asset"
+            rec["error"], rec["error_kind"] = "scene has no qa_pixel or lwir11 asset", "data"
+            continue
+        if any(str(h).lower().startswith("s3://") for h in (qa_href, st_href)):
+            rec["error"] = "s3:// href (requester-pays bucket, e.g. the Element84 fallback): not readable here"
+            rec["error_kind"], rec["host"] = "unreadable", str(qa_href).split("/")[2] if "//" in str(qa_href) else None
             continue
         try:
             qa_arr, qa_tr, qa_crs = _cached_read(s, "qa_pixel", qa_href, bbox, reader, cache_dir)
@@ -624,7 +695,9 @@ def campaign_lst(
             k_t[bad] = np.nan
         except Exception as exc:                     # noqa: BLE001 - a broken scene is recorded, not fatal
             rec["error"] = str(exc).splitlines()[0][:200] if str(exc) else repr(exc)[:200]
-            log.warning("landsat: skipping %s (%s)", s.get("id"), rec["error"])
+            rec["error_kind"] = io_error_kind(exc) or "data"
+            rec["host"] = href_host(st_href if rec.get("clear_fraction") is not None else qa_href)
+            log.warning("landsat: skipping %s (%s: %s)", s.get("id"), rec["error_kind"], rec["error"])
             continue
         rec["selected"] = True
         rec["clear_fraction_lst"] = float(np.mean(np.isfinite(k_t[study_mask])))
@@ -634,10 +707,20 @@ def campaign_lst(
     if stack:
         with np.errstate(all="ignore"):
             lst_k = stack[0] if len(stack) == 1 else np.nanmedian(np.stack(stack), axis=0)
+    io_errors = [{"id": c["id"], "kind": c["error_kind"], "host": c.get("host"), "error": c["error"]}
+                 for c in candidates if c.get("error_kind") in ("blocked", "io", "unreadable")]
+    if kept:
+        status = "ok"
+    elif not candidates:
+        status = "no_scene"
+    elif io_errors:
+        status = "io_error"
+    else:
+        status = "no_clear_scene"
     return {"lst_k": lst_k, "lst_c": None if lst_k is None else lst_k - KELVIN, "georef": target,
             "scenes": kept, "candidates": candidates, "campaign_date": campaign_date.isoformat(),
             "window_days": int(window_days), "min_clear": float(min_clear), "qa_masked": list(qa_bits),
-            "platforms": list(platforms)}
+            "platforms": list(platforms), "status": status, "io_errors": io_errors}
 
 
 def _qa_on(arr, tr, crs, qa_arr, qa_tr, qa_crs) -> np.ndarray:
@@ -717,6 +800,14 @@ def _query_stac(
     ) from last_error
 
 
+def search_pc(bbox: tuple[float, float, float, float], date_start: date, date_end: date) -> list[dict]:
+    """Landsat C2 L2 scenes from the Planetary Computer STAC API with **signed** asset hrefs (SAS token from
+    planetarycomputer.microsoft.com; the COGs are on landsateuwest.blob.core.windows.net).  Unlike
+    :func:`_query_stac` there is no fallback: a failed search or a failed signing raises."""
+    return _query_stac_endpoint(PC_STAC, _PC_COLLECTION, bbox, date_start, date_end, sign_assets=True,
+                                require_signing=True)
+
+
 def _query_stac_endpoint(
     url: str,
     collection: str,
@@ -725,6 +816,7 @@ def _query_stac_endpoint(
     date_end: date,
     *,
     sign_assets: bool = False,
+    require_signing: bool = False,
 ) -> list[dict]:
     """Send a minimal STAC search (no query/fields extensions) to one endpoint (following ``next`` links)."""
     minx, miny, maxx, maxy = bbox
@@ -766,9 +858,15 @@ def _query_stac_endpoint(
     if sign_assets:
         try:
             import planetary_computer as pc  # type: ignore[import]
-            items = [pc.sign(item) for item in items]
-        except ImportError:
-            pass  # Fall through; download will likely fail but won't crash here
+        except ImportError as exc:
+            if require_signing:
+                raise RuntimeError("Planetary Computer assets need signing: install planetary-computer") from exc
+            pc = None  # Fall through; download will likely fail but won't crash here
+        if pc is not None:
+            try:
+                items = [pc.sign(item) for item in items]
+            except Exception as exc:
+                raise RuntimeError(f"Planetary Computer SAS signing failed ({PC_SAS_TOKEN}): {exc}") from exc
 
     scenes = []
     for item in items:

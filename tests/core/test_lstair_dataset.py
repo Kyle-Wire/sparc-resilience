@@ -396,3 +396,80 @@ def test_repeated_traverse_files_are_read_once_and_appendix_archives_skipped(bui
     assert c3.meta["n_duplicate_readings"] == 2 * len(af)
     run = next(r for r in c3.meta["runs"] if r["run"] == "af")
     assert run["vehicles"] == 4
+
+
+class _Resp:
+    def __init__(self, body=b""):
+        self.status, self._b = 200, body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def read(self):
+        return self._b
+
+
+def _ok_opener(req, timeout=None):
+    return _Resp(b'{"token": "st=x&sig=y"}' if "/sas/" in req.full_url else b"")
+
+
+def test_a_blocked_or_failing_landsat_host_is_never_cached_as_a_finished_city(built, tmp_path, monkeypatch):
+    """R9/R20: STAC answers but every COG read fails (proxy block, 5xx): the build names the blocked host, or
+    records the city failed and retries it; it never writes status 'ok' with NaN LST."""
+    import urllib.error
+
+    from sparc.data.collect import landsat as L
+
+    root, _, _ = built
+    scene = {"id": "LC08_L2SP_012031_20200724_02_T1", "datetime": "2020-07-24T15:30:00Z", "cloud_cover": 5.0,
+             "platform": "landsat-8",
+             "assets": {"qa_pixel": {"href": "https://landsateuwest.blob.core.windows.net/landsat-c2/x_QA.TIF?sig=1"},
+                        "lwir11": {"href": "https://landsateuwest.blob.core.windows.net/landsat-c2/x_ST.TIF?sig=1"}}}
+    monkeypatch.setattr(L, "search_pc", lambda b, d0, d1: [dict(scene)])
+    reads = []
+
+    def blocked(href, bbox):
+        reads.append(href)
+        raise urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))
+
+    monkeypatch.setattr(L, "read_window", blocked)
+    kw = dict(traverses_dir=root / "traverses", features=synthetic_features, era5=False, probe_opener=_ok_opener)
+    with pytest.raises(D.NetworkBlocked) as exc:
+        D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)
+    assert exc.value.host == "landsateuwest.blob.core.windows.net" and reads
+    assert D.city_status(tmp_path / "o" / "cities" / "providence_ri") is None
+
+    def unavailable(href, bbox):
+        reads.append(href)
+        raise urllib.error.HTTPError(href, 503, "Service Unavailable", {}, None)
+
+    monkeypatch.setattr(L, "read_window", unavailable)
+    s = D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)
+    rec = s["cities"]["Providence, RI"]
+    assert rec["status"] == "failed" and "retried" in rec["error"]
+    n = len(reads)
+    D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)                   # the rerun tries again
+    assert len(reads) > n
+
+
+def test_the_landsat_probe_signs_and_lists_the_blob_container():
+    import urllib.error
+
+    seen = []
+
+    def opener(req, timeout=None):
+        seen.append(req.full_url)
+        if "blob.core.windows.net" in req.full_url:
+            raise urllib.error.URLError(OSError("Tunnel connection failed: 403 Forbidden"))
+        return _ok_opener(req, timeout)
+
+    with pytest.raises(D.NetworkBlocked) as exc:
+        D.check_hosts(["landsat"], opener=opener)
+    assert exc.value.host == "landsateuwest.blob.core.windows.net"
+    assert seen[0].startswith("https://planetarycomputer.microsoft.com/api/stac/v1/")
+    assert any("/api/sas/v1/token/landsateuwest/landsat-c2" in u for u in seen)
+    assert any("restype=container&comp=list" in u and "sig=y" in u for u in seen)
+    assert D.check_hosts(["landsat"], opener=_ok_opener) == {"landsat": "ok"}

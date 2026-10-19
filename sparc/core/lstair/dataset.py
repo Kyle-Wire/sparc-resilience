@@ -34,7 +34,10 @@ For every city (a CAPA catalog name, or a local folder given by the user):
 Each city is cached in ``OUT/cities/<slug>/``: ``table.parquet``, ``rasters.npz`` (every raster on the full
 grid: the physics model needs features beyond the driven cells) and ``meta.json`` (provenance, runs, drift,
 scenes), written last, so a city with ``meta.json`` status ``ok`` is skipped on a rerun.  Hosts are probed
-before anything is fetched; a blocked host stops the build at once with its name (:class:`NetworkBlocked`).
+before anything is fetched (for Landsat: the STAC API, the SAS token and a signed listing of the COG container);
+a blocked host stops the build at once with its name (:class:`NetworkBlocked`).  A Landsat read that fails for
+another reason fails the city (retried on the next run): NaN LST in a finished city means only that every
+inspected scene was read and none was clear enough.
 
 References: Shandas et al. (2019), *Climate* 7(1), 5, doi:10.3390/cli7010005 (the Heat Watch method: traverses
 plus satellite predictors and machine learning); Voogt & Oke (2003), *RSE* 86(3), 370–384,
@@ -98,23 +101,42 @@ class NetworkBlocked(RuntimeError):
         super().__init__(f"cannot reach {host} ({reason}): it serves {purpose}." + (f" {remedy}" if remedy else ""))
 
 
-#: name → (probe URL, host(s) the real run needs, what they serve, remedy).  Each probe URL answers 200 when
-#: reachable (an API root or a public-bucket listing).
+def _probe_landsat_blob(opener: Callable | None = None, timeout: float = 10.0) -> tuple[str, str | None]:
+    """A signed listing of the Landsat container: the SAS token from Planetary Computer, then one blob listed
+    on Azure (what reading a COG needs); (host that failed or the blob host, reason or None)."""
+    import urllib.request
+
+    from sparc.data.collect.landsat import PC_BLOB, PC_SAS_TOKEN
+
+    opener = opener or urllib.request.urlopen
+    req = urllib.request.Request(PC_SAS_TOKEN, headers={"User-Agent": "SPARC-lstair/1.0"})
+    try:
+        with opener(req, timeout=timeout) as r:
+            token = json.loads(r.read().decode("utf-8"))["token"]
+    except Exception as exc:                          # noqa: BLE001 - any failure is the reason
+        return "planetarycomputer.microsoft.com", probe_reason(exc)
+    why = probe(f"{PC_BLOB}?restype=container&comp=list&maxresults=1&{token}", timeout=timeout, opener=opener)
+    return "landsateuwest.blob.core.windows.net", why
+
+
+#: name → (probes, host(s) the real run needs, what they serve, remedy).  A probe is a URL that answers HTTP < 400
+#: when reachable (an API root or a public-bucket listing; the failing URL's host is named) or a callable
+#: ``(opener, timeout) → (host, reason or None)``.
 HOSTS = {
-    "osf": ("https://api.osf.io/v2/", ("api.osf.io", "files.osf.io"),
+    "osf": (("https://api.osf.io/v2/",), ("api.osf.io", "files.osf.io"),
             "the CAPA Heat Watch traverse files (OSF API listing; downloads from files.osf.io)",
             "Allow api.osf.io and files.osf.io, or download the campaign folders and pass --traverses-dir."),
-    "landsat": ("https://planetarycomputer.microsoft.com/api/stac/v1/",
+    "landsat": (("https://planetarycomputer.microsoft.com/api/stac/v1/", _probe_landsat_blob),
                 ("planetarycomputer.microsoft.com", "landsateuwest.blob.core.windows.net"),
                 "Landsat Collection 2 Level-2 scenes (STAC search and SAS-token signing; COGs on Azure blob storage)",
                 "Allow planetarycomputer.microsoft.com and landsateuwest.blob.core.windows.net, or pass --no-lst."),
-    "worldcover": ("https://esa-worldcover.s3.amazonaws.com/?list-type=2&max-keys=1", ("esa-worldcover.s3.amazonaws.com",),
+    "worldcover": (("https://esa-worldcover.s3.amazonaws.com/?list-type=2&max-keys=1",), ("esa-worldcover.s3.amazonaws.com",),
                    "ESA WorldCover 2021 (canopy, impervious, water)", ""),
-    "dem": ("https://copernicus-dem-30m.s3.amazonaws.com/?list-type=2&max-keys=1",
+    "dem": (("https://copernicus-dem-30m.s3.amazonaws.com/?list-type=2&max-keys=1",),
             ("copernicus-dem-30m.s3.amazonaws.com",), "the Copernicus GLO-30 DEM (elevation)", ""),
-    "sentinel2": ("https://sentinel-cogs.s3.us-west-2.amazonaws.com/?list-type=2&max-keys=1",
+    "sentinel2": (("https://sentinel-cogs.s3.us-west-2.amazonaws.com/?list-type=2&max-keys=1",),
                   ("sentinel-cogs.s3.us-west-2.amazonaws.com",), "Sentinel-2 L2A COGs (NDVI, albedo)", ""),
-    "era5": ("https://nsf-ncar-era5.s3.amazonaws.com/?list-type=2&max-keys=1", ("nsf-ncar-era5.s3.amazonaws.com",),
+    "era5": (("https://nsf-ncar-era5.s3.amazonaws.com/?list-type=2&max-keys=1",), ("nsf-ncar-era5.s3.amazonaws.com",),
              "ERA5 2 m temperature and radiation (NSF NCAR mirror)", "Or pass --no-era5."),
 }
 
@@ -130,11 +152,18 @@ def probe(url: str, timeout: float = 10.0, opener: Callable | None = None) -> st
         with opener(req, timeout=timeout) as r:
             code = int(getattr(r, "status", None) or r.getcode() or 200)
             return None if code < 400 else f"HTTP {code}"
-    except urllib.error.HTTPError as exc:
-        return f"HTTP {exc.code}"
     except Exception as exc:                          # noqa: BLE001 - URLError, timeouts, TLS, resets
-        reason = getattr(exc, "reason", None) or exc
-        return f"{type(exc).__name__}: {str(reason)[:160]}"
+        return probe_reason(exc)
+
+
+def probe_reason(exc: BaseException) -> str:
+    """A short reason for a failed request: ``HTTP <code>`` or the connection error."""
+    import urllib.error
+
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    reason = getattr(exc, "reason", None) or exc
+    return f"{type(exc).__name__}: {str(reason)[:160]}"
 
 
 def hosts_needed(download_traverses: bool, features: bool, lst: bool, era5: bool) -> list[str]:
@@ -151,16 +180,32 @@ def hosts_needed(download_traverses: bool, features: bool, lst: bool, era5: bool
     return out
 
 
+def run_probe(pr, opener: Callable | None = None, timeout: float = 10.0) -> tuple[str, str | None]:
+    """(host, reason or None) of one :data:`HOSTS` probe."""
+    from urllib.parse import urlparse
+
+    if callable(pr):
+        return pr(opener, timeout)
+    return urlparse(pr).hostname or str(pr), probe(pr, timeout=timeout, opener=opener)
+
+
 def check_hosts(names: list[str], opener: Callable | None = None, timeout: float = 10.0) -> dict:
-    """Probe every host in ``names``; raise :class:`NetworkBlocked` for the first unreachable one."""
+    """Run every probe of every source in ``names``; raise :class:`NetworkBlocked` naming the host of the first
+    probe that fails."""
     out = {}
     for name in names:
-        url, hosts, purpose, remedy = HOSTS[name]
-        why = probe(url, timeout=timeout, opener=opener)
-        out[name] = why or "ok"
-        if why:
-            raise NetworkBlocked(hosts[0], why, purpose, remedy)
+        probes, hosts, purpose, remedy = HOSTS[name]
+        for pr in probes:
+            host, why = run_probe(pr, opener, timeout)
+            if why:
+                out[name] = why
+                raise NetworkBlocked(host, why, purpose, remedy)
+        out[name] = "ok"
     return out
+
+
+def probe_label(pr) -> str:
+    return pr if isinstance(pr, str) else (pr.__doc__ or pr.__name__).strip().splitlines()[0]
 
 
 def required_host_names() -> list[str]:
@@ -501,14 +546,61 @@ def open_features(ctx: CityGrid, campaign_date: dt.date, max_cloud: float = 20.0
 
 def landsat_lst(ctx: CityGrid, campaign_date: dt.date, study: np.ndarray, window_days: int = 16,
                 min_clear: float = 0.5, cache_dir: Path | None = None) -> dict:
-    """Campaign-matched Landsat LST (°C) on the city grid (:func:`sparc.data.collect.landsat.campaign_lst`)."""
-    from sparc.data.collect.landsat import campaign_lst
+    """Campaign-matched Landsat LST (°C) on the city grid (:func:`sparc.data.collect.landsat.campaign_lst`).
 
-    res = campaign_lst(ctx.bounds_lonlat(0.005), campaign_date, window_days=window_days, min_clear=min_clear,
-                       target=ctx.target, study_mask=ctx.to_northup(study), cache_dir=cache_dir)
+    A search or read that a host refused raises :class:`NetworkBlocked` naming that host; when no scene could be
+    kept because reads failed for another reason, RuntimeError (the city is recorded failed and retried): only
+    "every inspected scene was read and too cloudy" gives NaN LST in a finished city."""
+    from sparc.data.collect.landsat import campaign_lst, io_error_kind
+
+    try:
+        res = campaign_lst(ctx.bounds_lonlat(0.005), campaign_date, window_days=window_days, min_clear=min_clear,
+                           target=ctx.target, study_mask=ctx.to_northup(study), cache_dir=cache_dir)
+    except Exception as exc:                          # noqa: BLE001 - name a blocked host, else fail the city
+        _raise_lst_failure([{"kind": io_error_kind(exc), "host": _failed_host(exc), "error": str(exc)[:200]}])
+        raise
+    check_lst_result(res)
     lst = None if res["lst_c"] is None else ctx.from_northup(res["lst_c"])
     return {"lst_c": lst, "scenes": res["scenes"], "candidates": res["candidates"], "window_days": window_days,
-            "min_clear": min_clear, "qa_masked": res["qa_masked"]}
+            "min_clear": min_clear, "qa_masked": res["qa_masked"], "status": res.get("status")}
+
+
+def _failed_host(exc: BaseException) -> str | None:
+    from sparc.data.collect.landsat import href_host
+
+    e, n = exc, 0
+    while e is not None and n < 6:
+        for a in ("sparc_url", "url", "filename"):
+            h = href_host(getattr(e, a, None)) if isinstance(getattr(e, a, None), str) else None
+            if h:
+                return h
+        m = re.search(r"https?://[^\s'\")]+", str(e))
+        if m:
+            return href_host(m.group(0))
+        e, n = e.__cause__ or e.__context__, n + 1
+    return None
+
+
+def _raise_lst_failure(errors: list[dict]) -> None:
+    """NetworkBlocked when a Landsat host refused us; RuntimeError (the city is recorded failed and retried) when
+    reads failed otherwise; nothing when ``errors`` holds no I/O failure."""
+    _, hosts, purpose, remedy = HOSTS["landsat"]
+    blocked = [e for e in errors if e.get("kind") == "blocked"]
+    if blocked:
+        e = blocked[0]
+        raise NetworkBlocked(e.get("host") or hosts[-1], str(e.get("error"))[:160], purpose, remedy)
+    io = [e for e in errors if e.get("kind") in ("io", "unreadable")]
+    if io:
+        raise RuntimeError(f"Landsat reads failed for every inspected scene ({io[0].get('host')}: "
+                           f"{str(io[0].get('error'))[:160]}); whether a clear scene exists is unknown, so the city "
+                           "is not cached and is retried on the next run")
+
+
+def check_lst_result(res: dict) -> None:
+    """Refuse a :func:`~sparc.data.collect.landsat.campaign_lst` result whose scenes failed to read (status
+    ``io_error``): such a city must not be cached as finished with NaN LST."""
+    if res.get("status") == "io_error":
+        _raise_lst_failure(res.get("io_errors") or [{"kind": "io", "error": "unknown read failure"}])
 
 
 def era5_run(lon: float, lat: float, tz: str, start: pd.Timestamp, end: pd.Timestamp) -> dict:
@@ -633,8 +725,11 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     if lst is not False:
         lst_res = (lst or (lambda c, d, s: landsat_lst(c, d, s, lst_window_days, lst_min_clear, cache_dir)))(
             ctx, campaign, study)
+        check_lst_result(lst_res)                     # a provider's read failures never pass as "no clear scene"
         if lst_res.get("lst_c") is None:
-            warnings.append("no Landsat scene clear enough within the window: LST columns are NaN")
+            why = ("no Landsat scene within the window" if lst_res.get("status") == "no_scene"
+                   else "no Landsat scene clear enough within the window")
+            warnings.append(f"{why}: LST columns are NaN")
     rasters = derived_rasters(feats, None if lst_res is None else lst_res.get("lst_c"), ctx.dx)
 
     # sample at the driven cells
