@@ -3,7 +3,8 @@
     sparc core lstair dataset  --cities "Providence, RI" "Boston, MA" --out DIR [--traverses-dir DIR]
                                [--no-lst] [--no-era5] [--utc] [--force]
     sparc core lstair dataset  --cities all --out DIR            (every CAPA catalog city)
-    sparc core lstair hosts                                      (the hosts a real run needs)
+    sparc core lstair evaluate --data DIR --out DIR [--windows af,am,pm] [--no-physics] [--boot 4000]
+    sparc core lstair hosts [--probe]                            (the hosts a real run needs)
 
 Exit codes: 0 done (some cities may have failed: see DIR/dataset.json), 1 nothing built, 2 a host the build
 needs is blocked (named on stderr).
@@ -41,6 +42,20 @@ def add_lstair_parser(subs) -> None:
     d.add_argument("--lst-min-clear", type=float, default=0.5, help="minimum clear fraction over the study area")
     d.add_argument("--cache", default=None, help="Landsat COG window cache (default OUT/cache/landsat)")
     d.set_defaults(func=_tracked(cmd_dataset))
+
+    e = s.add_parser("evaluate", help="leave-one-city-out: A land cover, B + LST, C physics with LST → results")
+    e.add_argument("--data", required=True, help="the dataset folder (the --out of lstair dataset)")
+    e.add_argument("--out", required=True, help="results folder (results.json, results.md, predictions.parquet)")
+    e.add_argument("--windows", default="af,am,pm,ni", help="run windows in order (default af,am,pm,ni)")
+    e.add_argument("--boot", type=int, default=4000, help="bootstrap resamples over cities (default 4000)")
+    e.add_argument("--seed", type=int, default=0)
+    e.add_argument("--max-rows", type=int, default=6000, help="training cells per city (default 6000; 0 = all)")
+    e.add_argument("--no-gbm", action="store_true", help="additive spline ridge only (no gradient boosting)")
+    e.add_argument("--no-physics", action="store_true", help="skip model C")
+    e.add_argument("--physics-cell", type=float, default=60.0, help="physics cell size, m (default 60)")
+    e.add_argument("--physics-iter", type=int, default=60, help="physics L-BFGS iterations (default 60)")
+    e.add_argument("--no-within-city", action="store_true", help="skip the secondary within-city block CV")
+    e.set_defaults(func=_tracked(cmd_evaluate))
 
     h = s.add_parser("hosts", help="list the hosts a real run needs and probe them")
     h.add_argument("--probe", action="store_true", help="probe each host (short timeout) instead of only listing")
@@ -111,6 +126,31 @@ def cmd_dataset(args) -> int:
         print(line)
     print(f"{len(ok)} of {len(summary['cities'])} cities ready in {out / 'cities'}")
     return 0 if ok else 1
+
+
+def cmd_evaluate(args) -> int:
+    from sparc.core.lstair.evaluate import Settings, run_evaluation
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    s = Settings(windows=tuple(w.strip() for w in args.windows.split(",") if w.strip()), boot=args.boot,
+                 seed=args.seed, max_rows_per_city=args.max_rows, gbm=not args.no_gbm, physics=not args.no_physics,
+                 physics_cell_m=args.physics_cell, physics_iter=args.physics_iter, within_city=not args.no_within_city)
+    try:
+        res = run_evaluation(args.data, args.out, s)
+    except ValueError as exc:
+        print(f"lstair evaluate: {exc}", file=sys.stderr)
+        return 1
+    for run, w in res["windows"].items():
+        if w.get("status") != "done":
+            print(f"{run}: not run ({w.get('reason')})")
+            continue
+        p = w["paired"]["B-A"]
+        ci = p.get("ci95")
+        print(f"{run}: {len(w['per_city'])} held-out cities; B − A mean ΔMSE "
+              + (f"{p['mean_diff_mse']:+.4f} (95% CI {ci[0]:+.4f} to {ci[1]:+.4f})" if ci else "—")
+              + f" → {p['verdict']}")
+    print(f"results: {Path(args.out) / 'results.md'}")
+    return 0
 
 
 def cmd_hosts(args) -> int:
