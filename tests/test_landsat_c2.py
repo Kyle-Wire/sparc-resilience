@@ -438,7 +438,8 @@ def test_rows_of_one_overpass_are_mosaicked_before_the_scene_is_chosen():
     sc, = res["scenes"]
     assert sc["ids"] == [r35, r36] and sc["id"] == f"{r35}+{r36}" and sc["date"] == "2021-07-05"
     assert sc["wrs_path"] == 34 and sc["wrs_rows"] == [35, 36] and sc["offset_days"] == -4
-    assert sc["clear_fraction"] == 1.0 and sc["footprint_fraction"] == 1.0 and sc["clear_fraction_lst"] == 1.0
+    assert sc["clear_fraction"] == 1.0 and sc["footprint_fraction"] == 1.0
+    assert sc["clear_fraction_lst"] == pytest.approx(1 - 3 / n)     # row 35's 150 m buffer north of row 36's edge
     assert "nearest scene ≥ 80% clear" in res["selection"]
     cand = {c["id"]: c for c in res["candidates"]}
     assert cand[r35]["clear_fraction"] == pytest.approx((25 - 3) / n) and cand[r35]["footprint_fraction"] == 0.625
@@ -447,13 +448,38 @@ def test_rows_of_one_overpass_are_mosaicked_before_the_scene_is_chosen():
     assert cand["LC08_L2SP_033036_20210718_02_T1"]["inspected"] is False
     assert [o["ids"] for o in res["overpasses"]] == [[r35, r36], ["LC08_L2SP_033036_20210718_02_T1"]]
     lst = res["lst_k"]
-    assert np.allclose(lst[:18], 300.0, atol=0.004) and np.allclose(lst[18:21], 301.0, atol=0.004)
-    assert np.allclose(lst[21:25], 300.0, atol=0.004) and np.allclose(lst[25:], 301.0, atol=0.004)
+    # row 36's value where row 35 is cloud or within 150 m of it; north of row 36's edge nothing is left there
+    assert np.allclose(lst[:13], 300.0, atol=0.004) and np.isnan(lst[13:16]).all()
+    assert np.allclose(lst[16:], 301.0, atol=0.004)
     # judged one row at a time, neither row would be 80% clear and the +9 d scene would be taken
     alone = L.campaign_lst((-106.8, 35.0, -106.5, 35.2), date(2021, 7, 9),
                            **{**kw, "search": lambda b, d0, d1: [dict(s) for s in kw["search"](b, d0, d1)
                                                                  if s["id"] != r36]})
     assert [s["id"] for s in alone["scenes"]] == ["LC08_L2SP_033036_20210718_02_T1"]
+
+
+def test_each_row_is_buffered_around_its_own_cloud_before_the_overlap_takes_a_clear_value():
+    """Each row's cloud mask is computed on its own scene and they differ at cloud edges (Atlanta 2021-08-29: 0.9% and
+    1.8% of the rows' overlap is cloud in one row and clear in the other).  A row's values within 150 m of its own
+    cloud are masked even where the other row is clear there, and a row's cloud past the edge of another row's
+    footprint still buffers that other row's values."""
+    n = 40
+    add, kw = _world(n)
+    r35, r36 = "LC08_L2SP_034035_20210705_02_T1", "LC08_L2SP_034036_20210705_02_T1"
+    qa_n = np.full((25, n), _CLEAR)                       # row 35: grid rows 0-24
+    qa_n[16:18, 10:30] = _CLOUD                           # cloud in the overlap, where row 36 is clear
+    qa_s = np.full((24, n), _CLEAR)                       # row 36: grid rows 16-39
+    qa_s[27 - 16, :5] = _CLOUD                            # cloud at grid row 27, past row 35's footprint
+    add(r35, "2021-07-05", qa_n, np.full((25, n), 300.0))
+    add(r36, "2021-07-05", qa_s, np.full((24, n), 301.0), row0=16)
+    res = L.campaign_lst((-106.8, 35.0, -106.5, 35.2), date(2021, 7, 9), **kw)
+    lst = res["lst_k"]
+    assert res["scenes"][0]["ids"] == [r35, r36] and res["scenes"][0]["clear_fraction"] == pytest.approx(1 - 5 / n ** 2)
+    assert np.allclose(lst[16:23, 10:30], 301.0, atol=0.004)     # row 36 where row 35 is cloud or within 150 m of it
+    assert np.isnan(lst[11:16, 10:30]).all()                    # only row 35 there, within 150 m of its own cloud
+    assert np.allclose(lst[10, 10:30], 300.0, atol=0.004) and np.allclose(lst[11:16, :5], 300.0, atol=0.004)
+    assert np.allclose(lst[23:25, 10:30], 300.0, atol=0.004)   # 180-210 m from row 35's cloud: its own value
+    assert np.isnan(lst[22:33, :5]).all() and np.isfinite(lst[21, :5]).all() and np.isfinite(lst[33, :5]).all()
 
 
 def test_footprint_is_reported_apart_from_cloud():

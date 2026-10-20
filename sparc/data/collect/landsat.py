@@ -665,7 +665,8 @@ def campaign_lst(
     cells clear in the mosaic, and its **footprint fraction** the share inside any row's footprint (QA fill not
     set), so a scene that misses part of the city is not mistaken for a cloudy one (Seattle 2020-07-29: the east of
     the King County grid lies outside path 047; row 26 holds none of the study area and row 27 is 0.76 clear).  A
-    row with no clear pixel on the grid (Seattle's row 26) adds no LST, so its thermal band is not read.
+    row with no clear pixel on the grid adds no LST, so its thermal band is not read (Seattle's row 26 has 115 clear
+    cells in a corner of the grid, outside the study area, so it is read).
 
     Choice.  With one scene (default) the kept overpass is the **nearest with a clear fraction ≥ ``prefer_clear``**
     (0.8): the nearest-date rule kept a 60%-clear scene over a fully clear one 8 days further (LA 2019: 38% of the
@@ -680,8 +681,13 @@ def campaign_lst(
 
     LST.  Each kept row's ST_B10 is scaled to kelvin, masked with its own QA (on its own grid and on ``target``) and
     reprojected (bilinear); where rows overlap, any clear value is taken.  LST is also masked within
-    ``mask_buffer_m`` (:data:`MASK_BUFFER_M`, 150 m) of the mosaic's cloud (the :data:`CLOUD_BITS` among
-    ``qa_bits``, where no row is clear): clear LST next to the mask is cool-biased (Charleston, Virginia Beach).
+    ``mask_buffer_m`` (:data:`MASK_BUFFER_M`, 150 m) of cloud (the :data:`CLOUD_BITS` among ``qa_bits``): clear
+    LST next to the mask is cool-biased (Charleston, Virginia Beach).  Each row's values are masked within that
+    distance of its own cloud, before the overlap takes any clear value (each row's cloud mask is computed on its
+    own scene and they differ at cloud edges: in Atlanta 2021-08-29's overlap 0.9% and 1.8% of the cells are cloud
+    in one row and clear in the other, and 17 driven cells within 150 m of each row's own cloud but of no cell
+    cloudy in both kept LST with a land-cover residual of −2.2 K), and the mosaic within that distance of its
+    cloud (where no row is clear: a row's cloud next to the edge of another's footprint).
     Fill is not buffered, so the edges of a footprint keep their pixels, and the clear fraction that chose the
     scene uses the unbuffered mask; a kept overpass's ``clear_fraction_lst`` is the share of study-area cells with
     LST after the buffer.  With more than one overpass the pixel-wise median of the masked overpasses is the LST.
@@ -810,7 +816,7 @@ def campaign_lst(
             continue
         clear = np.logical_or.reduce([~r["bad"] for r in rows])          # overlaps: clear in any row
         inside = np.logical_or.reduce([r.pop("inside") for r in rows])
-        cloud = np.logical_or.reduce([r.pop("cloud") for r in rows]) & ~clear   # the mosaic's cloud, to buffer
+        cloud = np.logical_or.reduce([r["cloud"] for r in rows]) & ~clear       # the mosaic's cloud, to buffer
         used = [r for r in rows if not r["bad"].all()] or rows             # a row with no clear pixel adds nothing
         op["ids"] = [r["rec"]["id"] for r in used]
         op["id"] = "+".join(str(i) for i in op["ids"])
@@ -848,13 +854,13 @@ def campaign_lst(
                 qa_native = _qa_on(st_arr, st_tr, st_crs, qa_arr, qa_tr, qa_crs)
                 k_native[qa_mask(qa_native, qa_bits)] = np.nan
                 k_row = reproject_array(k_native, st_tr, st_crs, target, "bilinear")
-                k_row[r["bad"]] = np.nan
+                k_row[r["bad"] | buffer_mask(r["cloud"], mask_buffer_m, pixel_m)] = np.nan   # its own cloud edges
                 k_t = k_row if k_t is None else np.where(np.isfinite(k_t), k_t, k_row)
         except Exception as exc:                     # noqa: BLE001 - a broken scene is recorded, not fatal
             failed(r["rec"], exc, r["st_href"])
             op["error"] = f"{r['rec']['id']}: {r['rec']['error']}"
             continue
-        k_t[buffer_mask(d["cloud"], mask_buffer_m, pixel_m)] = np.nan
+        k_t[buffer_mask(d["cloud"], mask_buffer_m, pixel_m)] = np.nan          # and a row's cloud past another's edge
         op["selected"] = True
         for r in d["rows"]:
             r["rec"]["selected"] = True
