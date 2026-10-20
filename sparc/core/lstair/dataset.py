@@ -621,7 +621,8 @@ def landsat_lst(ctx: CityGrid, campaign_date: dt.date, study: np.ndarray, window
     lst = None if res["lst_c"] is None else ctx.from_northup(res["lst_c"])
     return {"lst_c": lst, "scenes": res["scenes"], "candidates": res["candidates"], "window_days": window_days,
             "min_clear": min_clear, "prefer_clear": prefer_clear, "selection": res.get("selection"),
-            "qa_masked": res["qa_masked"], "status": res.get("status")}
+            "qa_masked": res["qa_masked"], "status": res.get("status"), "mask_buffer_m": res.get("mask_buffer_m"),
+            "clear_tolerance": res.get("clear_tolerance"), "overpasses": res.get("overpasses")}
 
 
 def _failed_host(exc: BaseException) -> str | None:
