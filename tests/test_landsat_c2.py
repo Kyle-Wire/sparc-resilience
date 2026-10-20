@@ -3,6 +3,7 @@ selection and the ST_B10 scale.  No network: synthetic georeferenced arrays and 
 
 from __future__ import annotations
 
+import json
 from datetime import date
 
 import numpy as np
@@ -546,3 +547,42 @@ def test_wrs_path_row_from_the_product_id_or_the_scene():
     assert L.wrs_path_row({"id": "LC09_L2SP_019037_20220824_20220826_02_T1"}) == (19, 37)
     assert L.wrs_path_row({"id": "x", "wrs_path": "47", "wrs_row": "27"}) == (47, 27)
     assert L.wrs_path_row({"id": "near_cloudy"}) is None
+
+
+def test_the_city_meta_records_the_buffer_the_tolerance_and_the_overpasses(monkeypatch):
+    """sparc.core.lstair.dataset.landsat_lst hands campaign_lst's mask_buffer_m, clear_tolerance and overpasses to the
+    city's meta.json (JSON-serialisable), with the LST buffered on the city grid."""
+    from sparc.core.lstair import dataset as D
+
+    n = 40
+    add, kw = _world(n)
+    qa = np.full((n, n), _CLEAR)
+    qa[18:22, 18:22] = _CLOUD
+    sid = "LC08_L2SP_015033_20210716_02_T1"
+    add(sid, "2021-07-16", qa, np.full((n, n), 300.0))
+    monkeypatch.setattr(L, "search_pc", kw["search"])
+    monkeypatch.setattr(L, "read_window", kw["reader"])
+    ctx = D.CityGrid(crs=UTM, x0=X0 + 15.0, y0=Y1 - 30.0 * n + 15.0, dx=30.0, nx=n, ny=n)   # the _world target
+    res = D.landsat_lst(ctx, date(2021, 7, 15), np.ones((n, n), bool))
+    assert res["status"] == "ok" and res["mask_buffer_m"] == 150 and res["clear_tolerance"] == pytest.approx(0.10)
+    meta = json.loads(D.to_json({k: v for k, v in res.items() if k != "lst_c"}))
+    op, = meta["overpasses"]
+    assert op["ids"] == [sid] and op["wrs_path"] == 15 and op["wrs_rows"] == [33] and op["footprint_fraction"] == 1.0
+    assert meta["scenes"][0]["clear_fraction"] == pytest.approx(1 - 16 / n ** 2)
+    assert np.isnan(res["lst_c"]).sum() == L.buffer_mask(qa == _CLOUD, 150.0).sum()
+
+
+def test_a_city_cached_before_the_overpass_mosaic_and_the_buffer_is_rebuilt(tmp_path, monkeypatch):
+    """The mosaic, the 150 m buffer and the 0.10 tolerance change a city's LST with unchanged arguments: they are in
+    the build settings a cached city is compared with, so a rerun rebuilds a city cached before them."""
+    from sparc.core.lstair import dataset as D
+
+    s = D.build_settings()
+    assert s["lst_method"] == {"overpass_mosaic": True, "mask_buffer_m": 150.0, "clear_tolerance": 0.10}
+    assert D.build_settings(lst=False)["lst_method"] is None
+    old = {k: v for k, v in s.items() if k != "lst_method"}                  # the settings of a city built before
+    meta = {"status": "ok", "settings": old, "settings_key": D.settings_key(old)}
+    (tmp_path / "meta.json").write_text(json.dumps(meta))
+    assert D._stale(tmp_path, D.settings_key(s)) and D._stale(tmp_path, D.settings_key(old)) is None
+    monkeypatch.setitem(L.CAMPAIGN_LST_METHOD, "mask_buffer_m", 300.0)
+    assert D.settings_key(D.build_settings()) != D.settings_key(s)

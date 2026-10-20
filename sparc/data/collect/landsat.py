@@ -121,6 +121,10 @@ MASK_BUFFER_M = 150.0
 #: When no scene is ``prefer_clear``, scenes within this much clear fraction of the clearest count as clear as it and
 #: the nearest of them is taken (:func:`campaign_lst`).
 CLEAR_TOLERANCE = 0.10
+#: What :func:`campaign_lst` does that its arguments do not show, for a cache to tell LST made another way: a city
+#: build's settings carry it (:func:`sparc.core.lstair.dataset.build_settings`), so a city cached before the overpass
+#: mosaic, the cloud-edge buffer and the tolerance (all with unchanged arguments) is rebuilt, not kept.
+CAMPAIGN_LST_METHOD = {"overpass_mosaic": True, "mask_buffer_m": MASK_BUFFER_M, "clear_tolerance": CLEAR_TOLERANCE}
 #: Platforms used by :func:`campaign_lst` (Landsat 7's scan-line corrector failed in 2003).
 LST_PLATFORMS = ("landsat-8", "landsat-9")
 
