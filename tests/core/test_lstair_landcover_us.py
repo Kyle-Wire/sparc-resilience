@@ -70,11 +70,14 @@ def interior(region, X, Y, r=45.0):
 class FakeWCS:
     """A synthetic MRLC GetCoverage: the pixels of the NLCD 30 m grid whose centres lie in the EPSG:5070 subset (both
     bounds inclusive), valued by each centre's position in UTM 17N, as a GeoTIFF with nodata declared 0 (as the real
-    server does).  ``shift_m`` moves the returned georeference off the NLCD grid (a broken server)."""
+    server does).  ``shift_m`` moves the returned georeference off the NLCD grid (a broken server); ``grow`` =
+    (west, north, east, south) whole pixels added to (or, negative, cut from) each answer's sides: a server that
+    rounds a bound outwards, or a coverage edge inside the window."""
 
-    def __init__(self, layers=None, shift_m=0.0):
+    def __init__(self, layers=None, shift_m=0.0, grow=(0, 0, 0, 0)):
         self.layers = layers or {"tcc": tcc_codes, "nlcd_imp": imp_codes}
         self.shift_m = shift_m
+        self.grow = grow
         self.calls: list[str] = []
 
     def __call__(self, url: str) -> bytes:
@@ -96,6 +99,7 @@ class FakeWCS:
         ox, oy = LC.NLCD_ORIGIN
         i0, i1 = int(np.ceil((xa - ox) / 30.0 - 0.5)), int(np.floor((xb - ox) / 30.0 - 0.5))
         j0, j1 = int(np.ceil((oy - yb) / 30.0 - 0.5)), int(np.floor((oy - ya) / 30.0 - 0.5))
+        i0, j0, i1, j1 = i0 - self.grow[0], j0 - self.grow[1], i1 + self.grow[2], j1 + self.grow[3]
         CX, CY = np.meshgrid(ox + 15.0 + 30.0 * np.arange(i0, i1 + 1), oy - 15.0 - 30.0 * np.arange(j0, j1 + 1))
         xu, yu = Transformer.from_crs("EPSG:5070", UTM17, always_xy=True).transform(CX, CY)
         arr = np.rint(self.layers[layer](np.asarray(xu), np.asarray(yu))).astype(np.uint8)
@@ -209,6 +213,30 @@ def test_tiled_requests_give_the_window_of_one_request():
         np.testing.assert_array_equal(np.isnan(A[k]), np.isnan(B[k]))
         np.testing.assert_allclose(A[k], B[k], equal_nan=True, atol=1e-9)
     assert len(prov["layers"]["tcc"]["urls"]) == len(many.calls) // 2
+
+
+def test_each_tile_is_placed_by_the_georeference_it_comes_back_with():
+    """A server that answers more pixels than asked (a bound rounded outwards) or fewer (a coverage edge): every
+    pixel still lands at its own place in the window, and a pixel no answer holds stays NaN."""
+    ctx = CityGrid(**GRID)
+    win = LC.nlcd_window(ctx)
+    cov = LC.coverage_ids(dt.date(2020, 7, 29))["nlcd_imp"]
+    exact, T, _ = LC.read_layer(cov, win, FakeWCS())
+    assert np.isfinite(exact).mean() > 0.9
+    for grow in ((1, 2, 0, 0), (0, 0, 2, 1), (3, 1, 2, 2)):
+        a, T2, _ = LC.read_layer(cov, win, FakeWCS(grow=grow), tile_px=16)
+        assert T2 == T
+        np.testing.assert_array_equal(a, exact)
+    a, _, _ = LC.read_layer(cov, win, FakeWCS(grow=(0, 0, -3, -2)), tile_px=16)
+    h, w = exact.shape
+    assert w % 16 not in (1, 2, 3) and h % 16 not in (1, 2)  # every tile keeps some pixels
+    gone = np.zeros(exact.shape, bool)
+    for tc in range(0, w, 16):                              # each tile lacks its 3 east columns, 2 south rows
+        gone[:, min(tc + 16, w) - 3:min(tc + 16, w)] = True
+    for tr in range(0, h, 16):
+        gone[min(tr + 16, h) - 2:min(tr + 16, h), :] = True
+    assert np.isnan(a[gone]).all() and gone.any() and (~gone).any()
+    np.testing.assert_array_equal(a[~gone], exact[~gone])
 
 
 def test_a_tile_off_the_nlcd_grid_or_an_exception_report_raises():
