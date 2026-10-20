@@ -323,6 +323,19 @@ def test_add_dataset_records_failures_leaves_them_untouched_and_skips_unbuilt_ci
         LC.add_dataset(tmp_path, ["Nowhere"], fetch=fetch)
 
 
+def test_a_city_whose_augmented_files_are_unreadable_fails_alone(tmp_path):
+    """A city done earlier whose rasters.npz was later truncated: its skip check must not abort the command (it
+    raised BadZipFile before any city was processed); the city is recorded as failed, the others go on."""
+    done, other = write_city(tmp_path, "testville_va"), write_city(tmp_path, "otherton_va")
+    LC.add_landcover(done, fetch=FakeWCS())
+    raw = (done / "rasters.npz").read_bytes()
+    (done / "rasters.npz").write_bytes(raw[: len(raw) // 2])
+    assert not LC.has_landcover(done)
+    s = LC.add_dataset(tmp_path, fetch=FakeWCS())
+    assert s["cities"]["testville_va"]["status"] == "failed" and s["cities"]["otherton_va"]["status"] == "added"
+    assert LC.has_landcover(other)
+
+
 def test_a_blocked_wcs_host_stops_before_any_fetch(city, monkeypatch):
     calls = []
     monkeypatch.setattr(LC, "probe", lambda url, timeout=10.0, opener=None: "URLError: Tunnel connection failed: 403")

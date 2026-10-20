@@ -297,7 +297,11 @@ def landcover_key(grid: dict, campaign_date: dt.date) -> str:
 
 
 def has_landcover(city_dir: str | Path, meta: dict | None = None) -> bool:
-    """Whether the city's files hold every land-cover column from the current key (the command would skip it)."""
+    """Whether the city's files hold every land-cover column from the current key (the command would skip it).
+    Unreadable files count as not done (``add_dataset`` then records the city's own failure, the others go on:
+    a truncated ``rasters.npz`` raises ``BadZipFile``, a ``campaign_date`` of null ``TypeError``)."""
+    import zipfile
+
     import pyarrow.parquet as pq
 
     d = Path(city_dir)
@@ -309,7 +313,7 @@ def has_landcover(city_dir: str | Path, meta: dict | None = None) -> bool:
         names = set(pq.read_schema(d / "table.parquet").names)
         with np.load(d / "rasters.npz", allow_pickle=False) as z:
             keys = set(z.files)
-    except (OSError, ValueError, KeyError):
+    except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile):
         return False
     return all(c in names and c in keys for c in COLUMNS)
 
