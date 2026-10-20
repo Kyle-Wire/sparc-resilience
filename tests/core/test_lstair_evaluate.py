@@ -554,6 +554,27 @@ def test_flagged_runs_are_dropped_by_default_listed_and_kept_on_request():
     assert E.prepare(base, s)[1] == [] and E.prepare([_flag(base[1], "none", "")], s)[1] == []
 
 
+def test_include_flagged_takes_back_walked_and_single_car_runs_only():
+    """The registered sensitivity includes walking campaigns and single-car runs; the QA registry's verified faults
+    (Fort Lauderdale's rain over 4 of 7 routes: "run excluded", no sensitivity) stay out."""
+    base = toy_city(0, n=32)
+    rid = "2021-07-20 midday"
+    reasons = {"walk": "pedestrian platform (median 4.9 km/h)", "car": "single-vehicle run: drift not identifiable",
+               "rain": "qa registry: rain over 4 of 7 routes (51% of readings at RH ≥ 99%)",
+               "both": "qa registry: rain over 4 of 7 routes; pedestrian platform (median 4.9 km/h)"}
+    cities = [_renamed(_flag(base, rid, why), name) for name, why in reasons.items()]
+    s = E.Settings(include_flagged=True, physics=False)
+    prepared, flagged = E.prepare(cities, s)
+    kept = {c.slug: len(c.table) for c in prepared}
+    assert kept == {"walk": len(base.table), "car": len(base.table), "rain": 0, "both": 0}
+    assert {f["slug"]: f["included"] for f in flagged} == {"walk": True, "car": True, "rain": False, "both": False}
+    assert not any(f["included"] for f in E.prepare(cities, E.Settings(physics=False))[1])
+    assert E.includable(reasons["walk"]) and not E.includable("") and not E.includable(reasons["rain"])
+    md = E.results_markdown({"target": "t", "n_cities": 4, "transfer_rule": "r", "settings": {"include_flagged": True},
+                             "windows": {}, "qa_flagged": flagged})
+    assert "rain over 4 of 7 routes (51% of readings at RH ≥ 99%) (excluded)" in md and "km/h) (included)" in md
+
+
 def test_lst_local_and_regional_columns_come_from_the_rasters():
     c = toy_city(0, n=40)
     s = E.Settings(lst_mode="local", regional=True)

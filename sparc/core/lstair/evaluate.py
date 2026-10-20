@@ -13,8 +13,10 @@ Runs scored
 -----------
 Car-mounted runs with an identifiable drift, after the data checks: rows whose ``qa_exclude`` is not empty (the
 reason their run is excluded: a single-vehicle run, a walking campaign, rain over most routes; written by the
-dataset's QA step) are dropped before anything else and listed in the results; ``include_flagged`` keeps them
-(a sensitivity).  A table without the column is all usable.  A run with fewer than :data:`MIN_CELLS` scored cells
+dataset's QA step) are dropped before anything else and listed in the results.  ``include_flagged`` (the
+registered sensitivity "including walking campaigns and single-car runs") takes back the runs whose every reason
+is one of those two (:data:`INCLUDABLE`); the QA registry's verified faults (rain over 4 of 7 routes: "run
+excluded", no sensitivity) stay out.  A table without the column is all usable.  A run with fewer than :data:`MIN_CELLS` scored cells
 is not scored.
 
 Models
@@ -83,8 +85,8 @@ blocks share the city's weather, streets and campaign with the training blocks, 
 this way (Shandas et al. 2019).
 
 Sensitivities (reported, never used for the claim; :data:`VARIANTS`, :func:`run_sensitivity`): weights ∝ 1/n;
-the node + date link at any distance (the eight Virginia cities of 15 July 2021 as one group); flagged runs
-included; B with the local LST residual only (LST minus its 3 km focal mean); A and B with regional controls (3 km
+the node + date link at any distance (the eight Virginia cities of 15 July 2021 as one group); walking
+campaigns and single-car runs included; B with the local LST residual only (LST minus its 3 km focal mean); A and B with regional controls (3 km
 focal elevation and impervious); NLCD tree canopy and percent impervious in place of WorldCover; physics at 30 m
 cells; the medoid physics transfer.
 
@@ -158,6 +160,11 @@ NLCD_SWAP = {k: v for base, new in (("canopy", "tcc"), ("impervious", "nlcd_imp"
 WEIGHTS = ("variance", "n")
 LST_MODES = ("full", "local")
 LAND_COVERS = ("worldcover", "nlcd")
+#: The ``qa_exclude`` reasons ``include_flagged`` takes back: the data checks' rows marked "excluded (sensitivity:
+#: included)" (docs/results/lst_air_pilot.md), a walked campaign ("pedestrian platform (median 4.9 km/h)") and a
+#: run one car drives alone ("single-vehicle run: drift not identifiable").  Every other reason (the QA registry's
+#: verified faults, "qa registry: rain over 4 of 7 routes", a run that was not built) stays excluded.
+INCLUDABLE = ("pedestrian platform", "single-vehicle run")
 TRANSFERS = ("median", "medoid")
 
 
@@ -173,7 +180,7 @@ class Settings:
     inner_folds: int = 5
     weights: str = "variance"                   # "variance": ∝ 1/(n·var(dTa)) per city (registered); "n": ∝ 1/n
     same_node_km: float | None = SAME_NODE_KM   # None: the node + date link at any distance (Virginia as one group)
-    include_flagged: bool = False               # keep runs the data checks flagged (qa_exclude)
+    include_flagged: bool = False               # keep the walked and single-car runs (qa_exclude: INCLUDABLE)
     lst_mode: str = "full"                      # "local": B's LST minus its 3 km focal mean
     regional: bool = False                      # A and B also get 3 km focal elevation and impervious anomalies
     land_cover: str = "worldcover"              # "nlcd": NLCD tree canopy and percent impervious instead
@@ -264,9 +271,16 @@ def _regional_column(c: CityData, t: pd.DataFrame, src: str, R: dict) -> np.ndar
     return focal_mean(R[src], REGIONAL_M, c.grid.dx).ravel()[cells]
 
 
+def includable(reason: str) -> bool:
+    """Whether ``include_flagged`` takes a run with this ``qa_exclude`` back: every "; "-joined reason is one of
+    :data:`INCLUDABLE` (a registry reason beside a walked one keeps the run out)."""
+    parts = [p.strip() for p in str(reason).split(";") if p.strip()]
+    return bool(parts) and all(p.startswith(INCLUDABLE) for p in parts)
+
+
 def prepare(cities: list[CityData], s: Settings) -> tuple[list[CityData], list[dict]]:
     """The cities as the evaluation sees them under ``s``: rows of runs the data checks flagged (``qa_exclude``
-    not empty) dropped unless ``include_flagged``; ``land_cover="nlcd"`` swaps in the NLCD columns and rasters;
+    not empty) dropped, except, with ``include_flagged``, the walked and single-car runs (:func:`includable`); ``land_cover="nlcd"`` swaps in the NLCD columns and rasters;
     the 3 km focal columns ``lst_mode="local"`` and ``regional`` need are computed from the rasters (no rebuild).
     Returns the cities and the flagged runs (slug, run, run_id, cells, reason, whether included).
 
@@ -280,11 +294,14 @@ def prepare(cities: list[CityData], s: Settings) -> tuple[list[CityData], list[d
             why = t["qa_exclude"].fillna("").astype(str).str.strip()
             bad = (why != "").to_numpy()
             if bad.any():
+                back = why.map(includable).to_numpy() if s.include_flagged else np.zeros(len(t), bool)
                 for (run, rid), part in t[bad].groupby(["run", "run_id"], sort=True):
+                    reason = str(why[part.index].iloc[0])
                     flagged.append({"slug": c.slug, "run": str(run), "run_id": str(rid), "n_cells": int(len(part)),
-                                    "reason": str(why[part.index].iloc[0]), "included": bool(s.include_flagged)})
-                if not s.include_flagged:
-                    t = t[~bad].reset_index(drop=True)
+                                    "reason": reason, "included": bool(s.include_flagged and includable(reason))})
+                drop = bad & ~back
+                if drop.any():
+                    t = t[~drop].reset_index(drop=True)
         usable.append(t)
     rasters = [c.rasters for c in cities]
     if s.land_cover == "nlcd":
@@ -1414,7 +1431,7 @@ VARIANTS = {
     "weights_n": ("training weights ∝ 1/n (not 1/(n·var))", {"weights": "n"}),
     "virginia_one_group": ("one node and date linked at any distance (the eight Virginia cities of 15 July 2021 "
                            "as one group)", {"same_node_km": None}),
-    "include_flagged": ("walking campaigns, single-car runs and the other flagged runs included",
+    "include_flagged": ("walking campaigns and single-car runs included (the QA registry's faults stay out)",
                         {"include_flagged": True}),
     "lst_local": ("B with the local LST residual only (LST minus its 3 km focal mean)", {"lst_mode": "local"}),
     "regional": ("A and B with regional controls (3 km focal elevation and impervious)", {"regional": True}),
@@ -1696,8 +1713,10 @@ def results_markdown(res: dict) -> str:
                      f"{_p(p['p_sign_flip'])} | {rel} | {p['n_better']} / {p['n_worse']} | {p['verdict']} |")
     if res.get("qa_flagged"):
         inc = res["settings"].get("include_flagged")
-        L += ["", "## Runs flagged by the data checks" + (" (included: sensitivity)" if inc else " (excluded)"), ""]
-        L += [f"* {e['slug']} {e['run_id']} ({e['run']}, {e['n_cells']:,} cells): {e['reason']}" for e in res["qa_flagged"]]
+        L += ["", "## Runs flagged by the data checks" + (" (walked and single-car runs included: sensitivity)" if inc
+                                                          else " (excluded)"), ""]
+        L += [f"* {e['slug']} {e['run_id']} ({e['run']}, {e['n_cells']:,} cells): {e['reason']}"
+              + (" (included)" if e.get("included") else " (excluded)" if inc else "") for e in res["qa_flagged"]]
     return "\n".join(L) + "\n"
 
 
@@ -1722,6 +1741,7 @@ __all__ = ["Settings", "design", "model_columns", "raw_predictors", "prepare", "
            "influence", "sign_flip", "centre", "inner_select", "campaign_groups", "recentre_target", "WINDOW_REGIME",
            "regime", "fit_city_physics", "medoid_fit", "transfer_params", "predict_physics", "physics_fits",
            "l_bounds_report", "score_runs", "score_units", "evaluate_window", "evaluate", "primary_summary",
-           "results_markdown", "run_evaluation", "run_sensitivity", "sensitivity_markdown", "VARIANTS",
+           "results_markdown", "run_evaluation", "run_sensitivity", "sensitivity_markdown", "VARIANTS", "INCLUDABLE",
+           "includable",
            "TRANSFER_RULE", "CLAIM_RULE", "CLAIMS", "MIN_VERDICT_CITIES", "MIN_DSS", "SAME_NODE_KM", "HOLM_WINDOWS",
            "HOLM_CLAIMS", "PRIMARY_WINDOW"]

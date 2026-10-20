@@ -70,7 +70,8 @@ def add_lstair_parser(subs) -> None:
                    help="link one OSF node and date at any distance (sensitivity: the eight Virginia cities of 15 July "
                         "2021 as one group); default only within 50 km")
     e.add_argument("--include-flagged", action="store_true",
-                   help="keep runs the data checks flagged (qa_exclude: walking campaigns, single-car runs, ...)")
+                   help="keep the walked and single-car runs the data checks flagged (qa_exclude; sensitivity); the "
+                        "QA registry's verified faults stay out")
     e.add_argument("--lst-mode", choices=("full", "local"), default="full",
                    help="B's LST: full (registered) or local (minus its 3 km focal mean; sensitivity)")
     e.add_argument("--regional", action="store_true",
