@@ -20,11 +20,14 @@ predictors explained little of the daily maximum air temperature measured by cit
 * :mod:`~sparc.core.lstair.evaluate` scores three models leave-one-campaign-out: (A) land cover + focal
   features, (B) A + LST, (C) SPARC's physics model with LST entering the heat source as surface–air coupling,
   and turns the city-paired MSE differences into a verdict.
+* :mod:`~sparc.core.lstair.landcover_us` adds continuous US land cover (NLCD tree canopy and percent
+  impervious, with focal means) to built cities post hoc, for the sensitivity that swaps them in for WorldCover's
+  class fractions.
 * :mod:`~sparc.core.lstair.synthetic` plants worlds where the answer is known (LST informative, redundant,
   or measured at the wrong hour) to check that the harness says what it should before real data arrive.
 
 Like :mod:`sparc.core.identify`, the package sits below ``sparc/core`` and is not part of the resume
-fingerprint.  Run it with ``sparc core lstair dataset|evaluate|validate``.
+fingerprint.  Run it with ``sparc core lstair dataset|add-landcover|evaluate|validate``.
 """
 
 from __future__ import annotations

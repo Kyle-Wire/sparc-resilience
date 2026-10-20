@@ -3,12 +3,15 @@
     sparc core lstair dataset  --cities "Providence, RI" "Boston, MA" --out DIR [--traverses-dir DIR]
                                [--no-lst] [--no-era5] [--utc] [--force]
     sparc core lstair dataset  --cities all --out DIR            (every CAPA catalog city)
+    sparc core lstair add-landcover --data DIR [--cities "Farmville, VA" ...] [--force]
+                               (NLCD tree canopy and impervious %, post hoc, for the land-cover sensitivity)
     sparc core lstair evaluate --data DIR --out DIR [--windows af,am,pm] [--no-physics] [--boot 4000]
     sparc core lstair validate --out DIR [--cities 8] [--seeds 0-49] [--fast]   (synthetic worlds, known answers)
     sparc core lstair hosts [--probe]                            (the hosts a real run needs)
 
 Exit codes (dataset): 0 done (some cities may have failed: see DIR/dataset.json), 1 nothing built, 2 a host the
-build needs is blocked (named on stderr).  validate: 0 when every world gives the answer it should, else 1.
+build needs is blocked (named on stderr).  add-landcover likewise (DIR/landcover_us.json; 1: no city has the columns).
+validate: 0 when every world gives the answer it should, else 1.
 """
 
 from __future__ import annotations
@@ -52,6 +55,15 @@ def add_lstair_parser(subs) -> None:
                    help="the nearest scene at least this clear is taken; else the clearest above --lst-min-clear")
     d.add_argument("--cache", default=None, help="Landsat COG window cache (default OUT/cache/landsat)")
     d.set_defaults(func=_tracked(cmd_dataset))
+
+    a = s.add_parser("add-landcover",
+                     help="add NLCD tree canopy and percent impervious (and their focal means) to built cities")
+    a.add_argument("--data", required=True, help="the dataset folder (the --out of lstair dataset)")
+    a.add_argument("--cities", nargs="+", default=None,
+                   help='cities to augment, one per argument (slug, catalog name or the name before the state, e.g. '
+                        '"Farmville, VA"); default every finished city')
+    a.add_argument("--force", action="store_true", help="refetch cities that already have the columns")
+    a.set_defaults(func=_tracked(cmd_add_landcover))
 
     e = s.add_parser("evaluate", help="leave-one-campaign-out: A land cover, B + LST, C physics with LST → results")
     e.add_argument("--data", required=True, help="the dataset folder (the --out of lstair dataset)")
@@ -154,6 +166,32 @@ def cmd_dataset(args) -> int:
     return 0 if ok else 1
 
 
+def cmd_add_landcover(args) -> int:
+    from sparc.core.lstair import landcover_us as LC
+    from sparc.core.lstair.dataset import NetworkBlocked
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    try:
+        summary = LC.add_dataset(args.data, args.cities, force=args.force)
+    except NetworkBlocked as exc:
+        print(f"lstair add-landcover: {exc}", file=sys.stderr)
+        return 2
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"lstair add-landcover: {exc}", file=sys.stderr)
+        return 1
+    done = [c for c, v in summary["cities"].items() if v["status"] in ("added", "present")]
+    for c, v in summary["cities"].items():
+        line = f"{c}: {v['status']}"
+        if v.get("years"):
+            line += " (" + ", ".join(f"{k} {y}" for k, y in v["years"].items()) + ")"
+        if v.get("error"):
+            line += f" — {v['error']}"
+        print(line)
+    print(f"{len(done)} of {len(summary['cities'])} cities have the NLCD columns ({', '.join(LC.COLUMNS)}); "
+          f"summary: {Path(args.data) / 'landcover_us.json'}")
+    return 0 if done else 1
+
+
 def cmd_evaluate(args) -> int:
     from sparc.core.lstair.evaluate import Settings, run_evaluation
 
@@ -219,6 +257,11 @@ def cmd_hosts(args) -> int:
                     break
         rows.append({"source": name, "hosts": list(hosts), "serves": purpose,
                      "probes": [D.probe_label(pr) for pr in probes], "status": status})
+    from sparc.core.lstair import landcover_us as LC
+
+    why = D.probe(LC.probe_url()) if args.probe else None
+    rows.append({"source": "landcover_us (add-landcover only)", "hosts": [LC.HOST], "serves": LC.PURPOSE,
+                 "probes": [LC.probe_url()], "status": (f"{LC.HOST}: {why}" if why else "ok") if args.probe else None})
     print(json.dumps(rows, indent=1))
     return 0
 
