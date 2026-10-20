@@ -1,0 +1,6116 @@
+{
+ "abingdon_va": {
+  "city": "Abingdon, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 3557,
+  "centroid_lat": 36.7099,
+  "centroid_lon": -81.9684,
+  "grid_km": [
+   10.6,
+   7.6
+  ],
+  "warnings": [
+   "no Landsat scene clear enough within the window: LST columns are NaN"
+  ],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W084",
+   "dem": [
+    "Copernicus_DSM_COG_10_N36_00_W083_00_DEM",
+    "Copernicus_DSM_COG_10_N36_00_W082_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 3,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 1.0
+  },
+  "lst": {
+   "status": "no_clear_scene",
+   "note": "no scene selected"
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:00:01",
+    "end": "2021-07-15 07:00:00",
+    "n_readings": 22074,
+    "vehicles": 8,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 1280,
+    "share_on_grid": 1.0,
+    "median_step_m": 1.4,
+    "drift_method": "fe",
+    "drift_per_h": 0.07,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.682,
+    "background_c": 18.52,
+    "ta_era5": 19.48,
+    "bg_minus_era5": -0.96,
+    "sw_down": 13.8,
+    "era5_error": null,
+    "dTa_sd": 0.643,
+    "dTa_p1_p99": [
+     -1.08,
+     1.55
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.234,
+    "r_dTa_canopy": -0.3,
+    "r_dTa_impervious_f300": 0.261,
+    "r_dTa_lst": null,
+    "r_dTa_lst_f300": null,
+    "r_lst_impervious": null,
+    "r_dTa_elevation": 0.062,
+    "lst_offset_days": null
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:00",
+    "end": "2021-07-15 15:59:59",
+    "n_readings": 18612,
+    "vehicles": 10,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 1142,
+    "share_on_grid": 1.0,
+    "median_step_m": 1.4,
+    "drift_method": "protocol",
+    "drift_per_h": -0.512,
+    "drift_fallback": "only 12 cells revisited \u2265 15 min apart (< 20; 51 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 29.4,
+    "ta_era5": 27.26,
+    "bg_minus_era5": 2.14,
+    "sw_down": 796.7,
+    "era5_error": null,
+    "dTa_sd": 0.949,
+    "dTa_p1_p99": [
+     -2.23,
+     2.12
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.362,
+    "r_dTa_canopy": -0.421,
+    "r_dTa_impervious_f300": 0.386,
+    "r_dTa_lst": null,
+    "r_dTa_lst_f300": null,
+    "r_lst_impervious": null,
+    "r_dTa_elevation": -0.022,
+    "lst_offset_days": null
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:59:59",
+    "n_readings": 17986,
+    "vehicles": 8,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 59.7,
+    "inside_protocol": true,
+    "n_cells": 1135,
+    "share_on_grid": 1.0,
+    "median_step_m": 1.4,
+    "drift_method": "protocol",
+    "drift_per_h": -0.202,
+    "drift_fallback": "only 13 cells revisited \u2265 15 min apart (< 20; 37 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 28.05,
+    "ta_era5": 26.82,
+    "bg_minus_era5": 1.23,
+    "sw_down": 144.3,
+    "era5_error": null,
+    "dTa_sd": 1.085,
+    "dTa_p1_p99": [
+     -2.25,
+     2.23
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.356,
+    "r_dTa_canopy": -0.425,
+    "r_dTa_impervious_f300": 0.423,
+    "r_dTa_lst": null,
+    "r_dTa_lst_f300": null,
+    "r_lst_impervious": null,
+    "r_dTa_elevation": -0.004,
+    "lst_offset_days": null
+   }
+  ]
+ },
+ "albuquerque_nm": {
+  "city": "Albuquerque, NM",
+  "status": "ok",
+  "campaign_date": "2021-07-09",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Denver",
+  "n_rows": 24410,
+  "centroid_lat": 35.1054,
+  "centroid_lon": -106.6288,
+  "grid_km": [
+   31.1,
+   30.4
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N33W108",
+   "dem": [
+    "Copernicus_DSM_COG_10_N34_00_W107_00_DEM",
+    "Copernicus_DSM_COG_10_N35_00_W107_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 45,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.094
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_034035_20210705_02_T1",
+   "date": "2021-07-05",
+   "offset_days": -4,
+   "clear_fraction": 0.907,
+   "cloud_cover": 6.23,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    47.38,
+    54.55,
+    57.92
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-09 morning",
+    "window": "morning",
+    "start": "2021-07-09 06:00:00",
+    "end": "2021-07-09 07:00:00",
+    "n_readings": 27439,
+    "vehicles": 11,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9049,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.9,
+    "drift_method": "fe",
+    "drift_per_h": 1.391,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 3.421,
+    "background_c": 22.07,
+    "ta_era5": 20.79,
+    "bg_minus_era5": 1.29,
+    "sw_down": 50.3,
+    "era5_error": null,
+    "dTa_sd": 1.246,
+    "dTa_p1_p99": [
+     -3.32,
+     2.63
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.19,
+    "r_dTa_canopy": -0.155,
+    "r_dTa_impervious_f300": 0.376,
+    "r_dTa_lst": 0.521,
+    "r_dTa_lst_f300": 0.516,
+    "r_lst_impervious": 0.038,
+    "r_dTa_elevation": -0.439,
+    "lst_offset_days": -4.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-09 midday",
+    "window": "midday",
+    "start": "2021-07-09 15:00:00",
+    "end": "2021-07-09 16:00:00",
+    "n_readings": 41550,
+    "vehicles": 17,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 15361,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.7,
+    "drift_method": "fe",
+    "drift_per_h": -0.397,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 3.075,
+    "background_c": 37.45,
+    "ta_era5": 34.63,
+    "bg_minus_era5": 2.82,
+    "sw_down": 809.8,
+    "era5_error": null,
+    "dTa_sd": 1.138,
+    "dTa_p1_p99": [
+     -2.47,
+     2.63
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.134,
+    "r_dTa_canopy": -0.051,
+    "r_dTa_impervious_f300": 0.186,
+    "r_dTa_lst": 0.237,
+    "r_dTa_lst_f300": 0.216,
+    "r_lst_impervious": 0.101,
+    "r_dTa_elevation": -0.473,
+    "lst_offset_days": -4.0
+   }
+  ]
+ },
+ "arlington_va": {
+  "city": "Arlington, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 11600,
+  "centroid_lat": 38.8806,
+  "centroid_lon": -77.1035,
+  "grid_km": [
+   14.6,
+   13.9
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W078",
+   "dem": "Copernicus_DSM_COG_10_N38_00_W078_00_DEM",
+   "sentinel2": {
+    "scenes": 25,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.279
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_015033_20210630_02_T1",
+   "date": "2021-06-30",
+   "offset_days": -15,
+   "clear_fraction": 0.715,
+   "cloud_cover": 7.36,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    37.74,
+    42.88,
+    48.02
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:00:01",
+    "end": "2021-07-15 06:54:11",
+    "n_readings": 10810,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 6.9,
+    "duration_min": 54.1,
+    "inside_protocol": true,
+    "n_cells": 3955,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.8,
+    "drift_method": "protocol",
+    "drift_per_h": 0.047,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 57 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 22.07,
+    "ta_era5": 22.64,
+    "bg_minus_era5": -0.57,
+    "sw_down": 42.6,
+    "era5_error": null,
+    "dTa_sd": 0.668,
+    "dTa_p1_p99": [
+     -1.07,
+     1.7
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.379,
+    "r_dTa_canopy": -0.458,
+    "r_dTa_impervious_f300": 0.591,
+    "r_dTa_lst": 0.447,
+    "r_dTa_lst_f300": 0.48,
+    "r_lst_impervious": 0.539,
+    "r_dTa_elevation": -0.432,
+    "lst_offset_days": -15.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:01",
+    "end": "2021-07-15 15:59:59",
+    "n_readings": 10477,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 3857,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.1,
+    "drift_method": "protocol",
+    "drift_per_h": -0.054,
+    "drift_fallback": "only 4 cells revisited \u2265 15 min apart (< 20; 53 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 32.83,
+    "ta_era5": 33.32,
+    "bg_minus_era5": -0.49,
+    "sw_down": 645.8,
+    "era5_error": null,
+    "dTa_sd": 0.768,
+    "dTa_p1_p99": [
+     -1.45,
+     1.84
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.304,
+    "r_dTa_canopy": -0.335,
+    "r_dTa_impervious_f300": 0.422,
+    "r_dTa_lst": 0.35,
+    "r_dTa_lst_f300": 0.416,
+    "r_lst_impervious": 0.551,
+    "r_dTa_elevation": -0.111,
+    "lst_offset_days": -15.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:59:59",
+    "n_readings": 10824,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 3788,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.6,
+    "drift_method": "protocol",
+    "drift_per_h": 0.043,
+    "drift_fallback": "only 6 cells revisited \u2265 15 min apart (< 20; 65 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 30.71,
+    "ta_era5": 29.59,
+    "bg_minus_era5": 1.11,
+    "sw_down": 69.6,
+    "era5_error": null,
+    "dTa_sd": 0.727,
+    "dTa_p1_p99": [
+     -1.26,
+     1.76
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.426,
+    "r_dTa_canopy": -0.451,
+    "r_dTa_impervious_f300": 0.646,
+    "r_dTa_lst": 0.557,
+    "r_dTa_lst_f300": 0.635,
+    "r_lst_impervious": 0.543,
+    "r_dTa_elevation": -0.34,
+    "lst_offset_days": -15.0
+   }
+  ]
+ },
+ "asheville_nc": {
+  "city": "Asheville, NC",
+  "status": "ok",
+  "campaign_date": "2023-07-24",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 26317,
+  "centroid_lat": 35.5869,
+  "centroid_lon": -82.5578,
+  "grid_km": [
+   38.0,
+   31.3
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N33W084",
+   "dem": "Copernicus_DSM_COG_10_N35_00_W083_00_DEM",
+   "sentinel2": {
+    "scenes": 1,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2023,
+      6
+     ],
+     [
+      2023,
+      7
+     ],
+     [
+      2023,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.032
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_018035_20230727_02_T1",
+   "date": "2023-07-27",
+   "offset_days": 3,
+   "clear_fraction": 0.971,
+   "cloud_cover": 37.01,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    33.22,
+    38.63,
+    45.81
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2023-07-24 morning",
+    "window": "morning",
+    "start": "2023-07-24 06:00:01",
+    "end": "2023-07-24 07:00:00",
+    "n_readings": 22153,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9872,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.3,
+    "drift_method": "protocol",
+    "drift_per_h": -0.048,
+    "drift_fallback": "only 18 cells revisited \u2265 15 min apart (< 20; 7690 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 18.06,
+    "ta_era5": 16.75,
+    "bg_minus_era5": 1.3,
+    "sw_down": 5.0,
+    "era5_error": null,
+    "dTa_sd": 0.635,
+    "dTa_p1_p99": [
+     -1.79,
+     0.99
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.246,
+    "r_dTa_canopy": -0.161,
+    "r_dTa_impervious_f300": 0.303,
+    "r_dTa_lst": 0.289,
+    "r_dTa_lst_f300": 0.315,
+    "r_lst_impervious": 0.62,
+    "r_dTa_elevation": -0.467,
+    "lst_offset_days": 3.0
+   },
+   {
+    "run": "af",
+    "run_id": "2023-07-24 midday",
+    "window": "midday",
+    "start": "2023-07-24 15:00:04",
+    "end": "2023-07-24 15:59:59",
+    "n_readings": 17675,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 8213,
+    "share_on_grid": 1.0,
+    "median_step_m": 13.8,
+    "drift_method": "protocol",
+    "drift_per_h": 0.054,
+    "drift_fallback": "only 3 cells revisited \u2265 15 min apart (< 20; 6232 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 28.77,
+    "ta_era5": 27.59,
+    "bg_minus_era5": 1.18,
+    "sw_down": 730.2,
+    "era5_error": null,
+    "dTa_sd": 1.087,
+    "dTa_p1_p99": [
+     -3.91,
+     2.02
+    ],
+    "share_abs_dTa_gt5": 0.002,
+    "r_dTa_impervious": 0.376,
+    "r_dTa_canopy": -0.358,
+    "r_dTa_impervious_f300": 0.435,
+    "r_dTa_lst": 0.48,
+    "r_dTa_lst_f300": 0.476,
+    "r_lst_impervious": 0.63,
+    "r_dTa_elevation": -0.495,
+    "lst_offset_days": 3.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2023-07-24 evening",
+    "window": "evening",
+    "start": "2023-07-24 19:00:00",
+    "end": "2023-07-24 20:00:00",
+    "n_readings": 17573,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 8232,
+    "share_on_grid": 1.0,
+    "median_step_m": 12.3,
+    "drift_method": "protocol",
+    "drift_per_h": -0.133,
+    "drift_fallback": "only 1 cells revisited \u2265 15 min apart (< 20; 6137 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 26.24,
+    "ta_era5": 26.23,
+    "bg_minus_era5": 0.02,
+    "sw_down": 138.5,
+    "era5_error": null,
+    "dTa_sd": 1.183,
+    "dTa_p1_p99": [
+     -3.26,
+     1.95
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.546,
+    "r_dTa_canopy": -0.516,
+    "r_dTa_impervious_f300": 0.646,
+    "r_dTa_lst": 0.67,
+    "r_dTa_lst_f300": 0.646,
+    "r_lst_impervious": 0.622,
+    "r_dTa_elevation": -0.288,
+    "lst_offset_days": 3.0
+   }
+  ]
+ },
+ "atlanta_ga": {
+  "city": "Atlanta, GA",
+  "status": "ok",
+  "campaign_date": "2021-09-04",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 28073,
+  "centroid_lat": 33.7892,
+  "centroid_lon": -84.4134,
+  "grid_km": [
+   22.1,
+   26.0
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N33W087",
+   "dem": "Copernicus_DSM_COG_10_N33_00_W085_00_DEM",
+   "sentinel2": {
+    "scenes": 12,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      8
+     ],
+     [
+      2021,
+      9
+     ],
+     [
+      2021,
+      10
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.345
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_019037_20210829_02_T1",
+   "date": "2021-08-29",
+   "offset_days": -6,
+   "clear_fraction": 0.632,
+   "cloud_cover": 59.27,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    32.21,
+    37.17,
+    45.81
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-09-04 morning",
+    "window": "morning",
+    "start": "2021-09-04 06:00:02",
+    "end": "2021-09-04 07:00:00",
+    "n_readings": 26830,
+    "vehicles": 14,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 10016,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.7,
+    "drift_method": "protocol",
+    "drift_per_h": -0.071,
+    "drift_fallback": "only 8 cells revisited \u2265 15 min apart (< 20; 72 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 15.73,
+    "ta_era5": 15.71,
+    "bg_minus_era5": 0.02,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 0.804,
+    "dTa_p1_p99": [
+     -1.42,
+     2.46
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.393,
+    "r_dTa_canopy": -0.374,
+    "r_dTa_impervious_f300": 0.594,
+    "r_dTa_lst": 0.44,
+    "r_dTa_lst_f300": 0.483,
+    "r_lst_impervious": 0.612,
+    "r_dTa_elevation": 0.275,
+    "lst_offset_days": -6.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-09-04 midday",
+    "window": "midday",
+    "start": "2021-09-04 15:00:00",
+    "end": "2021-09-04 15:59:59",
+    "n_readings": 23386,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 8893,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.0,
+    "drift_method": "protocol",
+    "drift_per_h": -0.069,
+    "drift_fallback": "only 5 cells revisited \u2265 15 min apart (< 20; 86 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 27.77,
+    "ta_era5": 27.09,
+    "bg_minus_era5": 0.68,
+    "sw_down": 802.0,
+    "era5_error": null,
+    "dTa_sd": 0.836,
+    "dTa_p1_p99": [
+     -1.78,
+     2.14
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.401,
+    "r_dTa_canopy": -0.425,
+    "r_dTa_impervious_f300": 0.368,
+    "r_dTa_lst": 0.34,
+    "r_dTa_lst_f300": 0.282,
+    "r_lst_impervious": 0.637,
+    "r_dTa_elevation": 0.099,
+    "lst_offset_days": -6.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-09-04 evening",
+    "window": "evening",
+    "start": "2021-09-04 19:00:00",
+    "end": "2021-09-04 20:00:00",
+    "n_readings": 24664,
+    "vehicles": 13,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9164,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "protocol",
+    "drift_per_h": 0.198,
+    "drift_fallback": "only 12 cells revisited \u2265 15 min apart (< 20; 100 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 24.36,
+    "ta_era5": 25.3,
+    "bg_minus_era5": -0.94,
+    "sw_down": 52.7,
+    "era5_error": null,
+    "dTa_sd": 1.387,
+    "dTa_p1_p99": [
+     -2.5,
+     3.38
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.592,
+    "r_dTa_canopy": -0.572,
+    "r_dTa_impervious_f300": 0.8,
+    "r_dTa_lst": 0.643,
+    "r_dTa_lst_f300": 0.642,
+    "r_lst_impervious": 0.624,
+    "r_dTa_elevation": 0.281,
+    "lst_offset_days": -6.0
+   }
+  ]
+ },
+ "austin_tx": {
+  "city": "Austin, TX",
+  "status": "ok",
+  "campaign_date": "2020-08-07",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Chicago",
+  "n_rows": 28676,
+  "centroid_lat": 30.2636,
+  "centroid_lon": -97.6962,
+  "grid_km": [
+   23.6,
+   34.2
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N30W099",
+   "dem": "Copernicus_DSM_COG_10_N30_00_W098_00_DEM",
+   "sentinel2": {
+    "scenes": 7,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2020,
+      7
+     ],
+     [
+      2020,
+      8
+     ],
+     [
+      2020,
+      9
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_027039_20200802_02_T1",
+   "date": "2020-08-02",
+   "offset_days": -5,
+   "clear_fraction": 1.0,
+   "cloud_cover": 14.54,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    43.33,
+    48.17,
+    52.71
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2020-08-07 morning",
+    "window": "morning",
+    "start": "2020-08-07 06:00:00",
+    "end": "2020-08-07 07:00:00",
+    "n_readings": 28125,
+    "vehicles": 12,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9244,
+    "share_on_grid": 1.0,
+    "median_step_m": 7.9,
+    "drift_method": "protocol",
+    "drift_per_h": 0.216,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 454 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 24.24,
+    "ta_era5": 24.7,
+    "bg_minus_era5": -0.47,
+    "sw_down": 0.1,
+    "era5_error": null,
+    "dTa_sd": 0.795,
+    "dTa_p1_p99": [
+     -2.25,
+     1.22
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.339,
+    "r_dTa_canopy": -0.125,
+    "r_dTa_impervious_f300": 0.713,
+    "r_dTa_lst": 0.481,
+    "r_dTa_lst_f300": 0.578,
+    "r_lst_impervious": 0.484,
+    "r_dTa_elevation": 0.482,
+    "lst_offset_days": -5.0
+   },
+   {
+    "run": "af",
+    "run_id": "2020-08-07 midday",
+    "window": "midday",
+    "start": "2020-08-07 15:00:00",
+    "end": "2020-08-07 16:00:00",
+    "n_readings": 28652,
+    "vehicles": 12,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 10362,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.2,
+    "drift_method": "protocol",
+    "drift_per_h": 0.651,
+    "drift_fallback": "only 6 cells revisited \u2265 15 min apart (< 20; 608 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 35.55,
+    "ta_era5": 37.22,
+    "bg_minus_era5": -1.67,
+    "sw_down": 673.9,
+    "era5_error": null,
+    "dTa_sd": 0.443,
+    "dTa_p1_p99": [
+     -0.98,
+     1.08
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.068,
+    "r_dTa_canopy": -0.047,
+    "r_dTa_impervious_f300": 0.066,
+    "r_dTa_lst": 0.142,
+    "r_dTa_lst_f300": 0.129,
+    "r_lst_impervious": 0.495,
+    "r_dTa_elevation": -0.165,
+    "lst_offset_days": -5.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2020-08-07 evening",
+    "window": "evening",
+    "start": "2020-08-07 19:00:00",
+    "end": "2020-08-07 20:00:00",
+    "n_readings": 24779,
+    "vehicles": 11,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9070,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.0,
+    "drift_method": "protocol",
+    "drift_per_h": -1.325,
+    "drift_fallback": "only 1 cells revisited \u2265 15 min apart (< 20; 429 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 34.33,
+    "ta_era5": 36.24,
+    "bg_minus_era5": -1.91,
+    "sw_down": 86.4,
+    "era5_error": null,
+    "dTa_sd": 0.411,
+    "dTa_p1_p99": [
+     -0.86,
+     1.12
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.367,
+    "r_dTa_canopy": -0.201,
+    "r_dTa_impervious_f300": 0.545,
+    "r_dTa_lst": 0.519,
+    "r_dTa_lst_f300": 0.509,
+    "r_lst_impervious": 0.508,
+    "r_dTa_elevation": 0.191,
+    "lst_offset_days": -5.0
+   }
+  ]
+ },
+ "boise_id": {
+  "city": "Boise, ID",
+  "status": "ok",
+  "campaign_date": "2019-08-14",
+  "campaign_date_source": "--campaign-date: the traverse clock (time_n) is UTC HHMMSS without a date",
+  "tz": "America/Boise",
+  "n_rows": 27143,
+  "centroid_lat": 43.6048,
+  "centroid_lon": -116.2967,
+  "grid_km": [
+   45.1,
+   28.4
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "AM_TraversePoints_Boise.shp",
+   "AM_TraversePoints_Nampa.shp",
+   "Eve_TraversePoints_Boise.shp",
+   "Eve_TraversePoints_Nampa.shp",
+   "PM_TraversePoints_Boise.shp",
+   "PM_TraversePoints_Nampa.shp"
+  ],
+  "features": {
+   "worldcover": "N42W117",
+   "dem": "Copernicus_DSM_COG_10_N43_00_W117_00_DEM",
+   "sentinel2": {
+    "scenes": 24,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2019,
+      7
+     ],
+     [
+      2019,
+      8
+     ],
+     [
+      2019,
+      9
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_041030_20190818_02_T1",
+   "date": "2019-08-18",
+   "offset_days": 4,
+   "clear_fraction": 0.999,
+   "cloud_cover": 0.03,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    37.42,
+    42.35,
+    46.25
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2019-08-14 morning",
+    "window": "morning",
+    "start": "2019-08-14 06:00:00",
+    "end": "2019-08-14 07:00:00",
+    "n_readings": 25562,
+    "vehicles": 2,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9549,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.6,
+    "drift_method": "fe",
+    "drift_per_h": 0.976,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 14.24,
+    "ta_era5": 15.6,
+    "bg_minus_era5": -1.36,
+    "sw_down": 0.4,
+    "era5_error": null,
+    "dTa_sd": 1.556,
+    "dTa_p1_p99": [
+     -2.82,
+     4.54
+    ],
+    "share_abs_dTa_gt5": 0.004,
+    "r_dTa_impervious": 0.23,
+    "r_dTa_canopy": -0.058,
+    "r_dTa_impervious_f300": 0.422,
+    "r_dTa_lst": 0.434,
+    "r_dTa_lst_f300": 0.516,
+    "r_lst_impervious": 0.365,
+    "r_dTa_elevation": 0.331,
+    "lst_offset_days": 4.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-08-14 midday",
+    "window": "midday",
+    "start": "2019-08-14 15:00:00",
+    "end": "2019-08-14 16:00:00",
+    "n_readings": 21970,
+    "vehicles": 2,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 8275,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.3,
+    "drift_method": "fe",
+    "drift_per_h": 0.602,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 32.58,
+    "ta_era5": 33.56,
+    "bg_minus_era5": -0.98,
+    "sw_down": 826.6,
+    "era5_error": null,
+    "dTa_sd": 0.623,
+    "dTa_p1_p99": [
+     -1.46,
+     1.83
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.104,
+    "r_dTa_canopy": -0.143,
+    "r_dTa_impervious_f300": 0.135,
+    "r_dTa_lst": 0.224,
+    "r_dTa_lst_f300": 0.209,
+    "r_lst_impervious": 0.364,
+    "r_dTa_elevation": -0.086,
+    "lst_offset_days": 4.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-08-14 evening",
+    "window": "evening",
+    "start": "2019-08-14 19:00:00",
+    "end": "2019-08-14 20:00:00",
+    "n_readings": 24578,
+    "vehicles": 2,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9319,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.9,
+    "drift_method": "fe",
+    "drift_per_h": -2.733,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 32.37,
+    "ta_era5": 33.3,
+    "bg_minus_era5": -0.93,
+    "sw_down": 178.8,
+    "era5_error": null,
+    "dTa_sd": 0.829,
+    "dTa_p1_p99": [
+     -2.22,
+     1.93
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.334,
+    "r_dTa_canopy": -0.205,
+    "r_dTa_impervious_f300": 0.536,
+    "r_dTa_lst": 0.49,
+    "r_dTa_lst_f300": 0.532,
+    "r_lst_impervious": 0.366,
+    "r_dTa_elevation": -0.178,
+    "lst_offset_days": 4.0
+   }
+  ]
+ },
+ "boston_ma": {
+  "city": "Boston, MA",
+  "status": "ok",
+  "campaign_date": "2019-07-29",
+  "campaign_date_source": "--campaign-date: the traverse clock (time_n) is UTC HHMMSS without a date",
+  "tz": "America/New_York",
+  "n_rows": 20376,
+  "centroid_lat": 42.3382,
+  "centroid_lon": -71.1073,
+  "grid_km": [
+   17.4,
+   21.7
+  ],
+  "warnings": [
+   "57,338 readings repeat another file's (same sensor, time and position): read once"
+  ],
+  "n_duplicate_readings": 57338,
+  "files_read": [
+   "Boston_am.shp",
+   "Boston_ev.shp",
+   "Boston_pm_revised.shp",
+   "Boston_am.shp",
+   "Boston_ev.shp",
+   "Boston_pm_revised.shp"
+  ],
+  "features": {
+   "worldcover": "N42W072",
+   "dem": [
+    "Copernicus_DSM_COG_10_N42_00_W072_00_DEM",
+    "Copernicus_DSM_COG_10_N42_00_W071_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 11,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2019,
+      6
+     ],
+     [
+      2019,
+      7
+     ],
+     [
+      2019,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.151
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_012031_20190722_02_T1",
+   "date": "2019-07-22",
+   "offset_days": -7,
+   "clear_fraction": 0.858,
+   "cloud_cover": 76.94,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    31.05,
+    40.05,
+    46.79
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2019-07-29 morning",
+    "window": "morning",
+    "start": "2019-07-29 06:00:00",
+    "end": "2019-07-29 07:00:00",
+    "n_readings": 20062,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7272,
+    "share_on_grid": 1.0,
+    "median_step_m": 0.0,
+    "drift_method": "fe",
+    "drift_per_h": 1.122,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 23.87,
+    "ta_era5": 23.47,
+    "bg_minus_era5": 0.4,
+    "sw_down": 93.3,
+    "era5_error": null,
+    "dTa_sd": 0.759,
+    "dTa_p1_p99": [
+     -1.44,
+     1.81
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.404,
+    "r_dTa_canopy": -0.439,
+    "r_dTa_impervious_f300": 0.629,
+    "r_dTa_lst": 0.222,
+    "r_dTa_lst_f300": 0.233,
+    "r_lst_impervious": 0.483,
+    "r_dTa_elevation": -0.512,
+    "lst_offset_days": -7.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-07-29 midday",
+    "window": "midday",
+    "start": "2019-07-29 15:00:00",
+    "end": "2019-07-29 16:00:00",
+    "n_readings": 17029,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 5889,
+    "share_on_grid": 1.0,
+    "median_step_m": 0.0,
+    "drift_method": "fe",
+    "drift_per_h": -0.277,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 32.83,
+    "ta_era5": 31.26,
+    "bg_minus_era5": 1.57,
+    "sw_down": 473.8,
+    "era5_error": null,
+    "dTa_sd": 0.863,
+    "dTa_p1_p99": [
+     -1.75,
+     2.3
+    ],
+    "share_abs_dTa_gt5": 0.001,
+    "r_dTa_impervious": 0.345,
+    "r_dTa_canopy": -0.333,
+    "r_dTa_impervious_f300": 0.457,
+    "r_dTa_lst": 0.304,
+    "r_dTa_lst_f300": 0.341,
+    "r_lst_impervious": 0.471,
+    "r_dTa_elevation": -0.3,
+    "lst_offset_days": -7.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-07-29 evening",
+    "window": "evening",
+    "start": "2019-07-29 19:00:00",
+    "end": "2019-07-29 19:59:59",
+    "n_readings": 20247,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7215,
+    "share_on_grid": 1.0,
+    "median_step_m": 0.0,
+    "drift_method": "fe",
+    "drift_per_h": -1.446,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 29.33,
+    "ta_era5": 28.33,
+    "bg_minus_era5": 0.99,
+    "sw_down": 49.1,
+    "era5_error": null,
+    "dTa_sd": 0.776,
+    "dTa_p1_p99": [
+     -2.68,
+     1.27
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.475,
+    "r_dTa_canopy": -0.492,
+    "r_dTa_impervious_f300": 0.725,
+    "r_dTa_lst": 0.353,
+    "r_dTa_lst_f300": 0.38,
+    "r_lst_impervious": 0.484,
+    "r_dTa_elevation": -0.572,
+    "lst_offset_days": -7.0
+   }
+  ]
+ },
+ "brockton_ma": {
+  "status": "failed",
+  "error": "no reading has a usable timestamp, so no run could be formed (3 files read): Read Me_File Notation.txt: skipped (no positions (lat/lon or a point geometry); a .dbf is only a shapefile's attribute table: the .shp, .shx and .prj with the same name hold the positions); traverses_chw_brockton_092823.zip"
+ },
+ "burlington_vt": {
+  "city": "Burlington, VT",
+  "status": "ok",
+  "campaign_date": "2020-08-10",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 17926,
+  "centroid_lat": 44.4846,
+  "centroid_lon": -73.1916,
+  "grid_km": [
+   26.6,
+   25.3
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N42W075",
+   "dem": [
+    "Copernicus_DSM_COG_10_N44_00_W074_00_DEM",
+    "Copernicus_DSM_COG_10_N44_00_W073_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 10,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2020,
+      7
+     ],
+     [
+      2020,
+      8
+     ],
+     [
+      2020,
+      9
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.261
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_014029_20200807_02_T1",
+   "date": "2020-08-07",
+   "offset_days": -3,
+   "clear_fraction": 0.696,
+   "cloud_cover": 37.16,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    22.35,
+    30.71,
+    35.64
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2020-08-10 morning",
+    "window": "morning",
+    "start": "2020-08-10 06:00:18",
+    "end": "2020-08-10 07:00:00",
+    "n_readings": 18877,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 59.7,
+    "inside_protocol": true,
+    "n_cells": 6641,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.6,
+    "drift_method": "fe",
+    "drift_per_h": -0.132,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.037,
+    "background_c": 19.68,
+    "ta_era5": 21.39,
+    "bg_minus_era5": -1.71,
+    "sw_down": 33.5,
+    "era5_error": null,
+    "dTa_sd": 0.422,
+    "dTa_p1_p99": [
+     -1.04,
+     0.7
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.313,
+    "r_dTa_canopy": -0.096,
+    "r_dTa_impervious_f300": 0.367,
+    "r_dTa_lst": 0.305,
+    "r_dTa_lst_f300": 0.368,
+    "r_lst_impervious": 0.484,
+    "r_dTa_elevation": -0.686,
+    "lst_offset_days": -3.0
+   },
+   {
+    "run": "af",
+    "run_id": "2020-08-10 midday",
+    "window": "midday",
+    "start": "2020-08-10 15:00:00",
+    "end": "2020-08-10 16:00:00",
+    "n_readings": 16136,
+    "vehicles": 6,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 6013,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.0,
+    "drift_method": "protocol",
+    "drift_per_h": 0.031,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 374 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 29.58,
+    "ta_era5": 28.2,
+    "bg_minus_era5": 1.37,
+    "sw_down": 614.1,
+    "era5_error": null,
+    "dTa_sd": 0.562,
+    "dTa_p1_p99": [
+     -1.43,
+     1.35
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.368,
+    "r_dTa_canopy": -0.331,
+    "r_dTa_impervious_f300": 0.444,
+    "r_dTa_lst": 0.409,
+    "r_dTa_lst_f300": 0.443,
+    "r_lst_impervious": 0.484,
+    "r_dTa_elevation": -0.333,
+    "lst_offset_days": -3.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2020-08-10 evening",
+    "window": "evening",
+    "start": "2020-08-10 19:00:00",
+    "end": "2020-08-10 20:00:00",
+    "n_readings": 16897,
+    "vehicles": 6,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 5272,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.1,
+    "drift_method": "protocol",
+    "drift_per_h": -1.901,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 243 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 25.43,
+    "ta_era5": 25.14,
+    "bg_minus_era5": 0.3,
+    "sw_down": 37.9,
+    "era5_error": null,
+    "dTa_sd": 0.839,
+    "dTa_p1_p99": [
+     -1.79,
+     1.7
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.354,
+    "r_dTa_canopy": -0.253,
+    "r_dTa_impervious_f300": 0.59,
+    "r_dTa_lst": 0.506,
+    "r_dTa_lst_f300": 0.552,
+    "r_lst_impervious": 0.505,
+    "r_dTa_elevation": -0.286,
+    "lst_offset_days": -3.0
+   }
+  ]
+ },
+ "charleston_sc": {
+  "city": "Charleston, SC",
+  "status": "ok",
+  "campaign_date": "2021-07-31",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 23804,
+  "centroid_lat": 32.8083,
+  "centroid_lon": -79.993,
+  "grid_km": [
+   33.0,
+   33.4
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N30W081",
+   "dem": [
+    "Copernicus_DSM_COG_10_N32_00_W081_00_DEM",
+    "Copernicus_DSM_COG_10_N32_00_W080_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 6,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.388
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_016037_20210723_02_T1",
+   "date": "2021-07-23",
+   "offset_days": -8,
+   "clear_fraction": 0.609,
+   "cloud_cover": 16.54,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    33.86,
+    38.81,
+    44.97
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-31 morning",
+    "window": "morning",
+    "start": "2021-07-31 06:00:01",
+    "end": "2021-07-31 07:00:00",
+    "n_readings": 23401,
+    "vehicles": 10,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9158,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "protocol",
+    "drift_per_h": -0.05,
+    "drift_fallback": "only 6 cells revisited \u2265 15 min apart (< 20; 117 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 27.75,
+    "ta_era5": 27.78,
+    "bg_minus_era5": -0.03,
+    "sw_down": 5.6,
+    "era5_error": null,
+    "dTa_sd": 0.439,
+    "dTa_p1_p99": [
+     -1.19,
+     0.86
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.3,
+    "r_dTa_canopy": -0.29,
+    "r_dTa_impervious_f300": 0.522,
+    "r_dTa_lst": 0.519,
+    "r_dTa_lst_f300": 0.432,
+    "r_lst_impervious": 0.539,
+    "r_dTa_elevation": -0.196,
+    "lst_offset_days": -8.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-31 midday",
+    "window": "midday",
+    "start": "2021-07-31 15:00:00",
+    "end": "2021-07-31 15:59:59",
+    "n_readings": 18957,
+    "vehicles": 12,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7940,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.5,
+    "drift_method": "protocol",
+    "drift_per_h": -0.082,
+    "drift_fallback": "only 3 cells revisited \u2265 15 min apart (< 20; 109 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 33.28,
+    "ta_era5": 30.96,
+    "bg_minus_era5": 2.32,
+    "sw_down": 435.4,
+    "era5_error": null,
+    "dTa_sd": 0.811,
+    "dTa_p1_p99": [
+     -2.06,
+     1.76
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.383,
+    "r_dTa_canopy": -0.331,
+    "r_dTa_impervious_f300": 0.464,
+    "r_dTa_lst": 0.618,
+    "r_dTa_lst_f300": 0.557,
+    "r_lst_impervious": 0.59,
+    "r_dTa_elevation": -0.064,
+    "lst_offset_days": -8.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-31 evening",
+    "window": "evening",
+    "start": "2021-07-31 19:00:00",
+    "end": "2021-07-31 19:59:59",
+    "n_readings": 15590,
+    "vehicles": 11,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 6706,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.0,
+    "drift_method": "protocol",
+    "drift_per_h": -0.118,
+    "drift_fallback": "only 5 cells revisited \u2265 15 min apart (< 20; 50 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 26.49,
+    "ta_era5": 29.85,
+    "bg_minus_era5": -3.36,
+    "sw_down": 83.7,
+    "era5_error": null,
+    "dTa_sd": 1.142,
+    "dTa_p1_p99": [
+     -2.28,
+     2.43
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.364,
+    "r_dTa_canopy": -0.359,
+    "r_dTa_impervious_f300": 0.577,
+    "r_dTa_lst": 0.574,
+    "r_dTa_lst_f300": 0.467,
+    "r_lst_impervious": 0.559,
+    "r_dTa_elevation": -0.215,
+    "lst_offset_days": -8.0
+   }
+  ]
+ },
+ "charlotte_nc": {
+  "status": "failed",
+  "error": "no reading has a usable timestamp, so no run could be formed (3 files read): ReadMeFileNotation.txt: skipped (no positions (lat/lon or a point geometry); a .dbf is only a shapefile's attribute table: the .shp, .shx and .prj with the same name hold the positions); traverses_chw_charlotte_north_caroli"
+ },
+ "columbia_mo": {
+  "status": "failed",
+  "error": "no reading has a usable timestamp, so no run could be formed (3 files read): Read Me_File Notation.txt: skipped (no positions (lat/lon or a point geometry); a .dbf is only a shapefile's attribute table: the .shp, .shx and .prj with the same name hold the positions); traverses_chw_columbia mo_100422."
+ },
+ "farmville_va": {
+  "city": "Farmville, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 3551,
+  "centroid_lat": 37.2945,
+  "centroid_lon": -78.3968,
+  "grid_km": [
+   8.3,
+   10.9
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W081",
+   "dem": "Copernicus_DSM_COG_10_N37_00_W079_00_DEM",
+   "sentinel2": {
+    "scenes": 16,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.01
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_015034_20210716_02_T1",
+   "date": "2021-07-16",
+   "offset_days": 1,
+   "clear_fraction": 0.968,
+   "cloud_cover": 1.83,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    37.2,
+    42.85,
+    51.65
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:00:01",
+    "end": "2021-07-15 07:00:00",
+    "n_readings": 16337,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 947,
+    "share_on_grid": 1.0,
+    "median_step_m": 1.3,
+    "drift_method": "protocol",
+    "drift_per_h": -0.083,
+    "drift_fallback": "only 5 cells revisited \u2265 15 min apart (< 20; 28 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 22.24,
+    "ta_era5": 23.35,
+    "bg_minus_era5": -1.11,
+    "sw_down": 31.6,
+    "era5_error": null,
+    "dTa_sd": 0.532,
+    "dTa_p1_p99": [
+     -1.28,
+     1.13
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.368,
+    "r_dTa_canopy": -0.262,
+    "r_dTa_impervious_f300": 0.446,
+    "r_dTa_lst": 0.383,
+    "r_dTa_lst_f300": 0.404,
+    "r_lst_impervious": 0.679,
+    "r_dTa_elevation": -0.377,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:00",
+    "end": "2021-07-15 15:59:59",
+    "n_readings": 18040,
+    "vehicles": 9,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 1317,
+    "share_on_grid": 1.0,
+    "median_step_m": 1.5,
+    "drift_method": "protocol",
+    "drift_per_h": -0.379,
+    "drift_fallback": "only 7 cells revisited \u2265 15 min apart (< 20; 75 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 30.88,
+    "ta_era5": 33.31,
+    "bg_minus_era5": -2.42,
+    "sw_down": 471.5,
+    "era5_error": null,
+    "dTa_sd": 1.247,
+    "dTa_p1_p99": [
+     -2.19,
+     3.26
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.37,
+    "r_dTa_canopy": -0.275,
+    "r_dTa_impervious_f300": 0.44,
+    "r_dTa_lst": 0.396,
+    "r_dTa_lst_f300": 0.426,
+    "r_lst_impervious": 0.646,
+    "r_dTa_elevation": -0.37,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:59:59",
+    "n_readings": 18593,
+    "vehicles": 9,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 1287,
+    "share_on_grid": 1.0,
+    "median_step_m": 1.6,
+    "drift_method": "protocol",
+    "drift_per_h": -0.373,
+    "drift_fallback": "only 13 cells revisited \u2265 15 min apart (< 20; 71 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 31.08,
+    "ta_era5": 30.85,
+    "bg_minus_era5": 0.23,
+    "sw_down": 94.2,
+    "era5_error": null,
+    "dTa_sd": 1.116,
+    "dTa_p1_p99": [
+     -2.3,
+     2.25
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.448,
+    "r_dTa_canopy": -0.305,
+    "r_dTa_impervious_f300": 0.539,
+    "r_dTa_lst": 0.543,
+    "r_dTa_lst_f300": 0.532,
+    "r_lst_impervious": 0.676,
+    "r_dTa_elevation": -0.449,
+    "lst_offset_days": 1.0
+   }
+  ]
+ },
+ "fort_lauderdale_fl": {
+  "city": "Fort Lauderdale, FL",
+  "status": "ok",
+  "campaign_date": "2019-09-18",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 16119,
+  "centroid_lat": 26.1385,
+  "centroid_lon": -80.1404,
+  "grid_km": [
+   14.8,
+   18.1
+  ],
+  "warnings": [
+   "54,443 readings repeat another file's (same sensor, time and position): read once"
+  ],
+  "n_duplicate_readings": 54443,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp",
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N24W081",
+   "dem": "Copernicus_DSM_COG_10_N26_00_W081_00_DEM",
+   "sentinel2": {
+    "scenes": 8,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2019,
+      8
+     ],
+     [
+      2019,
+      9
+     ],
+     [
+      2019,
+      10
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.299
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_015042_20190913_02_T1",
+   "date": "2019-09-13",
+   "offset_days": -5,
+   "clear_fraction": 0.739,
+   "cloud_cover": 32.33,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    37.34,
+    41.91,
+    45.19
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2019-09-18 morning",
+    "window": "morning",
+    "start": "2019-09-18 06:00:00",
+    "end": "2019-09-18 07:00:00",
+    "n_readings": 15412,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 4301,
+    "share_on_grid": 1.0,
+    "median_step_m": 7.7,
+    "drift_method": "protocol",
+    "drift_per_h": -0.813,
+    "drift_fallback": "only 4 cells revisited \u2265 15 min apart (< 20; 415 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 25.65,
+    "ta_era5": 26.1,
+    "bg_minus_era5": -0.45,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 0.608,
+    "dTa_p1_p99": [
+     -1.54,
+     0.95
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": -0.01,
+    "r_dTa_canopy": 0.041,
+    "r_dTa_impervious_f300": 0.027,
+    "r_dTa_lst": -0.131,
+    "r_dTa_lst_f300": -0.044,
+    "r_lst_impervious": 0.236,
+    "r_dTa_elevation": 0.047,
+    "lst_offset_days": -5.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-09-18 midday",
+    "window": "midday",
+    "start": "2019-09-18 15:00:00",
+    "end": "2019-09-18 16:00:00",
+    "n_readings": 15525,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 4485,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.1,
+    "drift_method": "fe",
+    "drift_per_h": -2.157,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 1.825,
+    "background_c": 31.07,
+    "ta_era5": 31.11,
+    "bg_minus_era5": -0.04,
+    "sw_down": 640.8,
+    "era5_error": null,
+    "dTa_sd": 0.934,
+    "dTa_p1_p99": [
+     -1.94,
+     2.16
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": -0.014,
+    "r_dTa_canopy": 0.058,
+    "r_dTa_impervious_f300": 0.101,
+    "r_dTa_lst": 0.277,
+    "r_dTa_lst_f300": 0.252,
+    "r_lst_impervious": 0.248,
+    "r_dTa_elevation": -0.021,
+    "lst_offset_days": -5.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-09-18 evening",
+    "window": "evening",
+    "start": "2019-09-18 19:00:00",
+    "end": "2019-09-18 20:00:00",
+    "n_readings": 14063,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 4217,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.0,
+    "drift_method": "protocol",
+    "drift_per_h": -0.237,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 306 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 28.59,
+    "ta_era5": 28.4,
+    "bg_minus_era5": 0.19,
+    "sw_down": 3.8,
+    "era5_error": null,
+    "dTa_sd": 0.296,
+    "dTa_p1_p99": [
+     -0.46,
+     0.81
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.152,
+    "r_dTa_canopy": -0.12,
+    "r_dTa_impervious_f300": 0.215,
+    "r_dTa_lst": 0.162,
+    "r_dTa_lst_f300": 0.17,
+    "r_lst_impervious": 0.309,
+    "r_dTa_elevation": -0.063,
+    "lst_offset_days": -5.0
+   },
+   {
+    "run": "am",
+    "run_id": "2019-09-21 morning",
+    "window": "morning",
+    "start": "2019-09-21 06:02:00",
+    "end": "2019-09-21 06:59:00",
+    "n_readings": 2543,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 6.03,
+    "end_h": 6.98,
+    "duration_min": 57.0,
+    "inside_protocol": true,
+    "n_cells": 898,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "protocol",
+    "drift_per_h": 0.279,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 47 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 26.86,
+    "ta_era5": 26.85,
+    "bg_minus_era5": 0.01,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 0.128,
+    "dTa_p1_p99": [
+     -0.29,
+     0.24
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.224,
+    "r_dTa_canopy": -0.207,
+    "r_dTa_impervious_f300": 0.378,
+    "r_dTa_lst": 0.393,
+    "r_dTa_lst_f300": 0.483,
+    "r_lst_impervious": 0.168,
+    "r_dTa_elevation": -0.127,
+    "lst_offset_days": -8.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-09-21 midday",
+    "window": "midday",
+    "start": "2019-09-21 15:00:00",
+    "end": "2019-09-21 15:45:00",
+    "n_readings": 2021,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 15.75,
+    "duration_min": 45.0,
+    "inside_protocol": true,
+    "n_cells": 732,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.5,
+    "drift_method": "protocol",
+    "drift_per_h": 0.027,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 33 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 28.95,
+    "ta_era5": 28.25,
+    "bg_minus_era5": 0.7,
+    "sw_down": 349.4,
+    "era5_error": null,
+    "dTa_sd": 0.249,
+    "dTa_p1_p99": [
+     -0.45,
+     0.66
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.274,
+    "r_dTa_canopy": -0.31,
+    "r_dTa_impervious_f300": 0.256,
+    "r_dTa_lst": 0.126,
+    "r_dTa_lst_f300": 0.155,
+    "r_lst_impervious": 0.179,
+    "r_dTa_elevation": -0.265,
+    "lst_offset_days": -8.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-09-21 evening",
+    "window": "evening",
+    "start": "2019-09-21 19:00:00",
+    "end": "2019-09-21 19:45:00",
+    "n_readings": 2053,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 19.75,
+    "duration_min": 45.0,
+    "inside_protocol": true,
+    "n_cells": 758,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.3,
+    "drift_method": "protocol",
+    "drift_per_h": -0.026,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 36 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 27.5,
+    "ta_era5": 26.95,
+    "bg_minus_era5": 0.55,
+    "sw_down": 2.1,
+    "era5_error": null,
+    "dTa_sd": 0.111,
+    "dTa_p1_p99": [
+     -0.2,
+     0.41
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.281,
+    "r_dTa_canopy": -0.123,
+    "r_dTa_impervious_f300": 0.264,
+    "r_dTa_lst": 0.062,
+    "r_dTa_lst_f300": 0.119,
+    "r_lst_impervious": 0.103,
+    "r_dTa_elevation": -0.05,
+    "lst_offset_days": -8.0
+   },
+   {
+    "run": "am",
+    "run_id": "2019-09-23 morning",
+    "window": "morning",
+    "start": "2019-09-23 06:00:00",
+    "end": "2019-09-23 07:00:00",
+    "n_readings": 2826,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 728,
+    "share_on_grid": 1.0,
+    "median_step_m": 7.8,
+    "drift_method": "fe",
+    "drift_per_h": -0.182,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 25.62,
+    "ta_era5": 25.65,
+    "bg_minus_era5": -0.03,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 0.17,
+    "dTa_p1_p99": [
+     -0.27,
+     0.55
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.116,
+    "r_dTa_canopy": -0.114,
+    "r_dTa_impervious_f300": 0.201,
+    "r_dTa_lst": -0.131,
+    "r_dTa_lst_f300": -0.106,
+    "r_lst_impervious": 0.507,
+    "r_dTa_elevation": -0.06,
+    "lst_offset_days": -10.0
+   }
+  ]
+ },
+ "houston_tx": {
+  "city": "Houston, TX",
+  "status": "ok",
+  "campaign_date": "2020-08-07",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Chicago",
+  "n_rows": 82046,
+  "centroid_lat": 29.7633,
+  "centroid_lon": -95.3493,
+  "grid_km": [
+   69.4,
+   39.1
+  ],
+  "warnings": [
+   "216,593 readings repeat another file's (same sensor, time and position): read once",
+   "large grid: 69 \u00d7 39 km (3,014,848 cells); the open features take long (several readings far apart?)"
+  ],
+  "n_duplicate_readings": 216593,
+  "files_read": [
+   "af_trav_humidity.shp",
+   "af_trav_temp.shp",
+   "am_trav_humidity.shp",
+   "am_trav_temp.shp",
+   "pm_trav_humidity.shp",
+   "pm_trav_temp.shp"
+  ],
+  "features": {
+   "worldcover": "N27W096",
+   "dem": [
+    "Copernicus_DSM_COG_10_N29_00_W096_00_DEM",
+    "Copernicus_DSM_COG_10_N29_00_W095_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 23,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2020,
+      7
+     ],
+     [
+      2020,
+      8
+     ],
+     [
+      2020,
+      9
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.013
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_025039_20200804_02_T1",
+   "date": "2020-08-04",
+   "offset_days": -3,
+   "clear_fraction": 0.989,
+   "cloud_cover": 5.97,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    45.16,
+    50.22,
+    55.16
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2020-08-07 morning",
+    "window": "morning",
+    "start": "2020-08-07 06:00:00",
+    "end": "2020-08-07 07:00:00",
+    "n_readings": 80056,
+    "vehicles": 53,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 26755,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.2,
+    "drift_method": "fe",
+    "drift_per_h": 0.165,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.519,
+    "background_c": 25.93,
+    "ta_era5": 25.47,
+    "bg_minus_era5": 0.47,
+    "sw_down": 1.4,
+    "era5_error": null,
+    "dTa_sd": 0.8,
+    "dTa_p1_p99": [
+     -1.6,
+     2.09
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.344,
+    "r_dTa_canopy": -0.334,
+    "r_dTa_impervious_f300": 0.723,
+    "r_dTa_lst": 0.531,
+    "r_dTa_lst_f300": 0.563,
+    "r_lst_impervious": 0.435,
+    "r_dTa_elevation": -0.102,
+    "lst_offset_days": -3.0
+   },
+   {
+    "run": "af",
+    "run_id": "2020-08-07 midday",
+    "window": "midday",
+    "start": "2020-08-07 15:00:00",
+    "end": "2020-08-07 16:00:00",
+    "n_readings": 75709,
+    "vehicles": 55,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 27334,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "protocol",
+    "drift_per_h": 0.374,
+    "drift_fallback": "only 17 cells revisited \u2265 15 min apart (< 20; 1359 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 34.64,
+    "ta_era5": 33.47,
+    "bg_minus_era5": 1.17,
+    "sw_down": 688.4,
+    "era5_error": null,
+    "dTa_sd": 0.821,
+    "dTa_p1_p99": [
+     -1.91,
+     2.0
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.2,
+    "r_dTa_canopy": -0.152,
+    "r_dTa_impervious_f300": 0.425,
+    "r_dTa_lst": 0.488,
+    "r_dTa_lst_f300": 0.526,
+    "r_lst_impervious": 0.446,
+    "r_dTa_elevation": 0.361,
+    "lst_offset_days": -3.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2020-08-07 evening",
+    "window": "evening",
+    "start": "2020-08-07 19:00:00",
+    "end": "2020-08-07 20:00:00",
+    "n_readings": 76952,
+    "vehicles": 43,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 27957,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "protocol",
+    "drift_per_h": -1.259,
+    "drift_fallback": "only 11 cells revisited \u2265 15 min apart (< 20; 1197 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 31.76,
+    "ta_era5": 31.42,
+    "bg_minus_era5": 0.34,
+    "sw_down": 58.2,
+    "era5_error": null,
+    "dTa_sd": 0.72,
+    "dTa_p1_p99": [
+     -2.14,
+     1.56
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.171,
+    "r_dTa_canopy": -0.174,
+    "r_dTa_impervious_f300": 0.322,
+    "r_dTa_lst": 0.319,
+    "r_dTa_lst_f300": 0.338,
+    "r_lst_impervious": 0.445,
+    "r_dTa_elevation": 0.277,
+    "lst_offset_days": -3.0
+   }
+  ]
+ },
+ "las_cruces_nm": {
+  "city": "Las Cruces, NM",
+  "status": "ok",
+  "campaign_date": "2020-07-10",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Denver",
+  "n_rows": 14421,
+  "centroid_lat": 32.3246,
+  "centroid_lon": -106.7685,
+  "grid_km": [
+   16.9,
+   17.1
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N30W108",
+   "dem": "Copernicus_DSM_COG_10_N32_00_W107_00_DEM",
+   "sentinel2": {
+    "scenes": 22,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2020,
+      6
+     ],
+     [
+      2020,
+      7
+     ],
+     [
+      2020,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.012
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_033038_20200711_02_T1",
+   "date": "2020-07-11",
+   "offset_days": 1,
+   "clear_fraction": 0.986,
+   "cloud_cover": 1.97,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    55.55,
+    58.46,
+    61.28
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2020-07-10 morning",
+    "window": "morning",
+    "start": "2020-07-10 06:00:00",
+    "end": "2020-07-10 07:00:00",
+    "n_readings": 12394,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 4531,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.2,
+    "drift_method": "protocol",
+    "drift_per_h": 0.429,
+    "drift_fallback": "only 1 cells revisited \u2265 15 min apart (< 20; 104 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 25.03,
+    "ta_era5": 27.77,
+    "bg_minus_era5": -2.73,
+    "sw_down": 35.0,
+    "era5_error": null,
+    "dTa_sd": 0.78,
+    "dTa_p1_p99": [
+     -2.02,
+     1.99
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.097,
+    "r_dTa_canopy": -0.042,
+    "r_dTa_impervious_f300": 0.046,
+    "r_dTa_lst": -0.068,
+    "r_dTa_lst_f300": -0.1,
+    "r_lst_impervious": -0.236,
+    "r_dTa_elevation": 0.08,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "af",
+    "run_id": "2020-07-10 midday",
+    "window": "midday",
+    "start": "2020-07-10 15:00:00",
+    "end": "2020-07-10 16:00:00",
+    "n_readings": 12535,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 4742,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.6,
+    "drift_method": "protocol",
+    "drift_per_h": 0.553,
+    "drift_fallback": "only 1 cells revisited \u2265 15 min apart (< 20; 86 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 40.59,
+    "ta_era5": 40.91,
+    "bg_minus_era5": -0.32,
+    "sw_down": 838.1,
+    "era5_error": null,
+    "dTa_sd": 0.851,
+    "dTa_p1_p99": [
+     -2.69,
+     1.15
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.235,
+    "r_dTa_canopy": -0.021,
+    "r_dTa_impervious_f300": 0.497,
+    "r_dTa_lst": -0.21,
+    "r_dTa_lst_f300": -0.28,
+    "r_lst_impervious": -0.204,
+    "r_dTa_elevation": -0.742,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2020-07-10 evening",
+    "window": "evening",
+    "start": "2020-07-10 19:00:00",
+    "end": "2020-07-10 20:00:00",
+    "n_readings": 13878,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 5148,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.6,
+    "drift_method": "protocol",
+    "drift_per_h": -1.766,
+    "drift_fallback": "only 11 cells revisited \u2265 15 min apart (< 20; 74 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 37.35,
+    "ta_era5": 39.69,
+    "bg_minus_era5": -2.34,
+    "sw_down": 82.2,
+    "era5_error": null,
+    "dTa_sd": 1.144,
+    "dTa_p1_p99": [
+     -3.79,
+     1.66
+    ],
+    "share_abs_dTa_gt5": 0.002,
+    "r_dTa_impervious": 0.059,
+    "r_dTa_canopy": -0.107,
+    "r_dTa_impervious_f300": 0.104,
+    "r_dTa_lst": 0.138,
+    "r_dTa_lst_f300": 0.136,
+    "r_lst_impervious": -0.212,
+    "r_dTa_elevation": 0.091,
+    "lst_offset_days": 1.0
+   }
+  ]
+ },
+ "longmont_co": {
+  "city": "Longmont, CO",
+  "status": "ok",
+  "campaign_date": "2023-07-23",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Denver",
+  "n_rows": 12916,
+  "centroid_lat": 40.1717,
+  "centroid_lon": -105.1093,
+  "grid_km": [
+   16.9,
+   12.3
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": [
+    "N39W108",
+    "N39W105"
+   ],
+   "dem": "Copernicus_DSM_COG_10_N40_00_W106_00_DEM",
+   "sentinel2": {
+    "scenes": 18,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2023,
+      6
+     ],
+     [
+      2023,
+      7
+     ],
+     [
+      2023,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.02
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_034032_20230727_02_T1",
+   "date": "2023-07-27",
+   "offset_days": 4,
+   "clear_fraction": 0.982,
+   "cloud_cover": 24.03,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    31.67,
+    40.95,
+    45.51
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2023-07-23 morning",
+    "window": "morning",
+    "start": "2023-07-23 06:00:04",
+    "end": "2023-07-23 06:55:03",
+    "n_readings": 11072,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 6.92,
+    "duration_min": 55.0,
+    "inside_protocol": true,
+    "n_cells": 4353,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.8,
+    "drift_method": "protocol",
+    "drift_per_h": -0.202,
+    "drift_fallback": "only 3 cells revisited \u2265 15 min apart (< 20; 3768 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 14.41,
+    "ta_era5": 14.62,
+    "bg_minus_era5": -0.21,
+    "sw_down": 68.7,
+    "era5_error": null,
+    "dTa_sd": 0.913,
+    "dTa_p1_p99": [
+     -2.45,
+     1.77
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.163,
+    "r_dTa_canopy": 0.021,
+    "r_dTa_impervious_f300": 0.437,
+    "r_dTa_lst": 0.102,
+    "r_dTa_lst_f300": 0.105,
+    "r_lst_impervious": 0.211,
+    "r_dTa_elevation": -0.074,
+    "lst_offset_days": 4.0
+   },
+   {
+    "run": "af",
+    "run_id": "2023-07-23 midday",
+    "window": "midday",
+    "start": "2023-07-23 15:00:00",
+    "end": "2023-07-23 15:55:36",
+    "n_readings": 10506,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 15.93,
+    "duration_min": 55.6,
+    "inside_protocol": true,
+    "n_cells": 4294,
+    "share_on_grid": 1.0,
+    "median_step_m": 12.4,
+    "drift_method": "protocol",
+    "drift_per_h": 0.029,
+    "drift_fallback": "only 4 cells revisited \u2265 15 min apart (< 20; 3639 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 35.54,
+    "ta_era5": 33.24,
+    "bg_minus_era5": 2.3,
+    "sw_down": 761.6,
+    "era5_error": null,
+    "dTa_sd": 0.608,
+    "dTa_p1_p99": [
+     -1.82,
+     1.39
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.313,
+    "r_dTa_canopy": -0.115,
+    "r_dTa_impervious_f300": 0.406,
+    "r_dTa_lst": 0.185,
+    "r_dTa_lst_f300": 0.147,
+    "r_lst_impervious": 0.228,
+    "r_dTa_elevation": -0.129,
+    "lst_offset_days": 4.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2023-07-23 evening",
+    "window": "evening",
+    "start": "2023-07-23 19:00:03",
+    "end": "2023-07-23 19:54:13",
+    "n_readings": 10953,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 19.9,
+    "duration_min": 54.1,
+    "inside_protocol": true,
+    "n_cells": 4269,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.7,
+    "drift_method": "protocol",
+    "drift_per_h": 0.088,
+    "drift_fallback": "only 3 cells revisited \u2265 15 min apart (< 20; 3668 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 29.43,
+    "ta_era5": 26.8,
+    "bg_minus_era5": 2.63,
+    "sw_down": 90.4,
+    "era5_error": null,
+    "dTa_sd": 0.775,
+    "dTa_p1_p99": [
+     -2.07,
+     1.54
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.106,
+    "r_dTa_canopy": -0.317,
+    "r_dTa_impervious_f300": 0.187,
+    "r_dTa_lst": 0.217,
+    "r_dTa_lst_f300": 0.189,
+    "r_lst_impervious": 0.225,
+    "r_dTa_elevation": 0.047,
+    "lst_offset_days": 4.0
+   }
+  ]
+ },
+ "los_angeles_ca": {
+  "city": "Los Angeles, CA",
+  "status": "ok",
+  "campaign_date": "2019-09-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Los_Angeles",
+  "n_rows": 35663,
+  "centroid_lat": 34.0918,
+  "centroid_lon": -118.3716,
+  "grid_km": [
+   42.0,
+   49.3
+  ],
+  "warnings": [
+   "37 readings repeat another file's (same sensor, time and position): read once",
+   "large grid: 42 \u00d7 49 km (2,300,200 cells); the open features take long (several readings far apart?)"
+  ],
+  "n_duplicate_readings": 37,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "ev_trav.shp",
+   "af_trav.shp",
+   "am_trav.shp",
+   "ev_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N33W120",
+   "dem": [
+    "Copernicus_DSM_COG_10_N33_00_W119_00_DEM",
+    "Copernicus_DSM_COG_10_N34_00_W119_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 23,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2019,
+      8
+     ],
+     [
+      2019,
+      9
+     ],
+     [
+      2019,
+      10
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_041036_20190903_02_T1",
+   "date": "2019-09-03",
+   "offset_days": -12,
+   "clear_fraction": 0.999,
+   "cloud_cover": 1.2,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    42.32,
+    48.93,
+    52.5
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2019-09-15 morning",
+    "window": "morning",
+    "start": "2019-09-15 06:00:00",
+    "end": "2019-09-15 07:00:00",
+    "n_readings": 36622,
+    "vehicles": 16,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 12551,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "fe",
+    "drift_per_h": 0.105,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 2.755,
+    "background_c": 19.12,
+    "ta_era5": 20.23,
+    "bg_minus_era5": -1.11,
+    "sw_down": 5.1,
+    "era5_error": null,
+    "dTa_sd": 1.352,
+    "dTa_p1_p99": [
+     -2.79,
+     4.92
+    ],
+    "share_abs_dTa_gt5": 0.008,
+    "r_dTa_impervious": 0.162,
+    "r_dTa_canopy": -0.238,
+    "r_dTa_impervious_f300": 0.199,
+    "r_dTa_lst": 0.154,
+    "r_dTa_lst_f300": 0.162,
+    "r_lst_impervious": 0.393,
+    "r_dTa_elevation": 0.046,
+    "lst_offset_days": -12.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-09-15 midday",
+    "window": "midday",
+    "start": "2019-09-15 15:00:00",
+    "end": "2019-09-15 16:00:00",
+    "n_readings": 31273,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 10854,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.5,
+    "drift_method": "fe",
+    "drift_per_h": 0.128,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 1.816,
+    "background_c": 27.43,
+    "ta_era5": 29.01,
+    "bg_minus_era5": -1.59,
+    "sw_down": 571.9,
+    "era5_error": null,
+    "dTa_sd": 3.501,
+    "dTa_p1_p99": [
+     -6.06,
+     5.88
+    ],
+    "share_abs_dTa_gt5": 0.147,
+    "r_dTa_impervious": -0.006,
+    "r_dTa_canopy": -0.012,
+    "r_dTa_impervious_f300": -0.111,
+    "r_dTa_lst": 0.527,
+    "r_dTa_lst_f300": 0.538,
+    "r_lst_impervious": 0.398,
+    "r_dTa_elevation": 0.808,
+    "lst_offset_days": -12.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-09-15 evening",
+    "window": "evening",
+    "start": "2019-09-15 19:00:00",
+    "end": "2019-09-15 20:00:00",
+    "n_readings": 35102,
+    "vehicles": 16,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 12258,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.6,
+    "drift_method": "fe",
+    "drift_per_h": -1.525,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.032,
+    "background_c": 23.12,
+    "ta_era5": 24.41,
+    "bg_minus_era5": -1.3,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 2.06,
+    "dTa_p1_p99": [
+     -3.02,
+     3.7
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.05,
+    "r_dTa_canopy": -0.034,
+    "r_dTa_impervious_f300": -0.02,
+    "r_dTa_lst": 0.515,
+    "r_dTa_lst_f300": 0.526,
+    "r_lst_impervious": 0.423,
+    "r_dTa_elevation": 0.76,
+    "lst_offset_days": -12.0
+   }
+  ]
+ },
+ "lynchburg_va": {
+  "city": "Lynchburg, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 6302,
+  "centroid_lat": 37.3902,
+  "centroid_lon": -79.1647,
+  "grid_km": [
+   17.1,
+   17.4
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W081",
+   "dem": "Copernicus_DSM_COG_10_N37_00_W080_00_DEM",
+   "sentinel2": {
+    "scenes": 7,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.459
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_016034_20210707_02_T1",
+   "date": "2021-07-07",
+   "offset_days": -8,
+   "clear_fraction": 0.516,
+   "cloud_cover": 10.09,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    32.69,
+    37.63,
+    44.0
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:01:26",
+    "end": "2021-07-15 06:56:55",
+    "n_readings": 2840,
+    "vehicles": 2,
+    "error": null,
+    "start_h": 6.02,
+    "end_h": 6.95,
+    "duration_min": 55.4,
+    "inside_protocol": true,
+    "n_cells": 1067,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.2,
+    "drift_method": "protocol",
+    "drift_per_h": -0.634,
+    "drift_fallback": "only 5 cells revisited \u2265 15 min apart (< 20; 9 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 21.69,
+    "ta_era5": 21.76,
+    "bg_minus_era5": -0.07,
+    "sw_down": 23.6,
+    "era5_error": null,
+    "dTa_sd": 0.323,
+    "dTa_p1_p99": [
+     -1.06,
+     0.62
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.279,
+    "r_dTa_canopy": -0.243,
+    "r_dTa_impervious_f300": 0.497,
+    "r_dTa_lst": 0.372,
+    "r_dTa_lst_f300": 0.316,
+    "r_lst_impervious": 0.44,
+    "r_dTa_elevation": 0.052,
+    "lst_offset_days": -8.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:17",
+    "end": "2021-07-15 15:56:26",
+    "n_readings": 2330,
+    "vehicles": 2,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 15.94,
+    "duration_min": 56.1,
+    "inside_protocol": true,
+    "n_cells": 942,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "protocol",
+    "drift_per_h": 1.432,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 6 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 32.22,
+    "ta_era5": 32.81,
+    "bg_minus_era5": -0.59,
+    "sw_down": 530.7,
+    "era5_error": null,
+    "dTa_sd": 0.602,
+    "dTa_p1_p99": [
+     -2.09,
+     1.12
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.319,
+    "r_dTa_canopy": -0.284,
+    "r_dTa_impervious_f300": 0.342,
+    "r_dTa_lst": 0.575,
+    "r_dTa_lst_f300": 0.549,
+    "r_lst_impervious": 0.462,
+    "r_dTa_elevation": 0.046,
+    "lst_offset_days": -8.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:59:59",
+    "n_readings": 11063,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 4293,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.5,
+    "drift_method": "fe",
+    "drift_per_h": 0.489,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 30.26,
+    "ta_era5": 31.02,
+    "bg_minus_era5": -0.76,
+    "sw_down": 110.0,
+    "era5_error": null,
+    "dTa_sd": 1.061,
+    "dTa_p1_p99": [
+     -3.4,
+     1.35
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.545,
+    "r_dTa_canopy": -0.456,
+    "r_dTa_impervious_f300": 0.655,
+    "r_dTa_lst": 0.649,
+    "r_dTa_lst_f300": 0.639,
+    "r_lst_impervious": 0.631,
+    "r_dTa_elevation": -0.049,
+    "lst_offset_days": -8.0
+   }
+  ]
+ },
+ "new_orleans_la": {
+  "city": "New Orleans, LA",
+  "status": "ok",
+  "campaign_date": "2020-08-18",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Chicago",
+  "n_rows": 23277,
+  "centroid_lat": 29.9754,
+  "centroid_lon": -90.05,
+  "grid_km": [
+   25.5,
+   21.9
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "am_trav.shp",
+   "af_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": [
+    "N27W093",
+    "N27W090",
+    "N30W093",
+    "N30W090"
+   ],
+   "dem": [
+    "Copernicus_DSM_COG_10_N29_00_W091_00_DEM",
+    "Copernicus_DSM_COG_10_N29_00_W090_00_DEM",
+    "Copernicus_DSM_COG_10_N30_00_W091_00_DEM",
+    "Copernicus_DSM_COG_10_N30_00_W090_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 15,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2020,
+      7
+     ],
+     [
+      2020,
+      8
+     ],
+     [
+      2020,
+      9
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_022039_20200815_02_T1",
+   "date": "2020-08-15",
+   "offset_days": -3,
+   "clear_fraction": 0.999,
+   "cloud_cover": 28.7,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    39.69,
+    45.26,
+    48.5
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2020-08-08 morning",
+    "window": "morning",
+    "start": "2020-08-08 06:00:00",
+    "end": "2020-08-08 07:00:00",
+    "n_readings": 26195,
+    "vehicles": 12,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7759,
+    "share_on_grid": 1.0,
+    "median_step_m": 7.4,
+    "drift_method": "fe",
+    "drift_per_h": 0.462,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.718,
+    "background_c": 26.52,
+    "ta_era5": 26.44,
+    "bg_minus_era5": 0.08,
+    "sw_down": 14.9,
+    "era5_error": null,
+    "dTa_sd": 0.788,
+    "dTa_p1_p99": [
+     -1.97,
+     1.73
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.387,
+    "r_dTa_canopy": -0.179,
+    "r_dTa_impervious_f300": 0.776,
+    "r_dTa_lst": 0.699,
+    "r_dTa_lst_f300": 0.737,
+    "r_lst_impervious": 0.502,
+    "r_dTa_elevation": 0.116,
+    "lst_offset_days": 7.0
+   },
+   {
+    "run": "af",
+    "run_id": "2020-08-18 midday",
+    "window": "midday",
+    "start": "2020-08-18 15:00:00",
+    "end": "2020-08-18 16:00:00",
+    "n_readings": 21117,
+    "vehicles": 10,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 6903,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.3,
+    "drift_method": "fe",
+    "drift_per_h": -0.966,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 2.225,
+    "background_c": 33.49,
+    "ta_era5": 31.73,
+    "bg_minus_era5": 1.77,
+    "sw_down": 678.2,
+    "era5_error": null,
+    "dTa_sd": 0.959,
+    "dTa_p1_p99": [
+     -2.16,
+     2.32
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.166,
+    "r_dTa_canopy": -0.13,
+    "r_dTa_impervious_f300": 0.317,
+    "r_dTa_lst": 0.352,
+    "r_dTa_lst_f300": 0.344,
+    "r_lst_impervious": 0.478,
+    "r_dTa_elevation": -0.118,
+    "lst_offset_days": -3.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2020-08-18 evening",
+    "window": "evening",
+    "start": "2020-08-18 19:00:00",
+    "end": "2020-08-18 20:00:00",
+    "n_readings": 27939,
+    "vehicles": 12,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 8615,
+    "share_on_grid": 1.0,
+    "median_step_m": 7.4,
+    "drift_method": "fe",
+    "drift_per_h": -0.713,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.617,
+    "background_c": 30.98,
+    "ta_era5": 29.18,
+    "bg_minus_era5": 1.8,
+    "sw_down": 13.8,
+    "era5_error": null,
+    "dTa_sd": 0.596,
+    "dTa_p1_p99": [
+     -1.75,
+     0.98
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.282,
+    "r_dTa_canopy": -0.063,
+    "r_dTa_impervious_f300": 0.616,
+    "r_dTa_lst": 0.604,
+    "r_dTa_lst_f300": 0.66,
+    "r_lst_impervious": 0.509,
+    "r_dTa_elevation": 0.113,
+    "lst_offset_days": -3.0
+   }
+  ]
+ },
+ "petersburg_va": {
+  "city": "Petersburg, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 8294,
+  "centroid_lat": 37.2061,
+  "centroid_lon": -77.3979,
+  "grid_km": [
+   12.6,
+   12.3
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W078",
+   "dem": "Copernicus_DSM_COG_10_N37_00_W078_00_DEM",
+   "sentinel2": {
+    "scenes": 10,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_015034_20210716_02_T1",
+   "date": "2021-07-16",
+   "offset_days": 1,
+   "clear_fraction": 0.999,
+   "cloud_cover": 1.83,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    35.59,
+    41.31,
+    49.04
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:00:14",
+    "end": "2021-07-15 07:00:00",
+    "n_readings": 7136,
+    "vehicles": 3,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 59.8,
+    "inside_protocol": true,
+    "n_cells": 2676,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.2,
+    "drift_method": "protocol",
+    "drift_per_h": 0.113,
+    "drift_fallback": "only 9 cells revisited \u2265 15 min apart (< 20; 139 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 22.71,
+    "ta_era5": 23.57,
+    "bg_minus_era5": -0.86,
+    "sw_down": 37.4,
+    "era5_error": null,
+    "dTa_sd": 0.465,
+    "dTa_p1_p99": [
+     -0.99,
+     1.15
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.486,
+    "r_dTa_canopy": -0.344,
+    "r_dTa_impervious_f300": 0.653,
+    "r_dTa_lst": 0.561,
+    "r_dTa_lst_f300": 0.632,
+    "r_lst_impervious": 0.694,
+    "r_dTa_elevation": -0.623,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:01",
+    "end": "2021-07-15 15:59:59",
+    "n_readings": 7742,
+    "vehicles": 3,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 2911,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.5,
+    "drift_method": "fe",
+    "drift_per_h": -0.02,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.222,
+    "background_c": 33.07,
+    "ta_era5": 32.74,
+    "bg_minus_era5": 0.33,
+    "sw_down": 577.3,
+    "era5_error": null,
+    "dTa_sd": 0.608,
+    "dTa_p1_p99": [
+     -1.43,
+     1.4
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.559,
+    "r_dTa_canopy": -0.509,
+    "r_dTa_impervious_f300": 0.669,
+    "r_dTa_lst": 0.62,
+    "r_dTa_lst_f300": 0.615,
+    "r_lst_impervious": 0.692,
+    "r_dTa_elevation": -0.497,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:58:57",
+    "n_readings": 6881,
+    "vehicles": 3,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 19.98,
+    "duration_min": 58.9,
+    "inside_protocol": true,
+    "n_cells": 2707,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.0,
+    "drift_method": "fe",
+    "drift_per_h": 0.118,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.619,
+    "background_c": 31.11,
+    "ta_era5": 29.14,
+    "bg_minus_era5": 1.97,
+    "sw_down": 69.9,
+    "era5_error": null,
+    "dTa_sd": 1.078,
+    "dTa_p1_p99": [
+     -2.62,
+     1.99
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.646,
+    "r_dTa_canopy": -0.562,
+    "r_dTa_impervious_f300": 0.765,
+    "r_dTa_lst": 0.765,
+    "r_dTa_lst_f300": 0.8,
+    "r_lst_impervious": 0.7,
+    "r_dTa_elevation": -0.751,
+    "lst_offset_days": 1.0
+   }
+  ]
+ },
+ "providence_ri": {
+  "city": "Providence, RI",
+  "status": "ok",
+  "campaign_date": "2020-07-29",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 21454,
+  "centroid_lat": 41.8251,
+  "centroid_lon": -71.3821,
+  "grid_km": [
+   16.0,
+   19.4
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "mi_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N39W072",
+   "dem": "Copernicus_DSM_COG_10_N41_00_W072_00_DEM",
+   "sentinel2": {
+    "scenes": 27,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2020,
+      6
+     ],
+     [
+      2020,
+      7
+     ],
+     [
+      2020,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.45
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_012031_20200809_02_T1",
+   "date": "2020-08-09",
+   "offset_days": 11,
+   "clear_fraction": 0.545,
+   "cloud_cover": 15.77,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    34.7,
+    40.77,
+    45.34
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2020-07-29 morning",
+    "window": "morning",
+    "start": "2020-07-29 06:00:00",
+    "end": "2020-07-29 07:00:00",
+    "n_readings": 14999,
+    "vehicles": 6,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 5082,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.5,
+    "drift_method": "protocol",
+    "drift_per_h": 2.405,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 67 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 22.19,
+    "ta_era5": 21.97,
+    "bg_minus_era5": 0.22,
+    "sw_down": 78.8,
+    "era5_error": null,
+    "dTa_sd": 0.955,
+    "dTa_p1_p99": [
+     -2.68,
+     1.44
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.346,
+    "r_dTa_canopy": -0.325,
+    "r_dTa_impervious_f300": 0.584,
+    "r_dTa_lst": 0.318,
+    "r_dTa_lst_f300": 0.325,
+    "r_lst_impervious": 0.398,
+    "r_dTa_elevation": 0.113,
+    "lst_offset_days": 11.0
+   },
+   {
+    "run": "af",
+    "run_id": "2020-07-29 midday",
+    "window": "midday",
+    "start": "2020-07-29 15:00:00",
+    "end": "2020-07-29 16:00:00",
+    "n_readings": 15153,
+    "vehicles": 6,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 5244,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.9,
+    "drift_method": "protocol",
+    "drift_per_h": 1.257,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 72 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 31.07,
+    "ta_era5": 30.94,
+    "bg_minus_era5": 0.13,
+    "sw_down": 635.9,
+    "era5_error": null,
+    "dTa_sd": 1.177,
+    "dTa_p1_p99": [
+     -2.45,
+     2.7
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.318,
+    "r_dTa_canopy": -0.221,
+    "r_dTa_impervious_f300": 0.558,
+    "r_dTa_lst": 0.268,
+    "r_dTa_lst_f300": 0.221,
+    "r_lst_impervious": 0.404,
+    "r_dTa_elevation": 0.222,
+    "lst_offset_days": 11.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2020-07-29 evening",
+    "window": "evening",
+    "start": "2020-07-29 19:00:00",
+    "end": "2020-07-29 19:59:59",
+    "n_readings": 15603,
+    "vehicles": 6,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 5433,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.9,
+    "drift_method": "protocol",
+    "drift_per_h": -1.449,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 53 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 28.01,
+    "ta_era5": 27.81,
+    "bg_minus_era5": 0.2,
+    "sw_down": 52.1,
+    "era5_error": null,
+    "dTa_sd": 1.13,
+    "dTa_p1_p99": [
+     -2.32,
+     1.72
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.387,
+    "r_dTa_canopy": -0.281,
+    "r_dTa_impervious_f300": 0.675,
+    "r_dTa_lst": 0.215,
+    "r_dTa_lst_f300": 0.21,
+    "r_lst_impervious": 0.413,
+    "r_dTa_elevation": 0.292,
+    "lst_offset_days": 11.0
+   },
+   {
+    "run": "ni",
+    "run_id": "2020-07-30 night",
+    "window": "night",
+    "start": "2020-07-30 00:00:00",
+    "end": "2020-07-30 00:58:54",
+    "n_readings": 16329,
+    "vehicles": 6,
+    "error": null,
+    "start_h": 24.0,
+    "end_h": 24.98,
+    "duration_min": 58.9,
+    "inside_protocol": true,
+    "n_cells": 5695,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.9,
+    "drift_method": "protocol",
+    "drift_per_h": -0.515,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 59 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 23.46,
+    "ta_era5": 23.74,
+    "bg_minus_era5": -0.27,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 0.527,
+    "dTa_p1_p99": [
+     -1.19,
+     0.98
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.366,
+    "r_dTa_canopy": -0.284,
+    "r_dTa_impervious_f300": 0.631,
+    "r_dTa_lst": 0.287,
+    "r_dTa_lst_f300": 0.291,
+    "r_lst_impervious": 0.393,
+    "r_dTa_elevation": 0.133,
+    "lst_offset_days": 10.0
+   }
+  ]
+ },
+ "raleigh_nc": {
+  "city": "Raleigh, NC",
+  "status": "ok",
+  "campaign_date": "2021-07-23",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 37012,
+  "centroid_lat": 35.8277,
+  "centroid_lon": -78.6741,
+  "grid_km": [
+   45.9,
+   42.5
+  ],
+  "warnings": [
+   "large grid: 46 \u00d7 43 km (2,169,427 cells); the open features take long (several readings far apart?)"
+  ],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": [
+    "N33W081",
+    "N36W081"
+   ],
+   "dem": [
+    "Copernicus_DSM_COG_10_N35_00_W080_00_DEM",
+    "Copernicus_DSM_COG_10_N35_00_W079_00_DEM",
+    "Copernicus_DSM_COG_10_N36_00_W080_00_DEM",
+    "Copernicus_DSM_COG_10_N36_00_W079_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 25,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.006
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_016035_20210808_02_T1",
+   "date": "2021-08-08",
+   "offset_days": 16,
+   "clear_fraction": 0.994,
+   "cloud_cover": 1.53,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    31.6,
+    35.71,
+    41.65
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-23 morning",
+    "window": "morning",
+    "start": "2021-07-23 06:00:01",
+    "end": "2021-07-23 07:00:00",
+    "n_readings": 35202,
+    "vehicles": 17,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 12763,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.3,
+    "drift_method": "fe",
+    "drift_per_h": -0.053,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 1.752,
+    "background_c": 19.85,
+    "ta_era5": 20.26,
+    "bg_minus_era5": -0.42,
+    "sw_down": 19.2,
+    "era5_error": null,
+    "dTa_sd": 0.63,
+    "dTa_p1_p99": [
+     -1.19,
+     1.64
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.385,
+    "r_dTa_canopy": -0.348,
+    "r_dTa_impervious_f300": 0.611,
+    "r_dTa_lst": 0.528,
+    "r_dTa_lst_f300": 0.583,
+    "r_lst_impervious": 0.643,
+    "r_dTa_elevation": -0.203,
+    "lst_offset_days": 16.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-23 midday",
+    "window": "midday",
+    "start": "2021-07-23 15:00:00",
+    "end": "2021-07-23 15:59:59",
+    "n_readings": 28654,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 10898,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.9,
+    "drift_method": "protocol",
+    "drift_per_h": 0.102,
+    "drift_fallback": "only 19 cells revisited \u2265 15 min apart (< 20; 122 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 29.1,
+    "ta_era5": 28.65,
+    "bg_minus_era5": 0.46,
+    "sw_down": 669.7,
+    "era5_error": null,
+    "dTa_sd": 0.794,
+    "dTa_p1_p99": [
+     -2.11,
+     1.74
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.341,
+    "r_dTa_canopy": -0.365,
+    "r_dTa_impervious_f300": 0.351,
+    "r_dTa_lst": 0.384,
+    "r_dTa_lst_f300": 0.346,
+    "r_lst_impervious": 0.626,
+    "r_dTa_elevation": -0.232,
+    "lst_offset_days": 16.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-23 evening",
+    "window": "evening",
+    "start": "2021-07-23 19:00:00",
+    "end": "2021-07-23 19:59:59",
+    "n_readings": 35419,
+    "vehicles": 17,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 13351,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.7,
+    "drift_method": "fe",
+    "drift_per_h": -0.464,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.781,
+    "background_c": 27.42,
+    "ta_era5": 27.24,
+    "bg_minus_era5": 0.18,
+    "sw_down": 89.3,
+    "era5_error": null,
+    "dTa_sd": 0.934,
+    "dTa_p1_p99": [
+     -2.48,
+     1.73
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.446,
+    "r_dTa_canopy": -0.425,
+    "r_dTa_impervious_f300": 0.543,
+    "r_dTa_lst": 0.613,
+    "r_dTa_lst_f300": 0.611,
+    "r_lst_impervious": 0.64,
+    "r_dTa_elevation": -0.051,
+    "lst_offset_days": 16.0
+   }
+  ]
+ },
+ "richmond_va": {
+  "city": "Richmond, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 31299,
+  "centroid_lat": 37.547,
+  "centroid_lon": -77.4621,
+  "grid_km": [
+   27.5,
+   27.1
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W078",
+   "dem": "Copernicus_DSM_COG_10_N37_00_W078_00_DEM",
+   "sentinel2": {
+    "scenes": 18,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.032
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_015034_20210716_02_T1",
+   "date": "2021-07-16",
+   "offset_days": 1,
+   "clear_fraction": 0.96,
+   "cloud_cover": 1.83,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    36.33,
+    42.1,
+    49.75
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:00:01",
+    "end": "2021-07-15 07:00:00",
+    "n_readings": 30840,
+    "vehicles": 12,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 59.9,
+    "inside_protocol": true,
+    "n_cells": 11089,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.5,
+    "drift_method": "fe",
+    "drift_per_h": 0.123,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.708,
+    "background_c": 22.66,
+    "ta_era5": 23.34,
+    "bg_minus_era5": -0.68,
+    "sw_down": 38.2,
+    "era5_error": null,
+    "dTa_sd": 0.645,
+    "dTa_p1_p99": [
+     -1.44,
+     1.59
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.469,
+    "r_dTa_canopy": -0.408,
+    "r_dTa_impervious_f300": 0.609,
+    "r_dTa_lst": 0.591,
+    "r_dTa_lst_f300": 0.611,
+    "r_lst_impervious": 0.686,
+    "r_dTa_elevation": -0.156,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:00",
+    "end": "2021-07-15 15:59:59",
+    "n_readings": 28204,
+    "vehicles": 12,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9962,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.4,
+    "drift_method": "fe",
+    "drift_per_h": -0.08,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 3.065,
+    "background_c": 32.91,
+    "ta_era5": 32.84,
+    "bg_minus_era5": 0.07,
+    "sw_down": 639.8,
+    "era5_error": null,
+    "dTa_sd": 1.078,
+    "dTa_p1_p99": [
+     -2.52,
+     1.98
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.295,
+    "r_dTa_canopy": -0.272,
+    "r_dTa_impervious_f300": 0.327,
+    "r_dTa_lst": 0.427,
+    "r_dTa_lst_f300": 0.437,
+    "r_lst_impervious": 0.672,
+    "r_dTa_elevation": -0.311,
+    "lst_offset_days": 1.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:59:59",
+    "n_readings": 27411,
+    "vehicles": 11,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 10248,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "fe",
+    "drift_per_h": 0.307,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 1.869,
+    "background_c": 31.27,
+    "ta_era5": 29.51,
+    "bg_minus_era5": 1.75,
+    "sw_down": 74.8,
+    "era5_error": null,
+    "dTa_sd": 0.962,
+    "dTa_p1_p99": [
+     -2.17,
+     2.45
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.47,
+    "r_dTa_canopy": -0.434,
+    "r_dTa_impervious_f300": 0.597,
+    "r_dTa_lst": 0.531,
+    "r_dTa_lst_f300": 0.554,
+    "r_lst_impervious": 0.65,
+    "r_dTa_elevation": -0.275,
+    "lst_offset_days": 1.0
+   }
+  ]
+ },
+ "sacramento_ca": {
+  "city": "Sacramento, CA",
+  "status": "ok",
+  "campaign_date": "2019-08-14",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Los_Angeles",
+  "n_rows": 24924,
+  "centroid_lat": 38.5821,
+  "centroid_lon": -121.4015,
+  "grid_km": [
+   42.6,
+   42.4
+  ],
+  "warnings": [
+   "large grid: 43 \u00d7 42 km (2,007,880 cells); the open features take long (several readings far apart?)"
+  ],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "Afternoon_TraversePoints_Sacramento.shp",
+   "Evening_TraversePoints_Sacramento.shp",
+   "Morning_TraversePoints_Sacramento.shp"
+  ],
+  "features": {
+   "worldcover": "N36W123",
+   "dem": "Copernicus_DSM_COG_10_N38_00_W122_00_DEM",
+   "sentinel2": {
+    "scenes": 15,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2019,
+      7
+     ],
+     [
+      2019,
+      8
+     ],
+     [
+      2019,
+      9
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_044033_20190807_02_T1",
+   "date": "2019-08-07",
+   "offset_days": -7,
+   "clear_fraction": 1.0,
+   "cloud_cover": 0.74,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    36.26,
+    41.37,
+    44.65
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2019-08-14 morning",
+    "window": "morning",
+    "start": "2019-08-14 06:00:00",
+    "end": "2019-08-14 07:00:00",
+    "n_readings": 20969,
+    "vehicles": 8,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7771,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.1,
+    "drift_method": "protocol",
+    "drift_per_h": 0.919,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 368 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 19.63,
+    "ta_era5": 20.06,
+    "bg_minus_era5": -0.44,
+    "sw_down": 21.2,
+    "era5_error": null,
+    "dTa_sd": 1.235,
+    "dTa_p1_p99": [
+     -3.05,
+     2.67
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.347,
+    "r_dTa_canopy": -0.264,
+    "r_dTa_impervious_f300": 0.576,
+    "r_dTa_lst": 0.357,
+    "r_dTa_lst_f300": 0.379,
+    "r_lst_impervious": 0.483,
+    "r_dTa_elevation": -0.117,
+    "lst_offset_days": -7.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-08-14 midday",
+    "window": "midday",
+    "start": "2019-08-14 15:00:00",
+    "end": "2019-08-14 16:00:00",
+    "n_readings": 20739,
+    "vehicles": 8,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7860,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.5,
+    "drift_method": "protocol",
+    "drift_per_h": 0.873,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 275 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 38.09,
+    "ta_era5": 39.52,
+    "bg_minus_era5": -1.42,
+    "sw_down": 790.5,
+    "era5_error": null,
+    "dTa_sd": 0.832,
+    "dTa_p1_p99": [
+     -1.89,
+     2.35
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.182,
+    "r_dTa_canopy": -0.176,
+    "r_dTa_impervious_f300": 0.191,
+    "r_dTa_lst": 0.304,
+    "r_dTa_lst_f300": 0.298,
+    "r_lst_impervious": 0.49,
+    "r_dTa_elevation": 0.082,
+    "lst_offset_days": -7.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-08-14 evening",
+    "window": "evening",
+    "start": "2019-08-14 19:00:00",
+    "end": "2019-08-14 20:00:00",
+    "n_readings": 24220,
+    "vehicles": 9,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9293,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.4,
+    "drift_method": "protocol",
+    "drift_per_h": -3.268,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 355 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 35.53,
+    "ta_era5": 36.45,
+    "bg_minus_era5": -0.92,
+    "sw_down": 55.9,
+    "era5_error": null,
+    "dTa_sd": 1.629,
+    "dTa_p1_p99": [
+     -6.21,
+     2.5
+    ],
+    "share_abs_dTa_gt5": 0.032,
+    "r_dTa_impervious": 0.456,
+    "r_dTa_canopy": -0.508,
+    "r_dTa_impervious_f300": 0.526,
+    "r_dTa_lst": 0.684,
+    "r_dTa_lst_f300": 0.718,
+    "r_lst_impervious": 0.415,
+    "r_dTa_elevation": -0.043,
+    "lst_offset_days": -7.0
+   }
+  ]
+ },
+ "salem_va": {
+  "city": "Salem, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 9003,
+  "centroid_lat": 37.2854,
+  "centroid_lon": -80.0538,
+  "grid_km": [
+   14.3,
+   12.5
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W081",
+   "dem": [
+    "Copernicus_DSM_COG_10_N37_00_W081_00_DEM",
+    "Copernicus_DSM_COG_10_N37_00_W080_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 9,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.311
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_017034_20210714_02_T1",
+   "date": "2021-07-14",
+   "offset_days": -1,
+   "clear_fraction": 0.637,
+   "cloud_cover": 46.91,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    29.27,
+    37.47,
+    43.17
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:00:12",
+    "end": "2021-07-15 06:55:37",
+    "n_readings": 7831,
+    "vehicles": 3,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 6.93,
+    "duration_min": 55.4,
+    "inside_protocol": true,
+    "n_cells": 3107,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.1,
+    "drift_method": "fe",
+    "drift_per_h": 0.15,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.064,
+    "background_c": 21.89,
+    "ta_era5": 19.79,
+    "bg_minus_era5": 2.1,
+    "sw_down": 15.5,
+    "era5_error": null,
+    "dTa_sd": 0.437,
+    "dTa_p1_p99": [
+     -1.05,
+     0.79
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.284,
+    "r_dTa_canopy": -0.226,
+    "r_dTa_impervious_f300": 0.342,
+    "r_dTa_lst": 0.186,
+    "r_dTa_lst_f300": 0.101,
+    "r_lst_impervious": 0.579,
+    "r_dTa_elevation": -0.136,
+    "lst_offset_days": -1.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:06",
+    "end": "2021-07-15 15:59:59",
+    "n_readings": 6987,
+    "vehicles": 3,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 59.8,
+    "inside_protocol": true,
+    "n_cells": 2852,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.4,
+    "drift_method": "fe",
+    "drift_per_h": -0.365,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.058,
+    "background_c": 31.92,
+    "ta_era5": 30.27,
+    "bg_minus_era5": 1.66,
+    "sw_down": 652.9,
+    "era5_error": null,
+    "dTa_sd": 0.678,
+    "dTa_p1_p99": [
+     -1.89,
+     1.63
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.381,
+    "r_dTa_canopy": -0.342,
+    "r_dTa_impervious_f300": 0.524,
+    "r_dTa_lst": 0.38,
+    "r_dTa_lst_f300": 0.359,
+    "r_lst_impervious": 0.598,
+    "r_dTa_elevation": -0.517,
+    "lst_offset_days": -1.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:55:39",
+    "n_readings": 7483,
+    "vehicles": 3,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 19.93,
+    "duration_min": 55.5,
+    "inside_protocol": true,
+    "n_cells": 3044,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.5,
+    "drift_method": "fe",
+    "drift_per_h": -1.26,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.188,
+    "background_c": 30.67,
+    "ta_era5": 29.62,
+    "bg_minus_era5": 1.05,
+    "sw_down": 130.1,
+    "era5_error": null,
+    "dTa_sd": 1.054,
+    "dTa_p1_p99": [
+     -3.35,
+     1.75
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.435,
+    "r_dTa_canopy": -0.365,
+    "r_dTa_impervious_f300": 0.595,
+    "r_dTa_lst": 0.554,
+    "r_dTa_lst_f300": 0.594,
+    "r_lst_impervious": 0.566,
+    "r_dTa_elevation": -0.413,
+    "lst_offset_days": -1.0
+   }
+  ]
+ },
+ "salt_lake_city_ut": {
+  "city": "Salt Lake City, UT",
+  "status": "ok",
+  "campaign_date": "2023-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Denver",
+  "n_rows": 23151,
+  "centroid_lat": 40.7562,
+  "centroid_lon": -111.8953,
+  "grid_km": [
+   27.6,
+   18.1
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N39W114",
+   "dem": [
+    "Copernicus_DSM_COG_10_N40_00_W113_00_DEM",
+    "Copernicus_DSM_COG_10_N40_00_W112_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 20,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2023,
+      6
+     ],
+     [
+      2023,
+      7
+     ],
+     [
+      2023,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC09_L2SP_038032_20230715_02_T1",
+   "date": "2023-07-15",
+   "offset_days": 0,
+   "clear_fraction": 1.0,
+   "cloud_cover": 0.08,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    41.92,
+    46.96,
+    51.22
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2023-07-15 morning",
+    "window": "morning",
+    "start": "2023-07-15 06:00:10",
+    "end": "2023-07-15 07:00:00",
+    "n_readings": 20845,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 59.8,
+    "inside_protocol": true,
+    "n_cells": 7903,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.6,
+    "drift_method": "protocol",
+    "drift_per_h": 0.147,
+    "drift_fallback": "only 16 cells revisited \u2265 15 min apart (< 20; 7121 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 19.04,
+    "ta_era5": 16.04,
+    "bg_minus_era5": 2.99,
+    "sw_down": 31.0,
+    "era5_error": null,
+    "dTa_sd": 1.408,
+    "dTa_p1_p99": [
+     -3.76,
+     2.2
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.231,
+    "r_dTa_canopy": -0.188,
+    "r_dTa_impervious_f300": 0.443,
+    "r_dTa_lst": 0.329,
+    "r_dTa_lst_f300": 0.33,
+    "r_lst_impervious": 0.093,
+    "r_dTa_elevation": -0.171,
+    "lst_offset_days": 0.0
+   },
+   {
+    "run": "af",
+    "run_id": "2023-07-15 midday",
+    "window": "midday",
+    "start": "2023-07-15 15:00:00",
+    "end": "2023-07-15 16:00:00",
+    "n_readings": 20339,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 8206,
+    "share_on_grid": 1.0,
+    "median_step_m": 12.6,
+    "drift_method": "fe",
+    "drift_per_h": 0.005,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 33.64,
+    "ta_era5": 32.68,
+    "bg_minus_era5": 0.96,
+    "sw_down": 897.9,
+    "era5_error": null,
+    "dTa_sd": 0.83,
+    "dTa_p1_p99": [
+     -2.36,
+     1.61
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.107,
+    "r_dTa_canopy": -0.287,
+    "r_dTa_impervious_f300": 0.244,
+    "r_dTa_lst": 0.536,
+    "r_dTa_lst_f300": 0.527,
+    "r_lst_impervious": 0.064,
+    "r_dTa_elevation": -0.735,
+    "lst_offset_days": 0.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2023-07-15 evening",
+    "window": "evening",
+    "start": "2023-07-15 19:00:00",
+    "end": "2023-07-15 20:00:00",
+    "n_readings": 17523,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7042,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.2,
+    "drift_method": "fe",
+    "drift_per_h": -0.188,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.0,
+    "background_c": 33.25,
+    "ta_era5": 31.56,
+    "bg_minus_era5": 1.69,
+    "sw_down": 208.9,
+    "era5_error": null,
+    "dTa_sd": 1.031,
+    "dTa_p1_p99": [
+     -3.45,
+     1.31
+    ],
+    "share_abs_dTa_gt5": 0.002,
+    "r_dTa_impervious": 0.292,
+    "r_dTa_canopy": -0.384,
+    "r_dTa_impervious_f300": 0.55,
+    "r_dTa_lst": 0.626,
+    "r_dTa_lst_f300": 0.647,
+    "r_lst_impervious": 0.292,
+    "r_dTa_elevation": -0.777,
+    "lst_offset_days": 0.0
+   }
+  ]
+ },
+ "san_bernardino_ca": {
+  "city": "San Bernardino, CA",
+  "status": "ok",
+  "campaign_date": "2019-10-12",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Los_Angeles",
+  "n_rows": 12283,
+  "centroid_lat": 34.1284,
+  "centroid_lon": -117.2722,
+  "grid_km": [
+   32.7,
+   21.8
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "Afternoon_TraversePoints_SanBernardino.shp",
+   "Evening_TraversePoints_SanBernardino.shp",
+   "Morning_TraversePoints_SanBernardino.shp"
+  ],
+  "features": {
+   "worldcover": "N33W120",
+   "dem": "Copernicus_DSM_COG_10_N34_00_W118_00_DEM",
+   "sentinel2": {
+    "scenes": 11,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2019,
+      9
+     ],
+     [
+      2019,
+      10
+     ],
+     [
+      2019,
+      11
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.018
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_040036_20191014_02_T1",
+   "date": "2019-10-14",
+   "offset_days": 2,
+   "clear_fraction": 0.977,
+   "cloud_cover": 0.09,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    31.51,
+    34.51,
+    36.82
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2019-10-12 morning",
+    "window": "morning",
+    "start": "2019-10-12 06:00:10",
+    "end": "2019-10-12 07:00:00",
+    "n_readings": 12777,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 59.8,
+    "inside_protocol": true,
+    "n_cells": 4587,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.4,
+    "drift_method": "fe",
+    "drift_per_h": 0.952,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.334,
+    "background_c": 11.61,
+    "ta_era5": 9.3,
+    "bg_minus_era5": 2.3,
+    "sw_down": 0.2,
+    "era5_error": null,
+    "dTa_sd": 2.987,
+    "dTa_p1_p99": [
+     -3.9,
+     8.2
+    ],
+    "share_abs_dTa_gt5": 0.108,
+    "r_dTa_impervious": 0.018,
+    "r_dTa_canopy": -0.041,
+    "r_dTa_impervious_f300": 0.003,
+    "r_dTa_lst": -0.106,
+    "r_dTa_lst_f300": -0.08,
+    "r_lst_impervious": 0.086,
+    "r_dTa_elevation": 0.554,
+    "lst_offset_days": 2.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-10-12 midday",
+    "window": "midday",
+    "start": "2019-10-12 15:00:00",
+    "end": "2019-10-12 16:00:00",
+    "n_readings": 10593,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 3829,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.5,
+    "drift_method": "fe",
+    "drift_per_h": -0.671,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.952,
+    "background_c": 30.35,
+    "ta_era5": 25.73,
+    "bg_minus_era5": 4.62,
+    "sw_down": 545.6,
+    "era5_error": null,
+    "dTa_sd": 0.854,
+    "dTa_p1_p99": [
+     -1.77,
+     2.64
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.09,
+    "r_dTa_canopy": -0.127,
+    "r_dTa_impervious_f300": 0.227,
+    "r_dTa_lst": 0.197,
+    "r_dTa_lst_f300": 0.195,
+    "r_lst_impervious": -0.009,
+    "r_dTa_elevation": -0.43,
+    "lst_offset_days": 2.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-10-12 evening",
+    "window": "evening",
+    "start": "2019-10-12 19:00:00",
+    "end": "2019-10-12 19:59:37",
+    "n_readings": 10906,
+    "vehicles": 7,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 19.99,
+    "duration_min": 59.6,
+    "inside_protocol": true,
+    "n_cells": 3867,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.3,
+    "drift_method": "fe",
+    "drift_per_h": -2.655,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.923,
+    "background_c": 22.61,
+    "ta_era5": 18.72,
+    "bg_minus_era5": 3.89,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 0.897,
+    "dTa_p1_p99": [
+     -2.71,
+     1.47
+    ],
+    "share_abs_dTa_gt5": 0.004,
+    "r_dTa_impervious": 0.143,
+    "r_dTa_canopy": -0.172,
+    "r_dTa_impervious_f300": 0.421,
+    "r_dTa_lst": 0.504,
+    "r_dTa_lst_f300": 0.55,
+    "r_lst_impervious": 0.003,
+    "r_dTa_elevation": -0.577,
+    "lst_offset_days": 2.0
+   }
+  ]
+ },
+ "san_diego_ca": {
+  "city": "San Diego, CA",
+  "status": "ok",
+  "campaign_date": "2021-09-13",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Los_Angeles",
+  "n_rows": 32193,
+  "centroid_lat": 32.724,
+  "centroid_lon": -117.107,
+  "grid_km": [
+   31.4,
+   39.1
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": [
+    "N30W120",
+    "N30W117"
+   ],
+   "dem": [
+    "Copernicus_DSM_COG_10_N32_00_W118_00_DEM",
+    "Copernicus_DSM_COG_10_N32_00_W117_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 65,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      8
+     ],
+     [
+      2021,
+      9
+     ],
+     [
+      2021,
+      10
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.007
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_040037_20210917_02_T1",
+   "date": "2021-09-17",
+   "offset_days": 4,
+   "clear_fraction": 0.991,
+   "cloud_cover": 23.41,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    35.92,
+    39.95,
+    42.44
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-09-13 morning",
+    "window": "morning",
+    "start": "2021-09-13 06:00:00",
+    "end": "2021-09-13 07:00:00",
+    "n_readings": 30869,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 10352,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.3,
+    "drift_method": "protocol",
+    "drift_per_h": 0.007,
+    "drift_fallback": "only 19 cells revisited \u2265 15 min apart (< 20; 197 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 17.79,
+    "ta_era5": 18.65,
+    "bg_minus_era5": -0.86,
+    "sw_down": 10.0,
+    "era5_error": null,
+    "dTa_sd": 0.659,
+    "dTa_p1_p99": [
+     -1.07,
+     1.48
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.014,
+    "r_dTa_canopy": -0.056,
+    "r_dTa_impervious_f300": 0.045,
+    "r_dTa_lst": -0.373,
+    "r_dTa_lst_f300": -0.435,
+    "r_lst_impervious": 0.274,
+    "r_dTa_elevation": -0.812,
+    "lst_offset_days": 4.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-09-13 midday",
+    "window": "midday",
+    "start": "2021-09-13 15:00:00",
+    "end": "2021-09-13 16:00:00",
+    "n_readings": 30858,
+    "vehicles": 19,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 10774,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.9,
+    "drift_method": "fe",
+    "drift_per_h": -0.818,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 1.514,
+    "background_c": 24.78,
+    "ta_era5": 25.65,
+    "bg_minus_era5": -0.88,
+    "sw_down": 664.8,
+    "era5_error": null,
+    "dTa_sd": 1.929,
+    "dTa_p1_p99": [
+     -3.44,
+     3.58
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": -0.049,
+    "r_dTa_canopy": 0.059,
+    "r_dTa_impervious_f300": -0.096,
+    "r_dTa_lst": 0.377,
+    "r_dTa_lst_f300": 0.44,
+    "r_lst_impervious": 0.271,
+    "r_dTa_elevation": 0.487,
+    "lst_offset_days": 4.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-09-13 evening",
+    "window": "evening",
+    "start": "2021-09-13 19:00:00",
+    "end": "2021-09-13 20:00:00",
+    "n_readings": 31122,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 11067,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.1,
+    "drift_method": "protocol",
+    "drift_per_h": 0.131,
+    "drift_fallback": "only 9 cells revisited \u2265 15 min apart (< 20; 146 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 20.23,
+    "ta_era5": 20.85,
+    "bg_minus_era5": -0.63,
+    "sw_down": 0.0,
+    "era5_error": null,
+    "dTa_sd": 1.038,
+    "dTa_p1_p99": [
+     -2.09,
+     2.03
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.123,
+    "r_dTa_canopy": -0.058,
+    "r_dTa_impervious_f300": 0.209,
+    "r_dTa_lst": 0.426,
+    "r_dTa_lst_f300": 0.482,
+    "r_lst_impervious": 0.303,
+    "r_dTa_elevation": 0.197,
+    "lst_offset_days": 4.0
+   }
+  ]
+ },
+ "seattle_wa": {
+  "city": "Seattle, WA",
+  "status": "ok",
+  "campaign_date": "2020-07-27",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Los_Angeles",
+  "n_rows": 42663,
+  "centroid_lat": 47.5445,
+  "centroid_lon": -122.2513,
+  "grid_km": [
+   55.9,
+   68.1
+  ],
+  "warnings": [
+   "large grid: 56 \u00d7 68 km (4,228,602 cells); the open features take long (several readings far apart?)"
+  ],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N45W123",
+   "dem": [
+    "Copernicus_DSM_COG_10_N47_00_W123_00_DEM",
+    "Copernicus_DSM_COG_10_N47_00_W122_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 15,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2020,
+      6
+     ],
+     [
+      2020,
+      7
+     ],
+     [
+      2020,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.228
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_047027_20200729_02_T1",
+   "date": "2020-07-29",
+   "offset_days": 2,
+   "clear_fraction": 0.758,
+   "cloud_cover": 8.44,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    31.92,
+    37.56,
+    42.6
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2020-07-27 morning",
+    "window": "morning",
+    "start": "2020-07-27 06:00:00",
+    "end": "2020-07-27 07:00:00",
+    "n_readings": 37595,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 14461,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.1,
+    "drift_method": "fe",
+    "drift_per_h": 1.134,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.115,
+    "background_c": 16.4,
+    "ta_era5": 14.26,
+    "bg_minus_era5": 2.14,
+    "sw_down": 76.4,
+    "era5_error": null,
+    "dTa_sd": 1.904,
+    "dTa_p1_p99": [
+     -4.86,
+     2.81
+    ],
+    "share_abs_dTa_gt5": 0.007,
+    "r_dTa_impervious": 0.526,
+    "r_dTa_canopy": -0.243,
+    "r_dTa_impervious_f300": 0.739,
+    "r_dTa_lst": 0.314,
+    "r_dTa_lst_f300": 0.355,
+    "r_lst_impervious": 0.513,
+    "r_dTa_elevation": -0.403,
+    "lst_offset_days": 2.0
+   },
+   {
+    "run": "af",
+    "run_id": "2020-07-27 midday",
+    "window": "midday",
+    "start": "2020-07-27 15:00:00",
+    "end": "2020-07-27 16:00:00",
+    "n_readings": 35019,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 13723,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.2,
+    "drift_method": "fe",
+    "drift_per_h": 0.73,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.317,
+    "background_c": 32.05,
+    "ta_era5": 31.46,
+    "bg_minus_era5": 0.59,
+    "sw_down": 770.0,
+    "era5_error": null,
+    "dTa_sd": 1.23,
+    "dTa_p1_p99": [
+     -3.38,
+     2.48
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": -0.011,
+    "r_dTa_canopy": -0.07,
+    "r_dTa_impervious_f300": -0.046,
+    "r_dTa_lst": 0.438,
+    "r_dTa_lst_f300": 0.467,
+    "r_lst_impervious": 0.522,
+    "r_dTa_elevation": -0.102,
+    "lst_offset_days": 2.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2020-07-27 evening",
+    "window": "evening",
+    "start": "2020-07-27 19:00:00",
+    "end": "2020-07-27 20:00:00",
+    "n_readings": 37493,
+    "vehicles": 15,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 14479,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.2,
+    "drift_method": "fe",
+    "drift_per_h": -3.19,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.434,
+    "background_c": 29.86,
+    "ta_era5": 27.9,
+    "bg_minus_era5": 1.95,
+    "sw_down": 143.6,
+    "era5_error": null,
+    "dTa_sd": 1.488,
+    "dTa_p1_p99": [
+     -3.84,
+     2.63
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.327,
+    "r_dTa_canopy": -0.299,
+    "r_dTa_impervious_f300": 0.41,
+    "r_dTa_lst": 0.535,
+    "r_dTa_lst_f300": 0.58,
+    "r_lst_impervious": 0.529,
+    "r_dTa_elevation": -0.211,
+    "lst_offset_days": 2.0
+   }
+  ]
+ },
+ "sedona_az": {
+  "city": "Sedona, AZ",
+  "status": "ok",
+  "campaign_date": "2023-06-24",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Phoenix",
+  "n_rows": 6861,
+  "centroid_lat": 34.8642,
+  "centroid_lon": -111.792,
+  "grid_km": [
+   12.2,
+   11.3
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N33W114",
+   "dem": "Copernicus_DSM_COG_10_N34_00_W112_00_DEM",
+   "sentinel2": {
+    "scenes": 26,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2023,
+      5
+     ],
+     [
+      2023,
+      6
+     ],
+     [
+      2023,
+      7
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC09_L2SP_037036_20230622_02_T1",
+   "date": "2023-06-22",
+   "offset_days": -2,
+   "clear_fraction": 1.0,
+   "cloud_cover": 0.01,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    42.53,
+    46.65,
+    48.77
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2023-06-24 morning",
+    "window": "morning",
+    "start": "2023-06-24 06:00:00",
+    "end": "2023-06-24 06:32:17",
+    "n_readings": 6017,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 6.54,
+    "duration_min": 32.3,
+    "inside_protocol": true,
+    "n_cells": 2304,
+    "share_on_grid": 1.0,
+    "median_step_m": 8.1,
+    "drift_method": "protocol",
+    "drift_per_h": 0.171,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 1898 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 12.28,
+    "ta_era5": 12.49,
+    "bg_minus_era5": -0.22,
+    "sw_down": 197.5,
+    "era5_error": null,
+    "dTa_sd": 1.877,
+    "dTa_p1_p99": [
+     -5.8,
+     2.05
+    ],
+    "share_abs_dTa_gt5": 0.02,
+    "r_dTa_impervious": 0.205,
+    "r_dTa_canopy": -0.214,
+    "r_dTa_impervious_f300": 0.288,
+    "r_dTa_lst": 0.142,
+    "r_dTa_lst_f300": 0.07,
+    "r_lst_impervious": 0.399,
+    "r_dTa_elevation": 0.005,
+    "lst_offset_days": -2.0
+   },
+   {
+    "run": "af",
+    "run_id": "2023-06-24 midday",
+    "window": "midday",
+    "start": "2023-06-24 15:00:01",
+    "end": "2023-06-24 15:35:31",
+    "n_readings": 5579,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 15.59,
+    "duration_min": 35.5,
+    "inside_protocol": true,
+    "n_cells": 2276,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.6,
+    "drift_method": "protocol",
+    "drift_per_h": 0.148,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 1794 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 32.48,
+    "ta_era5": 29.8,
+    "bg_minus_era5": 2.68,
+    "sw_down": 818.1,
+    "era5_error": null,
+    "dTa_sd": 0.594,
+    "dTa_p1_p99": [
+     -1.31,
+     1.37
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.075,
+    "r_dTa_canopy": 0.01,
+    "r_dTa_impervious_f300": 0.099,
+    "r_dTa_lst": 0.009,
+    "r_dTa_lst_f300": -0.005,
+    "r_lst_impervious": 0.371,
+    "r_dTa_elevation": -0.234,
+    "lst_offset_days": -2.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2023-06-24 evening",
+    "window": "evening",
+    "start": "2023-06-24 19:00:06",
+    "end": "2023-06-24 19:26:59",
+    "n_readings": 5891,
+    "vehicles": 1,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 19.45,
+    "duration_min": 26.9,
+    "inside_protocol": true,
+    "n_cells": 2281,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.6,
+    "drift_method": "protocol",
+    "drift_per_h": -0.138,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 1904 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 28.79,
+    "ta_era5": 23.37,
+    "bg_minus_era5": 5.42,
+    "sw_down": 25.8,
+    "era5_error": null,
+    "dTa_sd": 0.729,
+    "dTa_p1_p99": [
+     -2.8,
+     1.22
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.283,
+    "r_dTa_canopy": -0.36,
+    "r_dTa_impervious_f300": 0.3,
+    "r_dTa_lst": 0.451,
+    "r_dTa_lst_f300": 0.341,
+    "r_lst_impervious": 0.394,
+    "r_dTa_elevation": -0.183,
+    "lst_offset_days": -2.0
+   }
+  ]
+ },
+ "victorville_ca": {
+  "city": "Victorville, CA",
+  "status": "ok",
+  "campaign_date": "2019-08-24",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/Los_Angeles",
+  "n_rows": 10227,
+  "centroid_lat": 34.5216,
+  "centroid_lon": -117.3326,
+  "grid_km": [
+   21.7,
+   22.1
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "Afternoon_TraversePoints_Victorville.shp",
+   "Evening_TraversePoints_Victorville.shp",
+   "Morning_TraversePoints_Victorville.shp"
+  ],
+  "features": {
+   "worldcover": "N33W120",
+   "dem": "Copernicus_DSM_COG_10_N34_00_W118_00_DEM",
+   "sentinel2": {
+    "scenes": 12,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2019,
+      7
+     ],
+     [
+      2019,
+      8
+     ],
+     [
+      2019,
+      9
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.0
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_040036_20190827_02_T1",
+   "date": "2019-08-27",
+   "offset_days": 3,
+   "clear_fraction": 1.0,
+   "cloud_cover": 0.0,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    52.34,
+    56.37,
+    60.22
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2019-08-24 morning",
+    "window": "morning",
+    "start": "2019-08-24 07:00:00",
+    "end": "2019-08-24 08:00:00",
+    "n_readings": 10401,
+    "vehicles": 4,
+    "error": null,
+    "start_h": 7.0,
+    "end_h": 8.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 3353,
+    "share_on_grid": 1.0,
+    "median_step_m": 9.8,
+    "drift_method": "protocol",
+    "drift_per_h": 3.864,
+    "drift_fallback": "only 5 cells revisited \u2265 15 min apart (< 20; 462 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 22.04,
+    "ta_era5": 21.28,
+    "bg_minus_era5": 0.76,
+    "sw_down": 200.5,
+    "era5_error": null,
+    "dTa_sd": 1.089,
+    "dTa_p1_p99": [
+     -2.46,
+     2.08
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.022,
+    "r_dTa_canopy": -0.106,
+    "r_dTa_impervious_f300": 0.255,
+    "r_dTa_lst": 0.179,
+    "r_dTa_lst_f300": 0.219,
+    "r_lst_impervious": -0.359,
+    "r_dTa_elevation": 0.582,
+    "lst_offset_days": 3.0
+   },
+   {
+    "run": "af",
+    "run_id": "2019-08-24 midday",
+    "window": "midday",
+    "start": "2019-08-24 15:00:00",
+    "end": "2019-08-24 16:00:00",
+    "n_readings": 10794,
+    "vehicles": 5,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 3798,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.7,
+    "drift_method": "protocol",
+    "drift_per_h": 0.063,
+    "drift_fallback": "cell-fixed-effect drift +0.94 \u00b1 0.40 \u00b0C/h (SE above 0.3 \u00b0C/h): CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 35.07,
+    "ta_era5": 35.54,
+    "bg_minus_era5": -0.47,
+    "sw_down": 746.7,
+    "era5_error": null,
+    "dTa_sd": 0.679,
+    "dTa_p1_p99": [
+     -1.77,
+     1.8
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": -0.173,
+    "r_dTa_canopy": -0.0,
+    "r_dTa_impervious_f300": -0.281,
+    "r_dTa_lst": 0.238,
+    "r_dTa_lst_f300": 0.254,
+    "r_lst_impervious": -0.4,
+    "r_dTa_elevation": -0.595,
+    "lst_offset_days": 3.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2019-08-24 evening",
+    "window": "evening",
+    "start": "2019-08-24 19:00:00",
+    "end": "2019-08-24 20:00:00",
+    "n_readings": 7768,
+    "vehicles": 4,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 3076,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.3,
+    "drift_method": "protocol",
+    "drift_per_h": -2.29,
+    "drift_fallback": "only 8 cells revisited \u2265 15 min apart (< 20; 190 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 30.77,
+    "ta_era5": 32.24,
+    "bg_minus_era5": -1.47,
+    "sw_down": 7.1,
+    "era5_error": null,
+    "dTa_sd": 0.513,
+    "dTa_p1_p99": [
+     -1.57,
+     0.77
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": -0.141,
+    "r_dTa_canopy": -0.074,
+    "r_dTa_impervious_f300": -0.296,
+    "r_dTa_lst": 0.277,
+    "r_dTa_lst_f300": 0.271,
+    "r_lst_impervious": -0.431,
+    "r_dTa_elevation": -0.751,
+    "lst_offset_days": 3.0
+   }
+  ]
+ },
+ "virginia_beach_va": {
+  "city": "Virginia Beach, VA",
+  "status": "ok",
+  "campaign_date": "2021-07-15",
+  "campaign_date_source": "traverse timestamps",
+  "tz": "America/New_York",
+  "n_rows": 25863,
+  "centroid_lat": 36.8315,
+  "centroid_lon": -76.1067,
+  "grid_km": [
+   26.9,
+   21.1
+  ],
+  "warnings": [],
+  "n_duplicate_readings": 0,
+  "files_read": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ],
+  "features": {
+   "worldcover": "N36W078",
+   "dem": [
+    "Copernicus_DSM_COG_10_N36_00_W077_00_DEM",
+    "Copernicus_DSM_COG_10_N36_00_W076_00_DEM"
+   ],
+   "sentinel2": {
+    "scenes": 19,
+    "max_cloud": 20.0,
+    "months": [
+     [
+      2021,
+      6
+     ],
+     [
+      2021,
+      7
+     ],
+     [
+      2021,
+      8
+     ]
+    ],
+    "albedo": "Bonafoni & Sekertekin 2020 narrow-to-broadband coefficients"
+   }
+  },
+  "feature_nan_share": {
+   "canopy": 0.0,
+   "impervious": 0.0,
+   "ndvi": 0.0,
+   "albedo": 0.0,
+   "elevation": 0.0,
+   "water_distance": 0.0,
+   "lst": 0.14
+  },
+  "lst": {
+   "status": "ok",
+   "scene": "LC08_L2SP_014034_20210709_02_T1",
+   "date": "2021-07-09",
+   "offset_days": -6,
+   "clear_fraction": 0.851,
+   "cloud_cover": 23.47,
+   "n_inspected": 1,
+   "lst_p5_p50_p95": [
+    33.89,
+    39.13,
+    44.07
+   ]
+  },
+  "runs": [
+   {
+    "run": "am",
+    "run_id": "2021-07-15 morning",
+    "window": "morning",
+    "start": "2021-07-15 06:00:01",
+    "end": "2021-07-15 07:00:00",
+    "n_readings": 24496,
+    "vehicles": 10,
+    "error": null,
+    "start_h": 6.0,
+    "end_h": 7.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 9465,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.3,
+    "drift_method": "fe",
+    "drift_per_h": -0.057,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.295,
+    "background_c": 24.85,
+    "ta_era5": 25.04,
+    "bg_minus_era5": -0.18,
+    "sw_down": 38.4,
+    "era5_error": null,
+    "dTa_sd": 0.489,
+    "dTa_p1_p99": [
+     -1.0,
+     1.1
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.249,
+    "r_dTa_canopy": -0.21,
+    "r_dTa_impervious_f300": 0.296,
+    "r_dTa_lst": 0.265,
+    "r_dTa_lst_f300": 0.204,
+    "r_lst_impervious": 0.566,
+    "r_dTa_elevation": -0.019,
+    "lst_offset_days": -6.0
+   },
+   {
+    "run": "af",
+    "run_id": "2021-07-15 midday",
+    "window": "midday",
+    "start": "2021-07-15 15:00:00",
+    "end": "2021-07-15 15:59:59",
+    "n_readings": 18617,
+    "vehicles": 10,
+    "error": null,
+    "start_h": 15.0,
+    "end_h": 16.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 7643,
+    "share_on_grid": 1.0,
+    "median_step_m": 10.8,
+    "drift_method": "protocol",
+    "drift_per_h": 2.29,
+    "drift_fallback": "only 0 cells revisited \u2265 15 min apart (< 20; 233 revisited at all): repeat visits minutes apart do not identify the drift over the run, CAPA protocol detrending",
+    "vehicle_offsets_c_range": null,
+    "background_c": 32.63,
+    "ta_era5": 31.01,
+    "bg_minus_era5": 1.62,
+    "sw_down": 633.3,
+    "era5_error": null,
+    "dTa_sd": 1.463,
+    "dTa_p1_p99": [
+     -3.19,
+     2.58
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.294,
+    "r_dTa_canopy": -0.333,
+    "r_dTa_impervious_f300": 0.387,
+    "r_dTa_lst": 0.282,
+    "r_dTa_lst_f300": 0.291,
+    "r_lst_impervious": 0.535,
+    "r_dTa_elevation": -0.295,
+    "lst_offset_days": -6.0
+   },
+   {
+    "run": "pm",
+    "run_id": "2021-07-15 evening",
+    "window": "evening",
+    "start": "2021-07-15 19:00:00",
+    "end": "2021-07-15 19:59:59",
+    "n_readings": 21700,
+    "vehicles": 9,
+    "error": null,
+    "start_h": 19.0,
+    "end_h": 20.0,
+    "duration_min": 60.0,
+    "inside_protocol": true,
+    "n_cells": 8755,
+    "share_on_grid": 1.0,
+    "median_step_m": 11.0,
+    "drift_method": "fe",
+    "drift_per_h": 0.246,
+    "drift_fallback": null,
+    "vehicle_offsets_c_range": 0.167,
+    "background_c": 28.8,
+    "ta_era5": 29.06,
+    "bg_minus_era5": -0.26,
+    "sw_down": 72.7,
+    "era5_error": null,
+    "dTa_sd": 1.817,
+    "dTa_p1_p99": [
+     -3.65,
+     4.14
+    ],
+    "share_abs_dTa_gt5": 0.0,
+    "r_dTa_impervious": 0.135,
+    "r_dTa_canopy": -0.138,
+    "r_dTa_impervious_f300": 0.182,
+    "r_dTa_lst": 0.148,
+    "r_dTa_lst_f300": 0.112,
+    "r_lst_impervious": 0.549,
+    "r_dTa_elevation": -0.199,
+    "lst_offset_days": -6.0
+   }
+  ]
+ }
+}
