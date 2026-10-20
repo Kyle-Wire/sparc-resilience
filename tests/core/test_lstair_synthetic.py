@@ -43,8 +43,11 @@ def test_fast_validation_every_world_gives_its_answer(tmp_path):
     inf, red, mis, null = rows["informative"], rows["redundant"], rows["mismatch"], rows["null"]
     assert null["B-A"]["verdict"] == "not shown" and null["C-C0"]["verdict"] == "not shown" and null["as_expected"]
     assert v["mode"].startswith("single draws") and set(v["rates"]) == set(S.SCENARIOS)
-    assert inf["B-A"]["verdict"] == "LST adds information beyond land cover" and inf["B-A"]["ci95"][1] < 0
-    assert inf["C-A"]["verdict"] == "physics with LST beats land cover" and inf["C-A"]["ci95"][1] < 0
+    assert inf["B-A"]["verdict"] == "LST adds information beyond land cover" and inf["B-A"]["ci95"][0] > 0
+    assert inf["C-A"]["verdict"] == "physics with LST beats land cover" and inf["C-A"]["ci95"][0] > 0
+    # the registered rule: skill gains of at least 0.05 with the Holm-adjusted p (absent windows count as p = 1)
+    assert inf["B-A"]["mean_dss"] >= 0.05 and inf["B-A"]["p_holm"] <= 0.025 and inf["B-A"]["mean_ss_x"] > 0
+    assert inf["B-A"]["mean_diff_mse"] < 0                              # the secondary absolute ΔMSE agrees
     assert red["B-A"]["verdict"] == "not shown"
     sh = mis["share_of_informative_gain"]
     assert sh["B-A"] < 0.5 and sh["C-C0"] < 0.5                       # most of LST's gain is lost at the wrong hour
@@ -63,8 +66,8 @@ def test_written_world_runs_through_the_cli(tmp_path):
     assert rc == 0
     res = json.loads((tmp_path / "res" / "results.json").read_text())
     w = res["windows"]["af"]
-    assert len(w["per_city"]) == 4 and w["paired"]["B-A"]["verdict"] == "not testable"      # 4 < 5 cities
-    assert w["paired"]["B-A"]["mean_diff_mse"] < 0
+    assert len(w["per_city"]) == 4 and w["paired"]["B-A"]["verdict"] == "not testable"      # 4 < 8 units
+    assert w["paired"]["B-A"]["mean_dss"] > 0 and w["absolute"]["B-A"]["mean_diff_mse"] < 0
 
 
 def test_cli_validate_fast(tmp_path):

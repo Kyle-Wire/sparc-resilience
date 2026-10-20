@@ -4,11 +4,17 @@
                                [--no-lst] [--no-era5] [--utc] [--force]
     sparc core lstair dataset  --cities all --out DIR            (every CAPA catalog city)
     sparc core lstair evaluate --data DIR --out DIR [--windows af,am,pm] [--no-physics] [--boot 4000]
+                               [--weights n] [--node-link-any-distance] [--include-flagged] [--lst-mode local]
+                               [--regional] [--land-cover nlcd] [--physics-transfer medoid] [--physics-cell 30]
+                               [--physics-L-max 2000]                (each non-default flag: a registered sensitivity)
+    sparc core lstair sensitivity --data DIR --out DIR [--variants weights_n,lst_local,...] [--cache DIR]
+                               (the primary analysis and every registered sensitivity, one after another)
     sparc core lstair validate --out DIR [--cities 8] [--seeds 0-49] [--fast]   (synthetic worlds, known answers)
     sparc core lstair hosts [--probe]                            (the hosts a real run needs)
 
 Exit codes (dataset): 0 done (some cities may have failed: see DIR/dataset.json), 1 nothing built, 2 a host the
-build needs is blocked (named on stderr).  validate: 0 when every world gives the answer it should, else 1.
+build needs is blocked (named on stderr).  evaluate, sensitivity: 0 done, 1 refused (reason on stderr).  validate: 0
+when every world gives the answer it should, else 1.
 """
 
 from __future__ import annotations
@@ -53,20 +59,43 @@ def add_lstair_parser(subs) -> None:
     d.add_argument("--cache", default=None, help="Landsat COG window cache (default OUT/cache/landsat)")
     d.set_defaults(func=_tracked(cmd_dataset))
 
-    e = s.add_parser("evaluate", help="leave-one-campaign-out: A land cover, B + LST, C physics with LST → results")
+    e = s.add_parser("evaluate", help="leave-one-campaign-out: N, A land cover, B + LST, C physics with LST → "
+                                      "skill, the registered verdict")
     e.add_argument("--data", required=True, help="the dataset folder (the --out of lstair dataset)")
     e.add_argument("--out", required=True, help="results folder (results.json, results.md, predictions.parquet)")
-    e.add_argument("--windows", default="af,am,pm,ni", help="run windows in order (default af,am,pm,ni)")
-    e.add_argument("--boot", type=int, default=4000,
-                   help="random sign vectors of the sign-flip test over more than 16 cities (default 4000)")
-    e.add_argument("--seed", type=int, default=0)
-    e.add_argument("--max-rows", type=int, default=6000, help="training cells per city (default 6000; 0 = all)")
-    e.add_argument("--no-gbm", action="store_true", help="additive spline ridge only (no gradient boosting)")
-    e.add_argument("--no-physics", action="store_true", help="skip model C")
-    e.add_argument("--physics-cell", type=float, default=60.0, help="physics cell size, m (default 60)")
-    e.add_argument("--physics-iter", type=int, default=60, help="physics L-BFGS iterations (default 60)")
+    _evaluate_args(e)
+    e.add_argument("--weights", choices=("variance", "n"), default="variance",
+                   help="training weights: ∝ 1/(n·var(dTa)) per city (variance, registered) or ∝ 1/n (sensitivity)")
+    e.add_argument("--node-link-any-distance", action="store_true",
+                   help="link one OSF node and date at any distance (sensitivity: the eight Virginia cities of 15 July "
+                        "2021 as one group); default only within 50 km")
+    e.add_argument("--include-flagged", action="store_true",
+                   help="keep runs the data checks flagged (qa_exclude: walking campaigns, single-car runs, ...)")
+    e.add_argument("--lst-mode", choices=("full", "local"), default="full",
+                   help="B's LST: full (registered) or local (minus its 3 km focal mean; sensitivity)")
+    e.add_argument("--regional", action="store_true",
+                   help="A and B also get 3 km focal elevation and impervious anomalies (sensitivity)")
+    e.add_argument("--land-cover", choices=("worldcover", "nlcd"), default="worldcover",
+                   help="canopy and impervious from WorldCover (registered) or NLCD tree canopy and percent impervious "
+                        "(sensitivity; every scored city needs the NLCD columns)")
+    e.add_argument("--physics-transfer", choices=("median", "medoid"), default="median",
+                   help="physics transfer: per-parameter medians (registered) or the medoid city's whole parameter "
+                        "vector (sensitivity)")
     e.add_argument("--no-within-city", action="store_true", help="skip the secondary within-city block CV")
     e.set_defaults(func=_tracked(cmd_evaluate))
+
+    se = s.add_parser("sensitivity", help="the primary analysis and each registered sensitivity, one after another "
+                                          "→ sensitivity.json / sensitivity.md")
+    se.add_argument("--data", required=True, help="the dataset folder (the --out of lstair dataset)")
+    se.add_argument("--out", required=True, help="folder for sensitivity.json / .md and each variant's results")
+    se.add_argument("--variants", default="all",
+                    help="comma list of variants, or all (default): weights_n, virginia_one_group, include_flagged, "
+                         "lst_local, regional, nlcd, physics_30m, physics_medoid")
+    se.add_argument("--cache", default=None,
+                    help="physics fit cache root to reuse, e.g. the --out of an earlier lstair evaluate "
+                         "(default OUT/primary)")
+    _evaluate_args(se)
+    se.set_defaults(func=_tracked(cmd_sensitivity))
 
     v = s.add_parser("validate", help="synthetic worlds with known answers: does the harness say what it should?")
     v.add_argument("--out", required=True, help="folder for validation.json / validation.md")
@@ -87,6 +116,30 @@ def add_lstair_parser(subs) -> None:
     p.set_defaults(func=_tracked(lambda args: p.print_help() or 1))
     for q in s.choices.values():
         _progress_args(q, argparse.SUPPRESS)
+
+
+def _evaluate_args(p: argparse.ArgumentParser) -> None:
+    """The options ``evaluate`` and ``sensitivity`` share."""
+    p.add_argument("--windows", default="af,am,pm,ni", help="run windows in order (default af,am,pm,ni)")
+    p.add_argument("--boot", type=int, default=4000,
+                   help="random sign vectors of the sign-flip test over more than 16 units (default 4000)")
+    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--max-rows", type=int, default=6000, help="training cells per city (default 6000; 0 = all)")
+    p.add_argument("--no-gbm", action="store_true", help="additive spline ridge only (no gradient boosting)")
+    p.add_argument("--no-physics", action="store_true", help="skip model C")
+    p.add_argument("--physics-cell", type=float, default=60.0, help="physics cell size, m (default 60)")
+    p.add_argument("--physics-iter", type=int, default=60, help="physics L-BFGS iterations (default 60)")
+    p.add_argument("--physics-L-max", dest="physics_L_max", type=float, default=2000.0,
+                   help="upper bound of the physics length scale L, m (default 2000)")
+
+
+def _settings(args, **kw):
+    from sparc.core.lstair.evaluate import Settings
+
+    return Settings(windows=tuple(w.strip() for w in args.windows.split(",") if w.strip()), boot=args.boot,
+                    seed=args.seed, max_rows_per_city=args.max_rows, gbm=not args.no_gbm, physics=not args.no_physics,
+                    physics_cell_m=args.physics_cell, physics_iter=args.physics_iter,
+                    physics_L_max_m=args.physics_L_max, **kw)
 
 
 def _tracked(fn):
@@ -154,14 +207,23 @@ def cmd_dataset(args) -> int:
     return 0 if ok else 1
 
 
+def _line(name: str, p: dict) -> str:
+    ci = p.get("ci95")
+    holm = p.get("p_holm")
+    return (f"{name} mean ΔSS " + (f"{p['mean_dss']:+.3f} (95% CI {ci[0]:+.3f} to {ci[1]:+.3f}"
+                                   + (f", Holm p {holm:.3g}" if holm is not None else "") + ")" if ci else "—")
+            + f" → {p['verdict']}")
+
+
 def cmd_evaluate(args) -> int:
-    from sparc.core.lstair.evaluate import Settings, run_evaluation
+    from sparc.core.lstair.evaluate import PRIMARY_WINDOW, SAME_NODE_KM, run_evaluation
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
-    s = Settings(windows=tuple(w.strip() for w in args.windows.split(",") if w.strip()), boot=args.boot,
-                 seed=args.seed, max_rows_per_city=args.max_rows, gbm=not args.no_gbm, physics=not args.no_physics,
-                 physics_cell_m=args.physics_cell, physics_iter=args.physics_iter, within_city=not args.no_within_city)
     try:
+        s = _settings(args, weights=args.weights, same_node_km=None if args.node_link_any_distance else SAME_NODE_KM,
+                      include_flagged=args.include_flagged, lst_mode=args.lst_mode, regional=args.regional,
+                      land_cover=args.land_cover, physics_transfer=args.physics_transfer,
+                      within_city=not args.no_within_city)
         res = run_evaluation(args.data, args.out, s)
     except ValueError as exc:
         print(f"lstair evaluate: {exc}", file=sys.stderr)
@@ -170,12 +232,34 @@ def cmd_evaluate(args) -> int:
         if w.get("status") != "done":
             print(f"{run}: not run ({w.get('reason')})")
             continue
-        p = w["paired"]["B-A"]
-        ci = p.get("ci95")
-        print(f"{run}: {len(w['per_city'])} held-out cities; B − A mean ΔMSE "
-              + (f"{p['mean_diff_mse']:+.4f} (95% CI {ci[0]:+.4f} to {ci[1]:+.4f})" if ci else "—")
-              + f" → {p['verdict']}")
+        tag = " (primary)" if run == PRIMARY_WINDOW else ""
+        print(f"{run}{tag}: {len(w['per_unit'])} held-out units; "
+              + "; ".join(_line(p["comparison"], p) for k, p in w["paired"].items() if k in ("B-A", "C-A")))
     print(f"results: {Path(args.out) / 'results.md'}")
+    return 0
+
+
+def cmd_sensitivity(args) -> int:
+    from sparc.core.lstair.evaluate import VARIANTS, run_sensitivity
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    names = list(VARIANTS) if args.variants.strip().lower() == "all" else \
+        [v.strip() for v in args.variants.split(",") if v.strip()]
+    try:
+        sens = run_sensitivity(args.data, args.out, _settings(args, within_city=False), names, cache=args.cache)
+    except ValueError as exc:
+        print(f"lstair sensitivity: {exc}", file=sys.stderr)
+        return 1
+    for r in sens["rows"]:
+        if r.get("status") != "done":
+            print(f"{r['variant']}: not run ({r.get('reason')})")
+            continue
+        w = (r.get("windows") or {}).get(sens["primary_window"]) or {}
+        b = w.get("B-A") or {}
+        print(f"{r['variant']}: {sens['primary_window']} B − A " + (
+            f"ΔSS {b['mean_dss']:+.3f}, Holm p {b['p_holm']:.3g} → {b['verdict']}" if b.get("mean_dss") is not None
+            and b.get("p_holm") is not None else (b.get("verdict") or w.get("reason") or "see sensitivity.md")))
+    print(f"sensitivities: {Path(args.out) / 'sensitivity.md'}")
     return 0
 
 

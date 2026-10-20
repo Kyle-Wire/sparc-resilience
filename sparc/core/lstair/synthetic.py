@@ -17,7 +17,8 @@ Worlds (:data:`SCENARIOS`):
 
 * ``informative`` — a hidden heat source H (patches of anthropogenic heat or hot roof material, independent of
   every land-cover layer) heats both the surface and the air: LST carries information beyond land cover.
-  The harness must find B and C better than A (95% intervals below 0).
+  The harness must find B and C better than A (the registered claim rule: skill gains ΔSS with Holm-adjusted
+  p ≤ 0.025, 95% intervals above 0, mean ΔSS ≥ 0.05 and B, C beating N).
 * ``redundant`` — no hidden source: LST is land cover plus noise.  The verdict must be "not shown".
 * ``mismatch`` — the 10:00 surface pattern H_am and the 15:00 air pattern H_pm differ (correlation
   :data:`MISMATCH_RHO`): what LST shows is only partly what heats the afternoon air.  The harness reports how
@@ -31,6 +32,11 @@ Worlds (:data:`SCENARIOS`):
 comparison makes its claim, with Clopper–Pearson 95% intervals: the false-claim rate in ``null`` and
 ``redundant`` (B − A) must be consistent with the one-sided level 0.025, and the power in ``informative`` is
 reported (the harness's verdicts rest on these rates, not on a seed that happened to pass).
+
+The worlds have one window (af), and the rule is applied as registered: Holm's correction runs over the
+registered family (am, af, pm × B − A, C − A) with the absent windows counted as untested (p = 1), the
+strictest case for af.  At 8 cities the smallest exact sign-flip p is 1/256, so 6/256 = 0.023 ≤ 0.025 still
+allows a claim, but only when every unit gains: the power reported here is a floor for the real run's ~25 units.
 
 A known limit of the test design, stated rather than hidden: B − A tests information beyond *the land-cover
 model A*, so an LST that is a function of land cover A cannot represent (e.g. a sharply nonlinear one) can still
@@ -209,8 +215,9 @@ def claim_rates(rows: list[dict]) -> dict:
 def validate(scenarios=SCENARIOS, n_cities: int = 8, seeds=(0,), settings=None, n: int = 64, out: str | Path | None = None
              ) -> dict:
     """Run the harness (:func:`sparc.core.lstair.evaluate.evaluate_window`) on every world and seed; each row's
-    verdicts against what its world requires, the mismatch world's degradation (its mean B − A and C − C0 ΔMSE as
-    a share of the informative world's, same seed), and the claim rates over seeds (:func:`claim_rates`).
+    verdicts against what its world requires, the mismatch world's degradation (its mean B − A and C − C0 skill
+    gain ΔSS as a share of the informative world's, same seed), and the claim rates over seeds
+    (:func:`claim_rates`).  Each row also keeps the secondary absolute ΔMSE.
 
     With fewer than :data:`RATE_SEEDS` seeds ``all_as_expected`` is the rows' verdicts (single draws: an
     illustration, not a calibration).  With more it rests on the rates: the null worlds' false-claim counts
@@ -224,10 +231,11 @@ def validate(scenarios=SCENARIOS, n_cities: int = 8, seeds=(0,), settings=None, 
     for seed in seeds:
         for sc in scenarios:
             res, _ = evaluate_window(make_world(sc, n_cities, seed, n=n), "af", s)
-            p = res.get("paired", {})
+            p, ab = res.get("paired", {}), res.get("absolute", {})
             row = {"scenario": sc, "seed": int(seed), "status": res.get("status"),
-                   **{k: {q: p.get(k, {}).get(q) for q in ("mean_diff_mse", "rel_change", "ci95", "p_sign_flip",
-                                                            "verdict", "n_better")} for k in CLAIMS},
+                   **{k: {**{q: p.get(k, {}).get(q) for q in ("mean_dss", "ci95", "p_sign_flip", "p_holm", "verdict",
+                                                              "n_better", "mean_ss_x", "mean_ss_base")},
+                          "mean_diff_mse": ab.get(k, {}).get("mean_diff_mse")} for k in CLAIMS},
                    "summary": res.get("summary"), "expected": EXPECTED[sc]}
             b, c = row["B-A"]["verdict"], row["C-A"]["verdict"]
             if sc == "informative":
@@ -244,11 +252,11 @@ def validate(scenarios=SCENARIOS, n_cities: int = 8, seeds=(0,), settings=None, 
         mis = next((r for r in rows if r["scenario"] == "mismatch" and r["seed"] == seed), None)
         if inf and mis:
             # what LST adds: B over A, and C over the same physics without LST (C − A also holds the physics' own
-            # advantage, which the overpass hour does not touch)
+            # advantage, which the overpass hour does not touch); skill gains, as the claim is scored
             deg = {}
             for k in ("B-A", "C-C0"):
-                a, b = inf[k]["mean_diff_mse"], mis[k]["mean_diff_mse"]
-                deg[k] = None if (a is None or b is None or a >= 0) else float(b / a)
+                a, b = inf[k]["mean_dss"], mis[k]["mean_dss"]
+                deg[k] = None if (a is None or b is None or a <= 0) else float(b / a)
             mis["share_of_informative_gain"] = deg
             mis["as_expected"] = all(v is not None and v < 1.0 for v in deg.values())
     rates = claim_rates(rows)
@@ -283,16 +291,20 @@ def validate(scenarios=SCENARIOS, n_cities: int = 8, seeds=(0,), settings=None, 
 
 def validation_markdown(v: dict) -> str:
     L = ["# LST pilot: synthetic validation of the harness", "",
-         f"{v['n_cities']} cities per world, seeds {v['seeds']}; leave-one-campaign-out, run af.", "",
-         "| world | seed | B − A ΔMSE | 95% CI | B verdict | C − A ΔMSE | 95% CI | C verdict | C − C0 ΔMSE | 95% CI | "
-         "expected | as expected |",
-         "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+         f"{v['n_cities']} cities per world, seeds {v['seeds']}; leave-one-campaign-out, run af.  Skill gains ΔSS "
+         "(SS = 1 − MSE/MSE_N); Holm over the registered family with the absent windows untested (p = 1).", "",
+         "| world | seed | B − A ΔSS | 95% CI | Holm p | B verdict | C − A ΔSS | 95% CI | Holm p | C verdict | "
+         "C − C0 ΔSS | 95% CI | expected | as expected |",
+         "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
     def f(x):
-        return "—" if x is None else f"{x:+.4f}"
+        return "—" if x is None else f"{x:+.3f}"
 
     def ci(p):
-        return "—" if not p.get("ci95") else f"{p['ci95'][0]:+.4f} to {p['ci95'][1]:+.4f}"
+        return "—" if not p.get("ci95") else f"{p['ci95'][0]:+.3f} to {p['ci95'][1]:+.3f}"
+
+    def hp(p):
+        return "—" if p.get("p_holm") is None else f"{p['p_holm']:.3g}"
 
     for r in v["rows"]:
         b, c = r["B-A"], r["C-A"]
@@ -302,8 +314,8 @@ def validation_markdown(v: dict) -> str:
             extra = (f" (LST gain kept: B − A {sh['B-A']:.0%}, C − C0 {sh['C-C0']:.0%})" if None not in sh.values()
                      else "")
         c0 = r["C-C0"]
-        L.append(f"| {r['scenario']} | {r['seed']} | {f(b['mean_diff_mse'])} | {ci(b)} | {b['verdict']} | "
-                 f"{f(c['mean_diff_mse'])} | {ci(c)} | {c['verdict']} | {f(c0['mean_diff_mse'])} | {ci(c0)} | "
+        L.append(f"| {r['scenario']} | {r['seed']} | {f(b['mean_dss'])} | {ci(b)} | {hp(b)} | {b['verdict']} | "
+                 f"{f(c['mean_dss'])} | {ci(c)} | {hp(c)} | {c['verdict']} | {f(c0['mean_dss'])} | {ci(c0)} | "
                  f"{r['expected']}{extra} | "
                  f"{'yes' if r.get('as_expected', True) else '**no**'} |")
     rates = v.get("rates") or {}
