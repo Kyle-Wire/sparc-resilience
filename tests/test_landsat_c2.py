@@ -343,7 +343,180 @@ def test_a_fully_clear_scene_a_week_further_beats_a_partly_cloudy_nearer_one():
     res = L.campaign_lst((-118.3, 34.0, -118.2, 34.1), date(2019, 9, 15), search=lambda b, d0, d1: [near, far], **kw)
     assert [s["id"] for s in res["scenes"]] == ["c_minus12"] and "nearest scene ≥ 80% clear" in res["selection"]
     assert np.isfinite(res["lst_c"]).all()
-    # no scene 80% clear: the clearest one ≥ min_clear, not the nearest
-    a, b = add("a_plus2", "2019-09-17", 16), add("b_minus5", "2019-09-10", 12)             # 60% vs 70%
+    # no scene 80% clear: the clearest one ≥ min_clear when the nearer one is more than 10 points less clear
+    a, b = add("a_plus2", "2019-09-17", 18), add("b_minus5", "2019-09-10", 12)             # 55% vs 70%
     res2 = L.campaign_lst((-118.3, 34.0, -118.2, 34.1), date(2019, 9, 15), search=lambda b_, d0, d1: [a, b], **kw)
     assert [s["id"] for s in res2["scenes"]] == ["b_minus5"] and "clearest" in res2["selection"]
+
+
+# --------------------------------------------------------------------------- #
+# (e) QA review of the 31 built cities: cloud-edge buffer, one overpass across #
+#     rows, footprint apart from cloud, the choice below prefer_clear          #
+# --------------------------------------------------------------------------- #
+_CLEAR, _FILL, _CLOUD, _SHADOW = 1 << 6, 1, 1 << 3, 1 << 4
+
+
+def _st_dn(kelvin):
+    return np.round((np.asarray(kelvin, dtype=float) - 149.0) / 0.00341802).astype(np.uint16)
+
+
+def _world(n=40):
+    """A mocked STAC world on a 30 m UTM target of n × n cells: ``add`` registers a scene (QA and ST arrays, each
+    with its own transform: a row of a WRS path may cover only part of the grid)."""
+    data, scenes = {}, []
+    tgt = {"transform": from_origin(X0, Y1, 30.0, 30.0), "crs": UTM, "shape": (n, n)}
+
+    def add(sid, day, qa, st, row0=0, platform="landsat-8"):
+        T = from_origin(X0, Y1 - 30.0 * row0, 30.0, 30.0)               # the scene window starts at grid row row0
+        data[f"mem://{sid}/qa"], data[f"mem://{sid}/st"] = (np.asarray(qa, dtype=np.uint16), T), (_st_dn(st), T)
+        scenes.append({"id": sid, "datetime": f"{day}T17:44:34Z", "cloud_cover": 20.0, "platform": platform,
+                       "assets": {"qa_pixel": {"href": f"mem://{sid}/qa"}, "lwir11": {"href": f"mem://{sid}/st"}}})
+
+    def reader(href, bbox):
+        arr, T = data[href]
+        return arr, T, UTM
+
+    kw = dict(window_days=16, min_clear=0.5, target=tgt, study_mask=np.ones((n, n), bool), reader=reader,
+              search=lambda b, d0, d1: [dict(s) for s in scenes])
+    return add, kw
+
+
+def test_buffer_mask_is_euclidean_in_metres():
+    m = np.zeros((21, 21), bool)
+    m[10, 10] = True
+    b = L.buffer_mask(m, 150.0, (30.0, 30.0))
+    assert b[10, 5] and b[10, 15] and b[5, 10] and not b[10, 4] and not b[4, 10]       # 5 pixels along an axis
+    assert b[7, 6] and not b[6, 6]                                                     # (3, 4) px = 150 m; (4, 4) = 170
+    assert (L.buffer_mask(m, 0.0) == m).all() and not L.buffer_mask(np.zeros((3, 3), bool), 150.0).any()
+
+
+def test_lst_is_masked_150_m_around_cloud_and_shadow_but_not_around_fill():
+    """Charleston / Virginia Beach: clear LST within ~150 m of the QA mask is cool-biased.  The cloud and shadow bits
+    are buffered 150 m (5 pixels); fill (outside the footprint) is not, so a scene edge keeps its pixels, and the
+    clear fraction uses the unbuffered mask."""
+    n = 40
+    add, kw = _world(n)
+    qa = np.full((n, n), _CLEAR)
+    qa[:, :5] = _FILL                                     # west edge outside the footprint
+    qa[18:22, 18:22] = _CLOUD                             # a 120 m cloud
+    qa[35:, 35:] = _SHADOW                                # a shadow in the south-east corner
+    add("LC08_L2SP_015033_20210716_02_T1", "2021-07-16", qa, np.full((n, n), 300.0))
+    res = L.campaign_lst((-71.5, 41.8, -71.4, 41.9), date(2021, 7, 15), **kw)
+    lst = res["lst_k"]
+    assert res["mask_buffer_m"] == 150 and set(res["mask_buffer_bits"]) == set(L.CLOUD_BITS)
+    sc = res["scenes"][0]
+    assert sc["clear_fraction"] == pytest.approx(1 - (5 * n + 16 + 25) / n ** 2)           # unbuffered
+    assert sc["footprint_fraction"] == pytest.approx(1 - 5 / n)
+    assert np.isnan(lst[:, :5]).all() and np.isfinite(lst[:13, 5]).all()                 # fill: no buffer
+    assert np.isnan(lst[20, 13:27]).all() and np.isfinite(lst[20, 12]) and np.isfinite(lst[20, 27])
+    assert np.isnan(lst[13:27, 20]).all() and np.isfinite(lst[12, 20]) and np.isfinite(lst[27, 20])
+    assert np.isfinite(lst[14, 14])                        # (4, 4) pixels from the cloud's corner: 170 m
+    assert np.isnan(lst[30:, 35:]).all() and np.isnan(lst[35:, 30:]).all()
+    assert np.isfinite(lst[29, 35]) and np.isfinite(lst[35, 29]) and np.isfinite(lst[30, 30])   # (5, 5) px: 212 m
+    assert sc["clear_fraction_lst"] == pytest.approx(np.mean(np.isfinite(lst)))
+    assert sc["clear_fraction_lst"] < sc["clear_fraction"]
+    off = L.campaign_lst((-71.5, 41.8, -71.4, 41.9), date(2021, 7, 15), mask_buffer_m=0.0, **kw)
+    assert off["mask_buffer_m"] == 0 and off["scenes"][0]["clear_fraction_lst"] == pytest.approx(sc["clear_fraction"])
+
+
+def test_rows_of_one_overpass_are_mosaicked_before_the_scene_is_chosen():
+    """Albuquerque 2021-07-05: row 35 ends inside the grid and row 36 of the same overpass was never inspected;
+    Atlanta 2021-08-29: rows 36 and 37 are 0.60 and 0.63 clear each.  Rows of one path and date are QA-masked on
+    their own, mosaicked (overlaps: any clear value), and the mosaic is judged and kept as one scene."""
+    n = 40
+    add, kw = _world(n)
+    r35, r36 = "LC08_L2SP_034035_20210705_02_T1", "LC08_L2SP_034036_20210705_02_T1"
+    qa_n = np.full((25, n), _CLEAR)                       # row 35: grid rows 0-24
+    qa_n[18:21] = _CLOUD                                  # cloudy in the overlap, where row 36 is clear
+    qa_s = np.full((24, n), _CLEAR)                       # row 36: grid rows 16-39
+    add(r35, "2021-07-05", qa_n, np.full((25, n), 300.0))
+    add(r36, "2021-07-05", qa_s, np.full((24, n), 301.0), row0=16)
+    qa_f = np.full((n, n), _CLEAR)
+    qa_f[:6] = _CLOUD                                     # another overpass, +9 d, 85% clear
+    add("LC08_L2SP_033036_20210718_02_T1", "2021-07-18", qa_f, np.full((n, n), 305.0))
+    res = L.campaign_lst((-106.8, 35.0, -106.5, 35.2), date(2021, 7, 9), **kw)
+    sc, = res["scenes"]
+    assert sc["ids"] == [r35, r36] and sc["id"] == f"{r35}+{r36}" and sc["date"] == "2021-07-05"
+    assert sc["wrs_path"] == 34 and sc["wrs_rows"] == [35, 36] and sc["offset_days"] == -4
+    assert sc["clear_fraction"] == 1.0 and sc["footprint_fraction"] == 1.0 and sc["clear_fraction_lst"] == 1.0
+    assert "nearest scene ≥ 80% clear" in res["selection"]
+    cand = {c["id"]: c for c in res["candidates"]}
+    assert cand[r35]["clear_fraction"] == pytest.approx((25 - 3) / n) and cand[r35]["footprint_fraction"] == 0.625
+    assert cand[r36]["clear_fraction"] == pytest.approx(0.6) and cand[r36]["footprint_fraction"] == 0.6
+    assert cand[r35]["selected"] and cand[r36]["selected"] and cand[r35]["overpass"] == cand[r36]["overpass"]
+    assert cand["LC08_L2SP_033036_20210718_02_T1"]["inspected"] is False
+    assert [o["ids"] for o in res["overpasses"]] == [[r35, r36], ["LC08_L2SP_033036_20210718_02_T1"]]
+    lst = res["lst_k"]
+    assert np.allclose(lst[:18], 300.0, atol=0.004) and np.allclose(lst[18:21], 301.0, atol=0.004)
+    assert np.allclose(lst[21:25], 300.0, atol=0.004) and np.allclose(lst[25:], 301.0, atol=0.004)
+    # judged one row at a time, neither row would be 80% clear and the +9 d scene would be taken
+    alone = L.campaign_lst((-106.8, 35.0, -106.5, 35.2), date(2021, 7, 9),
+                           **{**kw, "search": lambda b, d0, d1: [dict(s) for s in kw["search"](b, d0, d1)
+                                                                 if s["id"] != r36]})
+    assert [s["id"] for s in alone["scenes"]] == ["LC08_L2SP_033036_20210718_02_T1"]
+
+
+def test_footprint_is_reported_apart_from_cloud():
+    """Seattle 2020-07-29: the east of the grid lies outside path 047 (row 26 holds none of the study area); a scene
+    that misses part of the city must not read as a cloudy one."""
+    n = 40
+    add, kw = _world(n)
+    r26, r27 = "LC08_L2SP_047026_20200729_02_T1", "LC08_L2SP_047027_20200729_02_T1"
+    add(r26, "2020-07-29", np.full((n, n), _CLEAR), np.full((n, n), 300.0), row0=-5000)   # far north of the grid
+    qa27 = np.full((n, n), _CLEAR)
+    qa27[:, 24:] = _FILL                                  # the east 40% outside the footprint
+    add(r27, "2020-07-29", qa27, np.full((n, n), 300.0))
+    qa46 = np.full((n, n), _CLEAR)
+    qa46[:16] = _CLOUD                                    # path 046: whole grid in the footprint, 40% cloudy
+    add("LC08_L2SP_046027_20200807_02_T1", "2020-08-07", qa46, np.full((n, n), 302.0))
+    reads = []
+    res = L.campaign_lst((-122.4, 47.4, -121.9, 47.7), date(2020, 7, 27),
+                         **{**kw, "reader": lambda h, b: reads.append(h) or kw["reader"](h, b)})
+    cand = {c["id"]: c for c in res["candidates"]}
+    assert cand[r26]["footprint_fraction"] == 0.0 and cand[r26]["clear_fraction"] == 0.0
+    assert f"mem://{r26}/st" not in reads and not cand[r26]["selected"]      # no clear pixel: thermal not read
+    assert res["scenes"][0]["ids"] == [r27] and cand[r27]["selected"]
+    assert cand[r27]["footprint_fraction"] == pytest.approx(0.6) and cand[r27]["clear_fraction"] == pytest.approx(0.6)
+    p46 = cand["LC08_L2SP_046027_20200807_02_T1"]
+    assert p46["footprint_fraction"] == 1.0 and p46["clear_fraction"] == pytest.approx(0.6)
+    ops = {o["overpass"]: o for o in res["overpasses"]}
+    assert ops["landsat-8 047 2020-07-29"]["footprint_fraction"] == pytest.approx(0.6)
+    assert ops["landsat-8 047 2020-07-29"]["clear_fraction"] == pytest.approx(0.6)
+    assert ops["landsat-8 046 2020-08-07"]["footprint_fraction"] == 1.0
+    assert [s["overpass"] for s in res["scenes"]] == ["landsat-8 047 2020-07-29"]          # equally clear: nearer
+    assert np.isfinite(res["lst_k"][:, 23]).all()         # the footprint's edge is not buffered
+
+
+def test_below_prefer_clear_the_nearest_within_ten_points_of_the_clearest_is_taken():
+    """Arlington 2021: no scene ≥ 80% clear, and the clearest alone kept 2021-06-30 (−15 d, 0.72) over 2021-07-16
+    (+1 d, 0.64).  Below prefer_clear the nearest scene within 0.10 of the clearest (and ≥ min_clear) is kept."""
+    n = 50
+    add, kw = _world(n)
+
+    def qa(cloudy_rows):
+        q = np.full((n, n), _CLEAR)
+        q[:cloudy_rows] = _CLOUD
+        return q
+
+    add("LC08_L2SP_015033_20210716_02_T1", "2021-07-16", qa(18), np.full((n, n), 300.0))   # +1 d, 0.64
+    add("LC08_L2SP_015033_20210630_02_T1", "2021-06-30", qa(14), np.full((n, n), 300.0))   # −15 d, 0.72
+    res = L.campaign_lst((-77.2, 38.8, -77.0, 38.95), date(2021, 7, 15), **kw)
+    assert [s["date"] for s in res["scenes"]] == ["2021-07-16"]
+    assert res["scenes"][0]["clear_fraction"] == pytest.approx(0.64) and res["clear_tolerance"] == 0.10
+    assert "within 10 points of the clearest (72%)" in res["selection"]
+    # more than 0.10 below the clearest: the clearest, as before
+    strict = L.campaign_lst((-77.2, 38.8, -77.0, 38.95), date(2021, 7, 15), clear_tolerance=0.05, **kw)
+    assert [s["date"] for s in strict["scenes"]] == ["2021-06-30"]
+    # a nearer scene within 0.10 of the clearest but below min_clear is never taken
+    add2, kw2 = _world(n)
+    add2("LC08_L2SP_015033_20210716_02_T1", "2021-07-16", qa(26), np.full((n, n), 300.0))  # +1 d, 0.48
+    add2("LC08_L2SP_015033_20210630_02_T1", "2021-06-30", qa(22), np.full((n, n), 300.0))  # −15 d, 0.56
+    res2 = L.campaign_lst((-77.2, 38.8, -77.0, 38.95), date(2021, 7, 15), **kw2)
+    assert [s["date"] for s in res2["scenes"]] == ["2021-06-30"]
+
+
+def test_wrs_path_row_from_the_product_id_or_the_scene():
+    assert L.wrs_path_row({"id": "LC08_L2SP_034035_20210705_02_T1"}) == (34, 35)
+    assert L.wrs_path_row({"id": "LC09_L2SP_019037_20220824_20220826_02_T1"}) == (19, 37)
+    assert L.wrs_path_row({"id": "x", "wrs_path": "47", "wrs_row": "27"}) == (47, 27)
+    assert L.wrs_path_row({"id": "near_cloudy"}) is None

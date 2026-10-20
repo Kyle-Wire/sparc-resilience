@@ -15,7 +15,8 @@ Temporal modes
   campaign     — :func:`campaign_lst`: the clear scene(s) nearest a campaign
                  date within ±N days, with each scene's date, its offset in
                  days from the campaign and its clear fraction over the
-                 study area
+                 study area (the rows of one overpass mosaicked; LST masked
+                 150 m around cloud)
 
 Spectral indices computed
 -------------------------
@@ -34,7 +35,9 @@ Method (USGS Landsat Collection 2 Level-2 Science Product Guide)
   7 water; 8–15 are two-bit confidences.  Pixels with the fill, dilated
   cloud, cirrus, cloud or cloud-shadow bit set are masked
   (:data:`QA_MASKED`; the dilated-cloud bit is the product's buffer around
-  detected clouds, kept as part of "cloud").
+  detected clouds, kept as part of "cloud").  Campaign LST is also masked
+  within 150 m of the cloud bits (:data:`MASK_BUFFER_M`; not of fill): clear
+  LST next to the mask is cool-biased.
 * **Geometry.**  Each band window keeps its own affine transform and CRS
   (Landsat COGs are in the scene's UTM zone; scenes of different WRS-2
   paths/rows do not share a pixel grid).  Every scene is reprojected onto
@@ -106,6 +109,18 @@ QA_BITS = {"fill": 0, "dilated_cloud": 1, "cirrus": 2, "cloud": 3, "cloud_shadow
            "clear": 6, "water": 7}
 #: Bits whose pixels are masked by default.
 QA_MASKED = ("fill", "dilated_cloud", "cirrus", "cloud", "cloud_shadow")
+#: Masked bits around which :func:`campaign_lst` also masks LST (:data:`MASK_BUFFER_M`): every one but fill, so the
+#: edge of a scene's footprint is not eaten.
+CLOUD_BITS = ("dilated_cloud", "cirrus", "cloud", "cloud_shadow")
+#: Distance (m) from a cloud-masked pixel within which campaign LST is masked too: 5 Landsat 30 m pixels.  Clear LST
+#: next to the QA mask is cool-biased (TIRS's 100 m pixels and cloud edges just outside the mask): the land-cover
+#: residual of LST, within 2 km blocks, is −0.75 to −0.95 °C at 0–60 m from masked pixels, −0.32 at 60–120 m and about
+#: 0 at 120–240 m (Charleston 2021; Virginia Beach −0.70 to −0.87 at 60–120 m, −0.16 to −0.27 at 120–240 m), while
+#: dTa shows no such cooling.  150 m keeps 80–89% of their LST cells (300 m: 62–76%).
+MASK_BUFFER_M = 150.0
+#: When no scene is ``prefer_clear``, scenes within this much clear fraction of the clearest count as clear as it and
+#: the nearest of them is taken (:func:`campaign_lst`).
+CLEAR_TOLERANCE = 0.10
 #: Platforms used by :func:`campaign_lst` (Landsat 7's scan-line corrector failed in 2003).
 LST_PLATFORMS = ("landsat-8", "landsat-9")
 
@@ -181,6 +196,34 @@ def qa_mask(qa: np.ndarray, bits=QA_MASKED) -> np.ndarray:
     for b in bits:
         flag |= 1 << QA_BITS[b]
     return (q & flag) != 0
+
+
+def buffer_mask(mask: np.ndarray, distance_m: float, pixel_m: tuple[float, float] = (30.0, 30.0)) -> np.ndarray:
+    """True within ``distance_m`` of a True pixel of ``mask`` (Euclidean, centre to centre; ``pixel_m`` = the
+    pixel's (height, width) in m).  At 30 m, 150 m reaches 5 pixels along a row or column."""
+    from scipy.ndimage import binary_dilation
+
+    m = np.asarray(mask, dtype=bool)
+    if distance_m <= 0 or not m.any():
+        return m.copy()
+    dy, dx = (float(abs(v)) for v in pixel_m)
+    ry, rx = int(distance_m // dy), int(distance_m // dx)
+    yy, xx = np.mgrid[-ry:ry + 1, -rx:rx + 1]
+    disk = (yy * dy) ** 2 + (xx * dx) ** 2 <= distance_m ** 2 * (1.0 + 1e-9)
+    return binary_dilation(m, structure=disk)
+
+
+_WRS_ID = re.compile(r"^L[A-Z]\d{2}_[A-Z0-9]{4}_(\d{3})(\d{3})_\d{8}")
+
+
+def wrs_path_row(scene: dict) -> tuple[int, int] | None:
+    """WRS-2 (path, row) of a scene: its ``wrs_path`` / ``wrs_row`` when given, else read from the product id
+    (``LC08_L2SP_PPPRRR_YYYYMMDD_…``, as on the Planetary Computer and Earth-Search); None when neither has them."""
+    p, r = scene.get("wrs_path"), scene.get("wrs_row")
+    if p is not None and r is not None:
+        return int(p), int(r)
+    m = _WRS_ID.match(str(scene.get("id") or ""))
+    return (int(m.group(1)), int(m.group(2))) if m else None
 
 
 def st_to_kelvin(dn: np.ndarray) -> np.ndarray:
@@ -598,6 +641,8 @@ def campaign_lst(
     min_clear: float = 0.5,
     n_scenes: int = 1,
     prefer_clear: float = 0.8,
+    clear_tolerance: float = CLEAR_TOLERANCE,
+    mask_buffer_m: float = MASK_BUFFER_M,
     platforms: tuple[str, ...] = LST_PLATFORMS,
     cloud_cover_max: float = 100.0,
     target: Optional[dict] = None,
@@ -607,20 +652,39 @@ def campaign_lst(
     reader: Optional[Reader] = None,
     cache_dir: Optional[Path] = None,
 ) -> dict:
-    """LST of the clear Landsat scene(s) nearest a campaign date.
+    """LST of the clear Landsat overpass(es) nearest a campaign date.
 
-    Method.  Scenes of ``platforms`` acquired within ``campaign_date ± window_days`` are ordered by their
-    distance in days from the campaign (ties broken by scene id).  For each, in that order, QA_PIXEL is read over the study area and
-    reprojected onto ``target`` (nearest), and its **clear fraction** is the share of study-area cells
-    with none of ``qa_bits`` set and inside the scene's footprint.  With one scene (default) the kept scene
-    is the **nearest with a clear fraction ≥ ``prefer_clear``** (0.8), else, when none is that clear, the
-    **clearest** with ≥ ``min_clear`` (ties: the nearer): the nearest-date rule kept a 60%-clear scene over a
-    fully clear one 8 days further (LA 2019: 38% of the driven cells lost LST), and a scene a week further
-    is a smaller error than a third of the city missing.  With ``n_scenes`` > 1 the first ``n_scenes``
-    scenes with ≥ ``min_clear`` in date order are kept and their median fills each other's gaps.  The kept
-    scenes' ST_B10 is scaled to kelvin, masked with QA and reprojected (bilinear), and with more than one
-    scene the pixel-wise median of the masked scenes is the LST; ``selection`` states the rule that chose.  Scene-level ``eo:cloud_cover`` describes the whole 185 km scene, so it only pre-filters
-    (``cloud_cover_max``, default no filter); the study-area clear fraction decides.
+    Method.  Scenes of ``platforms`` acquired within ``campaign_date ± window_days`` are grouped into
+    **overpasses**: the rows of one WRS-2 path on one date (:func:`wrs_path_row`), acquired seconds apart.  A city
+    can straddle two rows, and judging each row alone loses part of it: Albuquerque 2021-07-05's row 35 ends inside
+    the grid (8.7% of the driven cells without LST, all in the south) and row 36 of the same overpass was never
+    inspected; Atlanta 2021-08-29's rows 36 and 37 are 0.60 and 0.63 clear each.  Overpasses are ordered by their
+    distance in days from the campaign (ties broken by scene id).  For each, in that order, every row's QA_PIXEL is
+    read over the study area and reprojected onto ``target`` (nearest); each row is masked on its own (``qa_bits``)
+    and the overpass's mosaic is clear wherever any row is.  Its **clear fraction** is the share of study-area
+    cells clear in the mosaic, and its **footprint fraction** the share inside any row's footprint (QA fill not
+    set), so a scene that misses part of the city is not mistaken for a cloudy one (Seattle 2020-07-29: the east of
+    the King County grid lies outside path 047; row 26 holds none of the study area and row 27 is 0.76 clear).  A
+    row with no clear pixel on the grid (Seattle's row 26) adds no LST, so its thermal band is not read.
+
+    Choice.  With one scene (default) the kept overpass is the **nearest with a clear fraction ≥ ``prefer_clear``**
+    (0.8): the nearest-date rule kept a 60%-clear scene over a fully clear one 8 days further (LA 2019: 38% of the
+    driven cells lost LST), and a scene a week further is a smaller error than a third of the city missing.  When
+    none is that clear it is the **nearest whose clear fraction is within ``clear_tolerance`` (0.10) of the
+    clearest's** and ≥ ``min_clear`` (ties: the clearer): the clearest alone kept Arlington's 2021-06-30 (−15 d,
+    0.72 clear) over 2021-07-16 (+1 d, 0.64), two more weeks of surface change for 8 points of cover.  With
+    ``n_scenes`` > 1 the first ``n_scenes`` overpasses with ≥ ``min_clear`` in date order are kept and their median
+    fills each other's gaps.  ``selection`` states the rule that chose.  Scene-level ``eo:cloud_cover`` describes
+    the whole 185 km scene, so it only pre-filters (``cloud_cover_max``, default no filter); the study-area clear
+    fraction decides.
+
+    LST.  Each kept row's ST_B10 is scaled to kelvin, masked with its own QA (on its own grid and on ``target``) and
+    reprojected (bilinear); where rows overlap, any clear value is taken.  LST is also masked within
+    ``mask_buffer_m`` (:data:`MASK_BUFFER_M`, 150 m) of the mosaic's cloud (the :data:`CLOUD_BITS` among
+    ``qa_bits``, where no row is clear): clear LST next to the mask is cool-biased (Charleston, Virginia Beach).
+    Fill is not buffered, so the edges of a footprint keep their pixels, and the clear fraction that chose the
+    scene uses the unbuffered mask; a kept overpass's ``clear_fraction_lst`` is the share of study-area cells with
+    LST after the buffer.  With more than one overpass the pixel-wise median of the masked overpasses is the LST.
 
     ``study_mask`` (bool, ``target`` shape) defines the study area; default the target cells inside
     ``bbox``.  ``search`` ``(bbox, start, end) → scenes`` and ``reader`` ``(href, bbox) → (array,
@@ -630,18 +694,25 @@ def campaign_lst(
 
     **Failures are not "no clear scene".**  A scene whose read raises is recorded with ``error`` and
     ``error_kind`` (:func:`io_error_kind`: ``"blocked"``, ``"io"``, or ``"data"`` for anything else), and
-    ``s3://`` hrefs are refused (``"unreadable"``: a requester-pays bucket needs credentials).  ``status`` says what
-    happened: ``"ok"`` (a scene kept), ``"no_scene"`` (none in the window), ``"no_clear_scene"`` (every
-    inspected scene read and was too cloudy) or ``"io_error"`` (none kept and at least one inspected scene
-    failed on I/O, so whether a clear scene exists is unknown); ``io_errors`` lists those failures with the
-    host of each.  Callers must not treat ``"io_error"`` as a finished result.
+    ``s3://`` hrefs are refused (``"unreadable"``: a requester-pays bucket needs credentials).  A row whose QA read
+    fails is left out of its overpass's mosaic; a chosen overpass whose thermal read fails for any row gives way to
+    the next.  ``status`` says what happened: ``"ok"`` (a scene kept), ``"no_scene"`` (none in the window),
+    ``"no_clear_scene"`` (every inspected scene read and was too cloudy) or ``"io_error"`` (none kept and at least
+    one inspected scene failed on I/O, so whether a clear scene exists is unknown); ``io_errors`` lists those
+    failures with the host of each.  Callers must not treat ``"io_error"`` as a finished result.
 
-    Returns ``{"lst_k", "lst_c", "georef", "scenes", "candidates", "campaign_date", "window_days",
-    "min_clear", "qa_masked"}``: ``scenes`` are the kept scenes and ``candidates`` every scene inspected,
-    each with ``id``, ``date``, ``datetime``, ``platform``, ``offset_days`` (scene − campaign), ``cloud_cover``
-    (scene-level %), ``clear_fraction`` (study area; None when the scene was not inspected because enough
-    nearer scenes were kept), ``inspected`` and ``selected``.  ``lst_k`` / ``lst_c`` are None when no scene
-    is clear enough.
+    Returns ``{"lst_k", "lst_c", "georef", "scenes", "candidates", "overpasses", "campaign_date", "window_days",
+    "min_clear", "prefer_clear", "clear_tolerance", "qa_masked", "mask_buffer_m", "mask_buffer_bits", ...}``.
+    ``candidates`` are every scene (row) in the window, each with ``id``, ``date``, ``datetime``, ``platform``,
+    ``wrs_path``, ``wrs_row``, ``overpass`` (its overpass's label), ``offset_days`` (scene − campaign),
+    ``cloud_cover`` (scene-level %), ``clear_fraction`` and ``footprint_fraction`` (study area, this row alone; None
+    when the scene was not inspected because enough nearer overpasses were kept), ``inspected`` and ``selected``.
+    ``overpasses`` hold the same per overpass, with the mosaic's ``clear_fraction`` and ``footprint_fraction``,
+    ``ids`` (its rows; once inspected, those whose QA read and that hold a clear pixel on the grid: the rows the
+    mosaic is made of), ``id`` (those ids joined by "+": the scene id when there is one row), ``wrs_rows`` and
+    ``cloud_cover`` (the largest of its rows').  ``scenes`` are the kept overpasses (with ``clear_fraction_lst``), so
+    a scene's ``id``, ``date`` and ``clear_fraction`` read as before.
+    ``lst_k`` / ``lst_c`` are None when no overpass is clear enough.
     """
     from datetime import timedelta
 
@@ -662,79 +733,133 @@ def campaign_lst(
     for s in scenes:
         s["_date"] = _parse_date(s["datetime"])
         s["_offset"] = (s["_date"] - campaign_date).days
+        s["_wrs"] = wrs_path_row(s)
     scenes = [s for s in scenes if abs(s["_offset"]) <= window_days]
     scenes.sort(key=lambda s: (abs(s["_offset"]), str(s.get("id"))))
+    groups: dict = {}                                # an overpass: the rows of one path on one date
+    for s in scenes:
+        key = (str(s.get("platform") or "").lower(), s["_wrs"][0], s["_date"]) if s["_wrs"] else ("id", s.get("id"))
+        groups.setdefault(key, []).append(s)
+    passes = list(groups.values())                   # nearest first (the scenes' order)
+    T = target["transform"]
+    pixel_m = (math.hypot(T.b, T.e), math.hypot(T.a, T.d))
+    buffer_bits = tuple(b for b in CLOUD_BITS if b in qa_bits)
 
-    candidates, kept, stack, ok = [], [], [], []
+    candidates, overpasses, kept, stack, ok = [], [], [], [], []
     single = int(n_scenes) == 1
 
     def enough() -> bool:
         if single:
-            return any(c["clear_fraction"] >= prefer_clear for c, _ in ok)
+            return any(op["clear_fraction"] >= prefer_clear for op, _ in ok)
         return len(ok) >= int(n_scenes)
 
-    for s in scenes:                                 # QA of each scene, nearest first, until the rule is met
-        rec = {"id": s.get("id"), "date": s["_date"].isoformat(), "datetime": s.get("datetime"),
-               "platform": s.get("platform"), "offset_days": int(s["_offset"]),
-               "cloud_cover": s.get("cloud_cover"), "clear_fraction": None, "inspected": False, "selected": False}
-        candidates.append(rec)
+    def failed(rec: dict, exc: Exception, href) -> None:
+        rec["error"] = str(exc).splitlines()[0][:200] if str(exc) else repr(exc)[:200]
+        rec["error_kind"] = io_error_kind(exc) or "data"
+        rec["host"] = href_host(href)
+        log.warning("landsat: skipping %s (%s: %s)", rec["id"], rec["error_kind"], rec["error"])
+
+    for g in passes:                                 # QA of each overpass, nearest first, until the rule is met
+        g.sort(key=lambda s: ((s["_wrs"] or (0, 0))[1], str(s.get("id"))))
+        s0 = g[0]
+        label = (f"{s0.get('platform')} {s0['_wrs'][0]:03d} {s0['_date'].isoformat()}" if s0["_wrs"]
+                 else str(s0.get("id")))
+        recs = [{"id": s.get("id"), "date": s["_date"].isoformat(), "datetime": s.get("datetime"),
+                 "platform": s.get("platform"), "wrs_path": s["_wrs"][0] if s["_wrs"] else None,
+                 "wrs_row": s["_wrs"][1] if s["_wrs"] else None, "overpass": label, "offset_days": int(s["_offset"]),
+                 "cloud_cover": s.get("cloud_cover"), "clear_fraction": None, "footprint_fraction": None,
+                 "inspected": False, "selected": False} for s in g]
+        candidates.extend(recs)
+        cc = [r["cloud_cover"] for r in recs if r["cloud_cover"] is not None]
+        op = {"id": "+".join(str(r["id"]) for r in recs), "ids": [r["id"] for r in recs], "overpass": label,
+              "date": recs[0]["date"], "datetime": recs[0]["datetime"], "platform": recs[0]["platform"],
+              "wrs_path": recs[0]["wrs_path"], "wrs_rows": [r["wrs_row"] for r in recs],
+              "offset_days": recs[0]["offset_days"], "cloud_cover": max(cc) if cc else None, "clear_fraction": None,
+              "footprint_fraction": None, "inspected": False, "selected": False}
+        overpasses.append(op)
         if enough():
             continue
-        rec["inspected"] = True
-        qa_href = _asset_href(s, "qa")
-        st_href = _asset_href(s, "thermal")
-        if not qa_href or not st_href:
-            rec["error"], rec["error_kind"] = "scene has no qa_pixel or lwir11 asset", "data"
-            continue
-        if any(str(h).lower().startswith("s3://") for h in (qa_href, st_href)):
-            rec["error"] = "s3:// href (requester-pays bucket, e.g. the Element84 fallback): not readable here"
-            rec["error_kind"], rec["host"] = "unreadable", str(qa_href).split("/")[2] if "//" in str(qa_href) else None
-            continue
-        try:
-            qa_arr, qa_tr, qa_crs = _cached_read(s, "qa_pixel", qa_href, bbox, reader, cache_dir)
-            qa_t = reproject_array(np.asarray(qa_arr).astype(np.uint16), qa_tr, qa_crs, target, "nearest",
-                                   nodata=1)
-            bad = qa_mask(qa_t, qa_bits)
+        op["inspected"] = True
+        rows = []
+        for s, rec in zip(g, recs):                  # each row QA-masked on its own
+            rec["inspected"] = True
+            qa_href = _asset_href(s, "qa")
+            st_href = _asset_href(s, "thermal")
+            if not qa_href or not st_href:
+                rec["error"], rec["error_kind"] = "scene has no qa_pixel or lwir11 asset", "data"
+                continue
+            if any(str(h).lower().startswith("s3://") for h in (qa_href, st_href)):
+                rec["error"] = "s3:// href (requester-pays bucket, e.g. the Element84 fallback): not readable here"
+                rec["error_kind"] = "unreadable"
+                rec["host"] = str(qa_href).split("/")[2] if "//" in str(qa_href) else None
+                continue
+            try:
+                qa_arr, qa_tr, qa_crs = _cached_read(s, "qa_pixel", qa_href, bbox, reader, cache_dir)
+                qa_t = reproject_array(np.asarray(qa_arr).astype(np.uint16), qa_tr, qa_crs, target, "nearest",
+                                       nodata=1)
+                bad = qa_mask(qa_t, qa_bits)
+            except Exception as exc:                 # noqa: BLE001 - a broken scene is recorded, not fatal
+                failed(rec, exc, qa_href)
+                continue
+            inside = ~qa_mask(qa_t, ("fill",))
             rec["clear_fraction"] = float(np.mean(~bad[study_mask]))
-        except Exception as exc:                     # noqa: BLE001 - a broken scene is recorded, not fatal
-            rec["error"] = str(exc).splitlines()[0][:200] if str(exc) else repr(exc)[:200]
-            rec["error_kind"] = io_error_kind(exc) or "data"
-            rec["host"] = href_host(qa_href)
-            log.warning("landsat: skipping %s (%s: %s)", s.get("id"), rec["error_kind"], rec["error"])
+            rec["footprint_fraction"] = float(np.mean(inside[study_mask]))
+            rows.append({"scene": s, "rec": rec, "st_href": st_href, "qa": (qa_arr, qa_tr, qa_crs), "bad": bad,
+                         "inside": inside, "cloud": qa_mask(qa_t, buffer_bits)})
+        if not rows:
             continue
-        if rec["clear_fraction"] >= min_clear:
-            ok.append((rec, {"scene": s, "st_href": st_href, "qa": (qa_arr, qa_tr, qa_crs), "bad": bad}))
+        clear = np.logical_or.reduce([~r["bad"] for r in rows])          # overlaps: clear in any row
+        inside = np.logical_or.reduce([r.pop("inside") for r in rows])
+        cloud = np.logical_or.reduce([r.pop("cloud") for r in rows]) & ~clear   # the mosaic's cloud, to buffer
+        used = [r for r in rows if not r["bad"].all()] or rows             # a row with no clear pixel adds nothing
+        op["ids"] = [r["rec"]["id"] for r in used]
+        op["id"] = "+".join(str(i) for i in op["ids"])
+        op["wrs_rows"] = [r["rec"]["wrs_row"] for r in used]
+        op["clear_fraction"] = float(np.mean(clear[study_mask]))
+        op["footprint_fraction"] = float(np.mean(inside[study_mask]))
+        if op["clear_fraction"] >= min_clear:
+            ok.append((op, {"rows": used, "clear": clear, "cloud": cloud}))
     if single:
         good = [x for x in ok if x[0]["clear_fraction"] >= prefer_clear]
-        first = good[0] if good else None
-        order = ([first] if first else []) + sorted([x for x in ok if x is not first],
-                                                    key=lambda x: (-x[0]["clear_fraction"], abs(x[0]["offset_days"])))
-        selection = (f"the nearest scene ≥ {prefer_clear:.0%} clear" if good else
-                     f"no scene ≥ {prefer_clear:.0%} clear: the clearest ≥ {min_clear:.0%}")
+        if good:
+            first = [good[0]]
+            selection = f"the nearest scene ≥ {prefer_clear:.0%} clear"
+        else:                                        # the nearest of those about as clear as the clearest
+            best = max((x[0]["clear_fraction"] for x in ok), default=1.0)
+            first = sorted([x for x in ok if x[0]["clear_fraction"] >= best - clear_tolerance - 1e-9],
+                           key=lambda x: (abs(x[0]["offset_days"]), -x[0]["clear_fraction"]))
+            selection = (f"no scene ≥ {prefer_clear:.0%} clear: the nearest ≥ {min_clear:.0%} clear within "
+                         f"{100 * clear_tolerance:.0f} points of the clearest ({best:.0%})")
+        taken = {id(x) for x in first}
+        order = first + sorted([x for x in ok if id(x) not in taken],
+                               key=lambda x: (-x[0]["clear_fraction"], abs(x[0]["offset_days"])))
     else:
         order = ok
         selection = f"the {int(n_scenes)} nearest scenes ≥ {min_clear:.0%} clear (median)"
-    for rec, d in order:                             # thermal of the chosen scene(s); the next if one fails
+    for op, d in order:                              # thermal of the chosen overpass(es); the next if one fails
         if len(kept) >= int(n_scenes):
             break
-        s, st_href = d["scene"], d["st_href"]
-        qa_arr, qa_tr, qa_crs = d["qa"]
+        k_t, r = None, None
         try:
-            st_arr, st_tr, st_crs = _cached_read(s, "lwir11", st_href, bbox, reader, cache_dir)
-            k_native = st_to_kelvin(st_arr)
-            qa_native = _qa_on(st_arr, st_tr, st_crs, qa_arr, qa_tr, qa_crs)
-            k_native[qa_mask(qa_native, qa_bits)] = np.nan
-            k_t = reproject_array(k_native, st_tr, st_crs, target, "bilinear")
-            k_t[d["bad"]] = np.nan
+            for r in d["rows"]:
+                qa_arr, qa_tr, qa_crs = r["qa"]
+                st_arr, st_tr, st_crs = _cached_read(r["scene"], "lwir11", r["st_href"], bbox, reader, cache_dir)
+                k_native = st_to_kelvin(st_arr)
+                qa_native = _qa_on(st_arr, st_tr, st_crs, qa_arr, qa_tr, qa_crs)
+                k_native[qa_mask(qa_native, qa_bits)] = np.nan
+                k_row = reproject_array(k_native, st_tr, st_crs, target, "bilinear")
+                k_row[r["bad"]] = np.nan
+                k_t = k_row if k_t is None else np.where(np.isfinite(k_t), k_t, k_row)
         except Exception as exc:                     # noqa: BLE001 - a broken scene is recorded, not fatal
-            rec["error"] = str(exc).splitlines()[0][:200] if str(exc) else repr(exc)[:200]
-            rec["error_kind"] = io_error_kind(exc) or "data"
-            rec["host"] = href_host(st_href)
-            log.warning("landsat: skipping %s (%s: %s)", s.get("id"), rec["error_kind"], rec["error"])
+            failed(r["rec"], exc, r["st_href"])
+            op["error"] = f"{r['rec']['id']}: {r['rec']['error']}"
             continue
-        rec["selected"] = True
-        rec["clear_fraction_lst"] = float(np.mean(np.isfinite(k_t[study_mask])))
-        kept.append(rec)
+        k_t[buffer_mask(d["cloud"], mask_buffer_m, pixel_m)] = np.nan
+        op["selected"] = True
+        for r in d["rows"]:
+            r["rec"]["selected"] = True
+        op["clear_fraction_lst"] = float(np.mean(np.isfinite(k_t[study_mask])))
+        kept.append(op)
         stack.append(k_t)
     lst_k = None
     if stack:
@@ -751,10 +876,12 @@ def campaign_lst(
     else:
         status = "no_clear_scene"
     return {"lst_k": lst_k, "lst_c": None if lst_k is None else lst_k - KELVIN, "georef": target,
-            "scenes": kept, "candidates": candidates, "campaign_date": campaign_date.isoformat(),
-            "window_days": int(window_days), "min_clear": float(min_clear), "qa_masked": list(qa_bits),
+            "scenes": kept, "candidates": candidates, "overpasses": overpasses,
+            "campaign_date": campaign_date.isoformat(), "window_days": int(window_days), "min_clear": float(min_clear),
+            "qa_masked": list(qa_bits), "mask_buffer_m": float(mask_buffer_m), "mask_buffer_bits": list(buffer_bits),
             "platforms": list(platforms), "status": status, "io_errors": io_errors,
-            "selection": selection if kept else None, "prefer_clear": float(prefer_clear)}
+            "selection": selection if kept else None, "prefer_clear": float(prefer_clear),
+            "clear_tolerance": float(clear_tolerance)}
 
 
 def _qa_on(arr, tr, crs, qa_arr, qa_tr, qa_crs) -> np.ndarray:
