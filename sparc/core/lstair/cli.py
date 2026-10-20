@@ -49,7 +49,8 @@ def add_lstair_parser(subs) -> None:
     d.add_argument("--lst-window-days", type=int, default=16, help="Landsat search window ± days (default 16)")
     d.add_argument("--lst-min-clear", type=float, default=0.5, help="minimum clear fraction over the study area")
     d.add_argument("--lst-prefer-clear", type=float, default=0.8,
-                   help="the nearest scene at least this clear is taken; else the clearest above --lst-min-clear")
+                   help="the nearest scene at least this clear is taken; else the nearest above --lst-min-clear "
+                        "within 0.10 of the clearest")
     d.add_argument("--cache", default=None, help="Landsat COG window cache (default OUT/cache/landsat)")
     d.set_defaults(func=_tracked(cmd_dataset))
 

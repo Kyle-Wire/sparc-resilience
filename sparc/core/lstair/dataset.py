@@ -27,10 +27,11 @@ For every city (a CAPA catalog name, or a local folder given by the user):
 5. **Predictors** (rasters on the city grid, sampled at the cells): canopy and impervious (%), NDVI, albedo,
    elevation (m) and distance to water (m) from :mod:`sparc.core.features_open` (WorldCover, Sentinel-2,
    Copernicus DEM), with Gaussian focal means (σ = radius/2, as the core's focal features) at 100, 300 and
-   1000 m; LST (°C) of the Landsat 8/9 scene nearest the campaign date that is ≥ 80% clear over the study
-   area (else the clearest ≥ 50%)
-   (:func:`sparc.data.collect.landsat.campaign_lst`) with focal means at 100 and 300 m, the scene date and its
-   offset in days.  Predictors are computed from rasters only; the traverse temperatures never enter them.
+   1000 m; LST (°C) of the Landsat 8/9 overpass (its WRS rows mosaicked) nearest the campaign date that is
+   ≥ 80% clear over the study area (else the nearest ≥ 50% clear within 0.10 of the clearest), masked
+   150 m around cloud (:func:`sparc.data.collect.landsat.campaign_lst`) with focal means at 100 and 300 m, the
+   scene date and its offset in days.  Predictors are computed from rasters only; the traverse temperatures
+   never enter them.
 
 While a city builds, each source's result (features, LST, ERA5 per run) is kept in ``OUT/cities/<slug>/partial/``
 as it finishes, so a build cut off by a container restart resumes there.  Each city is cached in
@@ -621,7 +622,8 @@ def landsat_lst(ctx: CityGrid, campaign_date: dt.date, study: np.ndarray, window
     lst = None if res["lst_c"] is None else ctx.from_northup(res["lst_c"])
     return {"lst_c": lst, "scenes": res["scenes"], "candidates": res["candidates"], "window_days": window_days,
             "min_clear": min_clear, "prefer_clear": prefer_clear, "selection": res.get("selection"),
-            "qa_masked": res["qa_masked"], "status": res.get("status")}
+            "qa_masked": res["qa_masked"], "status": res.get("status"), "mask_buffer_m": res.get("mask_buffer_m"),
+            "clear_tolerance": res.get("clear_tolerance"), "overpasses": res.get("overpasses")}
 
 
 def _failed_host(exc: BaseException) -> str | None:
@@ -746,6 +748,8 @@ SETTING_DEFAULTS = {"cell_m": CELL_M, "margin_m": MARGIN_M, "drift": "fe", "drif
 def build_settings(**kw) -> dict:
     """The fingerprinted settings of a city build (``SETTING_DEFAULTS`` updated with ``kw``; ``lst`` / ``era5`` are
     whether the source is on) and their key."""
+    from sparc.data.collect.landsat import CAMPAIGN_LST_METHOD
+
     out = dict(SETTING_DEFAULTS)
     for k, v in kw.items():
         if k in out:
@@ -753,6 +757,7 @@ def build_settings(**kw) -> dict:
     out["cell_m"], out["margin_m"] = float(out["cell_m"]), float(out["margin_m"])
     out["lst_window_days"], out["lst_min_clear"] = int(out["lst_window_days"]), float(out["lst_min_clear"])
     out["lst_prefer_clear"] = float(out["lst_prefer_clear"])
+    out["lst_method"] = dict(CAMPAIGN_LST_METHOD) if out["lst"] else None   # mosaic, buffer: not in the arguments
     out["schema"] = SCHEMA
     return out
 
