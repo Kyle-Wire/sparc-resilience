@@ -338,7 +338,9 @@ def test_fe_drift_falls_back_when_revisits_are_only_minutes_apart():
                  + 0.05 * rng.standard_normal(len(v)))
     adj, info = D.adjust_visits(v)
     assert info["n_repeat_cells"] > 1000 and info["n_repeat_cells_spread"] == 0
-    assert info["method"] == "protocol" and "min apart" in info["fallback"] and info["vehicle_offsets"] == {}
+    assert info["method"] == "protocol" and "min apart" in info["fallback"]
+    # disjoint routes: no vehicle is linked by a co-visit, so every offset stays 0 (the 0.4 °C steps are routes')
+    assert info["vehicle_offsets"] == {"0": 0.0, "1": 0.0, "2": 0.0} and info["n_vehicle_groups"] == 3
     assert np.isfinite(info["drift_se_per_h"])
     # revisits spread over the run: the fixed-effect drift is identified and its SE is recorded
     rows2 = [(c, k % 3, t) for k, (c, t) in enumerate(zip(np.tile(np.arange(300), 4), np.linspace(0, 3600, 1200)))]
@@ -727,9 +729,399 @@ def test_a_cached_city_is_rebuilt_when_its_build_settings_change(built, tmp_path
     D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)
     s = D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)
     assert len(calls) == 1 and s["cities"]["Providence, RI"].get("skipped") == "cached"
+    first = D.load_city(tmp_path / "o" / "cities" / "providence_ri").meta["built_utc"]
     s = D.build_dataset(["Providence, RI"], tmp_path / "o", drift="protocol", **kw)
-    assert len(calls) == 2 and "skipped" not in s["cities"]["Providence, RI"]
+    assert "skipped" not in s["cities"]["Providence, RI"]
     m = D.load_city(tmp_path / "o" / "cities" / "providence_ri").meta
     assert m["settings"]["drift"] == "protocol" and {r["drift"]["method"] for r in m["runs"]} == {"protocol"}
+    assert len(calls) == 1 and m["features_reused_from"] == first        # same grid: the features are reused (D9)
     D.build_dataset(["Providence, RI"], tmp_path / "o", drift="protocol", **kw)
-    assert len(calls) == 2
+    assert len(calls) == 1
+    s = D.build_dataset(["Providence, RI"], tmp_path / "o", drift="protocol", margin_m=600.0, **kw)
+    m = D.load_city(tmp_path / "o" / "cities" / "providence_ri").meta
+    assert len(calls) == 2 and m["features_reused_from"] is None          # another grid: recomputed
+
+
+# --------------------------------------------------------------------------- #
+# The QA of the 31 built cities (2026-10-20): drift, offsets, run flags        #
+# --------------------------------------------------------------------------- #
+def _grid_visits(rows, width=400, seed=0, noise=0.02):
+    """Visits ``(cell, vehicle, t_s, temp)`` with the cell centres of a ``width``-cell-wide 30 m grid as x, y."""
+    v = pd.DataFrame(rows, columns=["cell", "vehicle", "t_s", "temp"])
+    v["temp"] += noise * np.random.default_rng(seed).standard_normal(len(v))
+    return v.assign(x=30.0 * (v["cell"] % width), y=30.0 * (v["cell"] // width))
+
+
+def _street(row, n=200, width=400, start=0):
+    """The cells of one east–west street ``n`` cells (6 km) long on grid row ``row``."""
+    return row * width + start + np.arange(n)
+
+
+def test_the_protocol_line_is_fitted_within_vehicles():
+    """D1, Virginia Beach 2021-07-15 midday: coastal routes stop early and the warmest inland route starts late,
+    so the line through every reading climbs +2.29 °C/h while the vehicles' own readings warm +1.06 °C/h."""
+    rows = []
+    for veh, (t0, t1, level) in enumerate([(0, 1800, 30.0), (0, 1800, 30.5), (1200, 3600, 33.0), (900, 3600, 32.5)]):
+        t = np.linspace(t0, t1, 400)
+        rows += [(10_000 * veh + k, veh, tk, level + 1.0 * tk / 3600.0) for k, tk in enumerate(t)]
+    v = _grid_visits(rows, width=10_000)
+    adj, info = D.adjust_visits(v, "protocol")
+    assert info["drift_per_h"] == pytest.approx(1.0, abs=0.02) and info["drift_coef"] == [info["drift_per_h"]]
+    assert info["pooled_drift_per_h"] > 2.5                       # route composition aliased into time
+    assert info["vehicle_offsets"] == {}                          # CAPA's protocol: no offsets
+    # the route levels stay: only the time line is removed
+    lv = pd.Series(adj).groupby(v["vehicle"]).mean()
+    assert lv[2] - lv[0] == pytest.approx(3.0, abs=0.05)
+    # one vehicle: the line through every reading
+    one = v[v["vehicle"] == 2]
+    _, i1 = D.adjust_visits(one, "protocol")
+    assert i1["drift_per_h"] == pytest.approx(np.polyfit(one["t_s"] / 3600.0, one["temp"], 1)[0], abs=1e-9)
+
+
+def test_vehicle_offsets_come_only_from_near_simultaneous_co_visits():
+    """D2: vehicles 0 and 1 cross at 8 cells within 2 min (a real 1.2 °C sensor offset); vehicles 2 and 3 share
+    19 cells of one street 52 min apart, across which the street cooled (Los Angeles 2019-09-15 morning:
+    CAPA34/CAPA39 ±1.4 °C from such a link); vehicle 4 meets vehicle 0 at only 3 cells within 10 min."""
+    off = {0: 0.6, 1: -0.6, 2: 0.0, 3: 0.0, 4: 0.0}
+    rows = []
+    for veh, row in ((0, 0), (1, 10), (2, 20), (3, 30), (4, 40)):
+        for k, c in enumerate(_street(row)):
+            rows.append((c, veh, 6.0 * k + 120 * veh, 30.0 + 0.002 * (c % 400) + off[veh]))
+    for k, c in enumerate(_street(0, n=8)):                       # vehicle 1 drives vehicle 0's street minutes later
+        rows.append((c, 1, 6.0 * k + 60.0, 30.0 + 0.002 * (c % 400) + off[1]))
+    for k, c in enumerate(_street(20, n=19)):                     # vehicle 3 on vehicle 2's street 52 min later
+        rows.append((c, 3, 6.0 * k + 3120.0, 30.0 + 0.002 * (c % 400) - 2.75 + off[3]))
+    for k, c in enumerate(_street(0, n=3, start=100)):            # vehicle 4: 3 co-visited cells only
+        rows.append((c, 4, 600.0 + 6.0 * k, 30.0 + 0.002 * (c % 400) + off[4]))
+    v = _grid_visits(rows)
+    adj, info = D.adjust_visits(v)
+    o = {int(k): x for k, x in info["vehicle_offsets"].items()}
+    assert o[0] - o[1] == pytest.approx(1.2, abs=0.03)
+    assert o[2] == o[3] == o[4] == 0.0
+    assert [ln["vehicles"] for ln in info["vehicle_links"]] == [["0", "1"]] and info["vehicle_links"][0]["n_cells"] == 8
+    assert info["n_vehicle_groups"] == 4                          # {0, 1}, {2}, {3}, {4}
+    # the offsets are centred within the linked group (visit-weighted)
+    w = v["vehicle"].value_counts()
+    assert o[0] * w[0] + o[1] * w[1] == pytest.approx(0.0, abs=1e-9)
+    # cell fixed effects alone would link 2 and 3 through the 19 cells and read the street's change as offsets
+    from sparc.core.lstair.dataset import _components
+
+    assert _components(v["cell"].to_numpy(), v["vehicle"].to_numpy()).tolist() == [0, 0, 1, 1, 0]
+
+
+def _fe_case(vehicles, routes, local=None, drift=0.0, seed=0):
+    """Each vehicle drives its streets (``routes[veh]``: rows of the grid) out and again 30 min later; ``local``
+    adds a per-vehicle cooling (°C/h) on that vehicle's own readings (one route's weather)."""
+    rows = []
+    for veh in vehicles:
+        t = 0.0
+        for rep in range(2):
+            for row in routes[veh]:
+                for c in _street(row, n=60):
+                    T = 30.0 + 0.003 * (c % 400) + drift * t / 3600.0 + (local or {}).get(veh, 0.0) * t / 3600.0
+                    rows.append((c, veh, t, T))
+                    t += 3.0
+            t = max(t, 1800.0 * (rep + 1))
+    return _grid_visits(rows, seed=seed)
+
+
+def test_the_fe_drift_needs_repeats_in_ten_blocks_not_mostly_one_vehicles():
+    """D3, Fort Lauderdale 2019-09-18 midday: all spread repeats were CAPA80's, in 8 blocks, and a local cooling
+    on its route (fe −2.16 °C/h against +0.20) put a ramp along every other route.  New Orleans 2020-08-18 midday:
+    34 of 35 repeats CAPA1050's."""
+    routes = {0: [0, 10, 20, 30, 40, 50], 1: [60], 2: [70], 3: [80]}
+    # vehicle 0 re-drives its six 1.8 km streets (36 blocks of 300 m), the others drive theirs once
+    v = _fe_case([0], routes, local={0: -2.0})
+    once = _grid_visits([(c, veh, 3.0 * k, 30.0) for veh in (1, 2, 3) for k, c in enumerate(_street(routes[veh][0]))])
+    v = pd.concat([v, once], ignore_index=True)
+    _, info = D.adjust_visits(v)
+    assert info["fe_drift_per_h"] == pytest.approx(-2.0, abs=0.05) and info["repeat_vehicle_share"] == 1.0
+    assert info["method"] == "protocol" and "vehicle 0's repeats" in info["fallback"]
+    # one vehicle alone is exempt from the vehicle-share rule: its repeats in 36 blocks identify its drift
+    _, solo = D.adjust_visits(v[v["vehicle"] == 0])
+    assert solo["method"] == "fe" and solo["drift_per_h"] == pytest.approx(-2.0, abs=0.05)
+    # three vehicles, each re-driving one short street: 3 blocks only
+    short = {k: [10 * k] for k in range(3)}
+    rows = []
+    for veh in range(3):
+        for rep in range(2):
+            for k, c in enumerate(_street(short[veh][0], n=20)):
+                rows.append((c, veh, 1800.0 * rep + 60 * veh + 3.0 * k, 30.0 - 1.0 * (1800.0 * rep) / 3600.0))
+    _, few = D.adjust_visits(_grid_visits(rows))
+    assert few["n_repeat_cells_spread"] == 60 and few["n_repeat_blocks"] < D.MIN_REPEAT_BLOCKS
+    assert few["method"] == "protocol" and "blocks of 300 m" in few["fallback"]
+
+
+def test_an_fe_drift_far_from_the_protocol_line_is_kept_with_a_warning():
+    """D3: the guards pass (repeats from three vehicles over 18 streets), but each pass runs from a cool west to
+    a warm east, so the line within vehicles reads that gradient as warming; the fixed effects see +1.0 °C/h."""
+    rows = []
+    for veh in range(3):
+        for rep in range(2):
+            t = 1800.0 * rep
+            for c in _street(30 * veh, n=300):                    # 9 km west to east, +3 °C along the street
+                rows.append((c, veh, t, 30.0 + 0.01 * (c % 400) + 1.0 * t / 3600.0))
+                t += 6.0
+    adj, info = D.adjust_visits(_grid_visits(rows))
+    assert info["method"] == "fe" and info["drift_per_h"] == pytest.approx(1.0, abs=0.05)
+    assert info["protocol_drift_per_h"] > 1.75 and "warning" in info and "kept" in info["warning"]
+    assert info["drift_se_per_h"] == max(info["fe_drift_se_ols_per_h"], info["fe_drift_se_cluster_per_h"])
+    assert info["se_clusters"] == "300 m blocks"
+
+
+def test_the_fe_drift_se_is_clustered_by_block():
+    """D3: each 300 m block warms at its own rate around the run's +1 °C/h; the OLS SE treats the visits as
+    independent, the block-clustered one sees the spread of the blocks' rates."""
+    rng = np.random.default_rng(5)
+    n_cells, n = 1600, 8000
+    cells = rng.integers(0, n_cells, n)
+    x, y = 30.0 * (cells % 40), 30.0 * (cells // 40)
+    blk = (x // 300).astype(int) * 4 + (y // 300).astype(int)
+    rate = 1.0 + rng.normal(0, 1.6, blk.max() + 1)
+    t = rng.uniform(0, 3600, n)
+    temp = rng.normal(30, 1, n_cells)[cells] + rate[blk] * (t - np.median(t)) / 3600.0 + 0.1 * rng.standard_normal(n)
+    v = pd.DataFrame({"cell": cells, "vehicle": rng.integers(0, 4, n), "t_s": t, "temp": temp, "x": x, "y": y})
+    _, info = D.adjust_visits(v)
+    assert info["fe_drift_se_cluster_per_h"] > 4 * info["fe_drift_se_ols_per_h"]
+    assert info["method"] == "protocol" and "SE above" in info["fallback"]
+    _, iid = D.adjust_visits(v.assign(temp=rng.normal(30, 1, n_cells)[cells] + (t - np.median(t)) / 3600.0
+                                      + 0.1 * rng.standard_normal(n)))
+    assert iid["method"] == "fe" and iid["fe_drift_se_cluster_per_h"] < 2 * iid["fe_drift_se_ols_per_h"]
+
+
+def _run_points(tracks, start="2020-07-29 15:00:00", centre=CENTRES["Providence, RI"]):
+    """The reader's points of one run: ``tracks`` maps a vehicle key to (x, y, t_s, temp °C), x/y in metres from
+    ``centre`` (UTM 19N), in the order the logger wrote them."""
+    from pyproj import Transformer
+
+    x0, y0 = Transformer.from_crs("EPSG:4326", UTM19, always_xy=True).transform(*centre)
+    to_ll = Transformer.from_crs(UTM19, "EPSG:4326", always_xy=True)
+    parts = []
+    for key, (x, y, t, T) in tracks.items():
+        lon, lat = to_ll.transform(x0 + np.asarray(x, float), y0 + np.asarray(y, float))
+        parts.append(pd.DataFrame({"time": pd.Timestamp(start) + pd.to_timedelta(np.asarray(t, float), unit="s"),
+                                   "lat": lat, "lon": lon, "temp_f": np.asarray(T, float) * 9 / 5 + 32,
+                                   "vehicle_key": f"run.csv:{key}", "vehicle_id": key, "source_file": "run.csv"}))
+    pts = pd.concat(parts, ignore_index=True)
+    pts["run"], pts["window"] = "2020-07-29 midday", "midday"
+    return pts
+
+
+def _serpentine(speed_ms, seconds=3600.0, row_m=3000.0, gap_m=60.0, y0=0.0, t0=0.0):
+    """A route along east–west rows ``gap_m`` apart, never revisiting a cell, at ``speed_ms``, sampled at 1 Hz."""
+    t = np.arange(0.0, seconds)
+    s = speed_ms * t
+    row, along = np.divmod(s, row_m)
+    x = np.where(row % 2 == 0, along, row_m - along) - row_m / 2
+    return x, y0 + row * gap_m, t0 + t, 28.0 + 0.0005 * x + 1.0 * t / 3600.0
+
+
+def _build(pts, **kw):
+    from sparc.core.identify.traverses import runs_summary
+
+    ctx = D.make_city_grid(pts["lon"].to_numpy(float), pts["lat"].to_numpy(float), UTM19, 30.0, 300.0)
+    return D.build_run(pts, runs_summary(pts)[0], ctx, **kw)
+
+
+def test_a_run_driven_by_one_car_is_excluded_by_default():
+    """D4, Lynchburg 2021-07-15: car 1057 holds 971 of 1,076 morning visits and 938 of 948 at midday; its line
+    in time is the route's gradient, not the run's drift."""
+    rec, cells, warnings = _build(_run_points({"1057": _serpentine(10.0)}))
+    assert rec["drift"]["method"] == "protocol" and rec["qa_exclude"] == D.SINGLE_VEHICLE
+    assert rec["platform"] == "vehicle" and rec["qa"]["median_speed_kmh"] == pytest.approx(36.0, abs=0.5)
+    assert set(cells["qa_exclude"]) == {D.SINGLE_VEHICLE} and any("single-vehicle" in w for w in warnings)
+    # a second car with 4% of the visits (1055's five minutes at the end): still one car's run
+    x, y, t, T = _serpentine(10.0, seconds=150.0, y0=900.0, t0=3400.0)
+    rec, _, _ = _build(_run_points({"1057": _serpentine(10.0), "1055": (x, y, t, T)}))
+    assert rec["qa"]["top_sensor"] == "1057" and rec["qa"]["top_sensor_visit_share"] > 0.9
+    assert rec["qa_exclude"] == D.SINGLE_VEHICLE
+    # two logger files of one sensor are one vehicle (the 2021 tables name each file "<sensor>_<date>_<time>")
+    a, b = _serpentine(10.0, seconds=1800.0), _serpentine(10.0, seconds=1800.0, y0=600.0, t0=1800.0)
+    rec, _, _ = _build(_run_points({"1057_150721_095302.305_0.csv": a, "1057_150721_102302.000_0.csv": b}))
+    assert rec["qa"]["n_sensors"] == 1 and rec["qa_exclude"] == D.SINGLE_VEHICLE
+    # five cars sharing the run are not flagged
+    rec, _, _ = _build(_run_points({f"CAPA{k}": _serpentine(10.0, y0=900.0 * k) for k in range(5)}))
+    assert rec["qa_exclude"] == "" and rec["qa"]["top_sensor_visit_share"] == pytest.approx(0.2, abs=0.01)
+
+
+def test_a_walked_traverse_is_flagged_by_its_speed():
+    """D5, Farmville and Abingdon 2021-07-15: 4.7–5.7 km/h at 1.3–1.6 m steps (cars: ≥ ~30 km/h)."""
+    pts = _run_points({f"CAPA10{k}": _serpentine(1.4, row_m=500.0, y0=400.0 * k) for k in range(4)})
+    rec, cells, warnings = _build(pts)
+    assert rec["platform"] == "pedestrian" == rec["qa"]["platform"]
+    assert rec["qa"]["median_speed_kmh"] == pytest.approx(5.04, abs=0.05)
+    assert rec["qa_exclude"] == "pedestrian platform (median 5.0 km/h)"
+    assert set(cells["qa_exclude"]) == {rec["qa_exclude"]} and any("walked traverse" in w for w in warnings)
+    assert set(rec["qa"]["speed_kmh_by_sensor"]) == {"CAPA100", "CAPA101", "CAPA102", "CAPA103"}
+
+
+def test_several_loggers_under_one_key_are_not_called_a_single_vehicle():
+    """Boston 2019: each run file holds about ten cars one after another, without a sensor id ('case' constant),
+    so the reader sees one vehicle per file; in time order their readings interleave."""
+    cars = [_serpentine(10.0, y0=3000.0 * k) for k in range(3)]
+    merged = tuple(np.concatenate([c[i] for c in cars]) for i in range(4))   # car after car, as in the files
+    pts = _run_points({"Boston_pm_revised.shp": merged})
+    pts["vehicle_key"], pts["vehicle_id"] = "Boston, MA/Boston_pm_revised.shp", None
+    rec, _, warnings = _build(pts)
+    assert rec["qa"]["merged_logger_share"] > 0.9 and rec["qa"]["n_sensors"] == 1
+    assert rec["qa_exclude"] == "" and any("several loggers under one key" in w for w in warnings)
+    assert rec["qa"]["median_speed_kmh"] == pytest.approx(36.0, abs=0.5)      # consecutive as written
+    assert D.merged_logger_share(_run_points({"CAPA1": _serpentine(10.0)})) == 0.0
+
+
+def test_a_registry_reason_and_the_run_flags_join_in_qa_exclude():
+    pts = _run_points({"1057": _serpentine(10.0)})
+    rec, cells, _ = _build(pts, registry_reason="rain over 5 of 7 routes")
+    assert rec["qa_exclude"] == "qa registry: rain over 5 of 7 routes; " + D.SINGLE_VEHICLE
+    rec, _, _ = _build(_run_points({f"CAPA{k}": _serpentine(10.0, y0=900.0 * k) for k in range(3)}),
+                       registry_reason="wet")
+    assert rec["qa_exclude"] == "qa registry: wet"
+
+
+def _registry(tmp_path):
+    reg = tmp_path / "reg.yml"
+    reg.write_text('- {slug: providence_ri, kind: readings, sensor: CAPA1061, date: "2020-07-29", window: morning, '
+                   'from_local: "06:35", reason: test cut, evidence: e}\n'
+                   '- {slug: providence_ri, kind: run, date: "2020-07-29", window: midday, reason: rain over the '
+                   'test routes, evidence: e}\n'
+                   '- {slug: boston_ma, kind: run, date: "2020-07-29", window: morning, reason: other city, '
+                   'evidence: e}\n')
+    from sparc.core.lstair import exclusions
+
+    return exclusions.load_registry(reg)
+
+
+def test_non_vehicle_sensors_and_the_qa_registry_are_applied_before_gridding(built, tmp_path):
+    """D6/D7/D11: a bicycle logger inside the car files (Sacramento 2019's Bicycle_CAPA56) is dropped and named;
+    the registry's readings are dropped and counted, its run excluded through qa_exclude in table and meta."""
+    root, out, _ = built
+    trav = tmp_path / "trav" / "providence_ri"
+    shutil.copytree(root / "traverses" / "providence_ri", trav)
+    am = pd.read_csv(trav / "am_trav.csv")
+    bike = am[am["file"].str.startswith("CAPA1079")].assign(file="Bicycle_CAPA56_290720_060000_0.csv",
+                                                            t_c=lambda d: d["t_c"] - 3.0)
+    pd.concat([am, bike]).to_csv(trav / "am_trav.csv", index=False)
+    registry = _registry(tmp_path)
+    kw = dict(traverses_dir=tmp_path / "trav", features=synthetic_features, lst=False, era5=False,
+              probe_opener=_no_network)
+    s = D.build_dataset(["Providence, RI"], tmp_path / "o", registry=registry, **kw)
+    excluded = {"2020-07-29 midday": "qa registry: rain over the test routes"}
+    assert s["cities"]["Providence, RI"]["excluded_runs"] == excluded
+    c = D.load_city(tmp_path / "o" / "cities" / "providence_ri")
+    m, t = c.meta, c.table
+    assert m["non_vehicle_sensors"] == {"Bicycle_CAPA56_290720_060000_0.csv": len(bike)}
+    assert any("non-vehicle sensors dropped: Bicycle_CAPA56" in w for w in m["warnings"])
+    cut = (am["file"].str.startswith("CAPA1061") & (pd.to_datetime(am["dttm_lc"]) >= "2020-07-29 06:35")).sum()
+    rec = m["qa_registry"]["readings"][0]
+    assert rec["n_readings"] == cut > 0 and rec["run_id"] == "2020-07-29 morning"
+    assert any(f"CAPA1061 in 2020-07-29 morning from 06:35: {cut:,} readings dropped" in w for w in m["warnings"])
+    runs = {r["run"]: r for r in m["runs"]}
+    assert runs["am"]["n_readings"] == len(am) - cut and runs["am"]["vehicles"] == 3
+    assert runs["af"]["qa_exclude"] == "qa registry: rain over the test routes" and runs["am"]["qa_exclude"] == ""
+    assert set(t.loc[t["run"] == "af", "qa_exclude"]) == {runs["af"]["qa_exclude"]}
+    assert set(t.loc[t["run"] == "am", "qa_exclude"]) == {""} and list(t.columns).index("qa_exclude") == 6
+    assert m["settings"]["qa_registry"] == D.registry_key("providence_ri", registry)
+    # cached under this registry; a changed entry rebuilds the city, another city's entry does not
+    def rerun(reg):
+        return D.build_dataset(["Providence, RI"], tmp_path / "o", registry=reg, **kw)["cities"]["Providence, RI"]
+
+    assert rerun(registry).get("skipped") == "cached"
+    assert rerun([e for e in registry if e["slug"] != "boston_ma"]).get("skipped") == "cached"
+    assert "skipped" not in rerun(registry[1:])
+
+
+def test_era5_is_time_weighted_over_the_run_span(monkeypatch):
+    """D8, Sedona's evening run (19:00–19:27 MST): averaging 19 h (25.96 °C) and 20 h (20.78 °C) put its
+    background +5.4 °C above ERA5; the bracketing hours, interpolated over the run, give 24.79 °C."""
+    from sparc.core import forcing as F
+
+    seen = []
+
+    def fake(lat, lon, times, analyses=None, accumulations=None, **kw):
+        seen.append(times)
+        t2m = {19: 25.96, 20: 20.78, 15: 30.0, 16: 31.0, 17: 30.0}
+        local = [t.astimezone(__import__("zoneinfo").ZoneInfo("America/Phoenix")).hour for t in times]
+        return {"times_utc": [t.strftime("%Y-%m-%dT%H:%MZ") for t in times],
+                "series": {"t2m": [t2m[h] + 273.15 for h in local], "skt": [300.0] * len(times),
+                           "ssrd": [100.0 * (i + 1) for i in range(len(times) - 1)],
+                           "strd": [400.0] * (len(times) - 1)},
+                "values": {}}
+
+    monkeypatch.setattr(F, "era5_site", fake)
+    e = D.era5_run(-111.76, 34.87, "America/Phoenix", pd.Timestamp("2023-06-24 19:00:00"),
+                   pd.Timestamp("2023-06-24 19:27:00"))
+    assert [t.strftime("%H") for t in seen[0]] == ["02", "03"]                # 19 and 20 MST
+    assert e["ta_era5"] == pytest.approx(25.96 + (20.78 - 25.96) * 0.45 / 2, abs=1e-9)
+    assert e["sw_down"] == pytest.approx(100.0) and e["hours_local"] == [19, 20]
+    # 15:10–16:40: three hours requested; the line integrated over the span, hourly means by overlap (50 + 40 min)
+    e = D.era5_run(-111.76, 34.87, "America/Phoenix", pd.Timestamp("2023-06-24 15:10:00"),
+                   pd.Timestamp("2023-06-24 16:40:00"))
+    assert len(seen[1]) == 3 and e["hours_local"] == [15, 17]
+    grid = np.linspace(15 + 1 / 6, 16 + 2 / 3, 200_001)
+    assert e["ta_era5"] == pytest.approx(np.interp(grid, [15, 16, 17], [30.0, 31.0, 30.0]).mean(), abs=1e-5)
+    assert e["sw_down"] == pytest.approx((50 * 100.0 + 40 * 200.0) / 90.0)
+    wa, wh = D.span_weights(2, 0.5, 0.5)
+    assert wa.tolist() == [0.5, 0.5, 0.0] and wh.tolist() == [1.0, 0.0]
+
+
+def test_feature_rasters_of_an_older_build_are_reused_only_on_the_same_grid_date_and_provider(tmp_path):
+    """D9: builds before the provider was recorded are read as open_features when their provenance names
+    WorldCover and Sentinel-2; a different grid, date or provider recomputes."""
+    ctx = D.make_city_grid(np.array([-71.42, -71.40]), np.array([41.81, 41.83]), UTM19, 30.0, 300.0)
+    feats, _ = synthetic_features(ctx, None)
+    d = tmp_path / "city"
+    d.mkdir()
+    np.savez(d / "rasters.npz", **{k: v.astype(np.float32) for k, v in feats.items()}, lst=np.zeros(ctx.shape))
+    meta = {"status": "ok", "grid": ctx.as_dict(), "campaign_date": "2020-07-29", "built_utc": "2026-10-19T22:10:42Z",
+            "features": {"worldcover": "N39W072", "dem": "x", "sentinel2": {"scenes": []}}}
+    (d / "meta.json").write_text(json.dumps(meta))
+    got = D.reusable_features(d, ctx, dt.date(2020, 7, 29), "open_features")
+    assert got is not None and got[2] == "2026-10-19T22:10:42Z" and got[1]["worldcover"] == "N39W072"
+    assert set(got[0]) == set(D.FEATURES) and np.allclose(got[0]["canopy"], feats["canopy"], atol=1e-4)
+    assert D.reusable_features(d, ctx, dt.date(2020, 7, 30), "open_features") is None
+    assert D.reusable_features(d, ctx, dt.date(2020, 7, 29), "tests.synthetic_features") is None
+    other = D.make_city_grid(np.array([-71.42, -71.39]), np.array([41.81, 41.83]), UTM19, 30.0, 300.0)
+    assert D.reusable_features(d, other, dt.date(2020, 7, 29), "open_features") is None
+    (d / "meta.json").write_text(json.dumps({**meta, "status": "failed"}))
+    assert D.reusable_features(d, ctx, dt.date(2020, 7, 29), "open_features") is None
+
+
+def test_features_are_reused_but_lst_and_era5_recomputed_on_a_rebuild(built, tmp_path):
+    root, _, _ = built
+    calls = {"features": 0, "lst": 0, "era5": 0}
+
+    def feats(ctx, d):
+        calls["features"] += 1
+        return synthetic_features(ctx, d)
+
+    def lst(ctx, d, study):
+        calls["lst"] += 1
+        return synthetic_lst(ctx, d, study)
+
+    def era5(*a):
+        calls["era5"] += 1
+        return fake_era5(*a)
+
+    kw = dict(traverses_dir=root / "traverses", features=feats, lst=lst, era5=era5, probe_opener=_no_network)
+    D.build_dataset(["Providence, RI"], tmp_path / "o", **kw)
+    a = D.load_city(tmp_path / "o" / "cities" / "providence_ri")
+    D.build_dataset(["Providence, RI"], tmp_path / "o", force=True, **kw)
+    b = D.load_city(tmp_path / "o" / "cities" / "providence_ri")
+    assert calls == {"features": 1, "lst": 2, "era5": 4}
+    assert b.meta["features_reused_from"] == a.meta["built_utc"] and a.meta["features_reused_from"] is None
+    assert b.meta["features"] == a.meta["features"] and b.meta["features_provider"].endswith("feats")
+    for k in ("canopy", "canopy_f300", "albedo_f1000", "lst"):
+        assert np.allclose(a.table[k], b.table[k], atol=1e-4, equal_nan=True), k
+    D.build_dataset(["Providence, RI"], tmp_path / "o", force=True, reuse_features=False, **kw)
+    assert calls["features"] == 2
+
+
+def test_caches_built_under_earlier_qa_rules_are_stale(tmp_path):
+    """D10: every city built before the review's rules is rebuilt (its settings lack the dataset version)."""
+    settings = D.build_settings()
+    assert settings["dataset_version"] == D.DATASET_VERSION >= 2
+    old = {k: v for k, v in settings.items() if k not in ("dataset_version", "qa_registry")}
+    (tmp_path / "meta.json").write_text(json.dumps({"status": "ok", "settings": old,
+                                                    "settings_key": D.settings_key(old)}))
+    why = D._stale(tmp_path, D.settings_key(settings))
+    assert why and "dataset version 1" in why and f"version {D.DATASET_VERSION}" in why
