@@ -12,11 +12,15 @@
     sparc core lstair sensitivity --data DIR --out DIR [--variants weights_n,lst_local,...] [--cache DIR]
                                (the primary analysis and every registered sensitivity, one after another)
     sparc core lstair validate --out DIR [--cities 8] [--seeds 0-49] [--fast]   (synthetic worlds, known answers)
+    sparc core lstair calibrate --data DIR --eval DIR --out DIR [--k 3,10,30] [--draws 20] [--min-sep-m 1000]
+                               [--buffer-m 500] [--windows af,am,pm] [--bases A,B,C] [--seed 0] [--no-stations]
+                               [--isd-cache DIR]
+                               (study S1: held-out maps calibrated with simulated and NOAA ISD stations)
     sparc core lstair hosts [--probe]                            (the hosts a real run needs)
 
 Exit codes (dataset): 0 done (some cities may have failed: see DIR/dataset.json), 1 nothing built, 2 a host the
 build needs is blocked (named on stderr).  add-landcover likewise (DIR/landcover_us.json; 1: no city has the columns).
-evaluate, sensitivity: 0 done, 1 refused (reason on stderr).  validate: 0 when every world gives the answer it
+evaluate, sensitivity, calibrate: 0 done, 1 refused (reason on stderr).  validate: 0 when every world gives the answer it
 should, else 1.
 """
 
@@ -123,6 +127,23 @@ def add_lstair_parser(subs) -> None:
     v.add_argument("--size", type=int, default=64, help="grid cells per side of each city (default 64)")
     v.add_argument("--fast", action="store_true", help="spline ridge only, short physics fits")
     v.set_defaults(func=_tracked(cmd_validate))
+
+    c = s.add_parser("calibrate", help="study S1: calibrate an evaluate run's held-out maps with local stations "
+                                       "(simulated and NOAA ISD) → calibrate.json / calibrate.md")
+    c.add_argument("--data", required=True, help="the dataset folder (city grids and run times)")
+    c.add_argument("--eval", required=True, help="the --out of a finished lstair evaluate (predictions.parquet)")
+    c.add_argument("--out", required=True, help="folder for calibrate.json / calibrate.md")
+    c.add_argument("--k", default="3,10,30", help="simulated stations per run, a comma list (default 3,10,30)")
+    c.add_argument("--draws", type=int, default=20, help="random station draws per run and k (default 20)")
+    c.add_argument("--min-sep-m", type=float, default=1000.0, help="least distance between stations (default 1000)")
+    c.add_argument("--buffer-m", type=float, default=500.0,
+                   help="test cells lie farther than this from every station (default 500)")
+    c.add_argument("--windows", default="af,am,pm", help="run windows (default af,am,pm)")
+    c.add_argument("--bases", default="A,B,C", help="uncalibrated models to calibrate (default A,B,C)")
+    c.add_argument("--seed", type=int, default=0)
+    c.add_argument("--no-stations", action="store_true", help="skip the real-station (NOAA ISD) path")
+    c.add_argument("--isd-cache", default=None, help="folder keeping the downloaded ISD station-year files")
+    c.set_defaults(func=_tracked(cmd_calibrate))
 
     h = s.add_parser("hosts", help="list the hosts a real run needs and probe them")
     h.add_argument("--probe", action="store_true", help="probe each host (short timeout) instead of only listing")
@@ -330,6 +351,35 @@ def cmd_validate(args) -> int:
     v = validate(n_cities=args.cities, seeds=_seeds(args.seeds), settings=s, n=args.size, out=args.out)
     print(validation_markdown(v))
     return 0 if v["all_as_expected"] else 1
+
+
+def _list(text: str, kind=str) -> tuple:
+    return tuple(kind(v.strip()) for v in text.split(",") if v.strip())
+
+
+def cmd_calibrate(args) -> int:
+    from sparc.core.lstair.calibrate import CalSettings, run_calibration
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)s", datefmt="%H:%M:%S")
+    try:
+        s = CalSettings(ks=_list(args.k, int), draws=args.draws, min_sep_m=args.min_sep_m, buffer_m=args.buffer_m,
+                        windows=_list(args.windows), bases=_list(args.bases), seed=args.seed,
+                        stations=not args.no_stations)
+        res = run_calibration(args.data, args.eval, args.out, s, isd_cache=args.isd_cache)
+    except ValueError as exc:
+        print(f"lstair calibrate: {exc}", file=sys.stderr)
+        return 1
+    for w, wr in res["windows"].items():
+        if wr.get("status") != "done":
+            print(f"{w}: not run ({wr.get('reason')})")
+            continue
+        for b, br in wr["bases"].items():
+            print(f"{w} {b}: " + "; ".join(f"k={k} ΔSS " + (f"{r['mean_dss']:+.3f}, Holm p {r['p_holm']:.3g}"
+                                                             if r.get("mean_dss") is not None else "—")
+                                           + f" → {r['verdict']}" for k, r in br["k"].items()))
+    print(f"real stations: {res['real_stations'].get('status')}")
+    print(f"results: {Path(args.out) / 'calibrate.md'}")
+    return 0
 
 
 def cmd_hosts(args) -> int:

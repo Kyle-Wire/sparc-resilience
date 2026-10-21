@@ -24,11 +24,13 @@ predictors explained little of the daily maximum air temperature measured by cit
 * :mod:`~sparc.core.lstair.landcover_us` adds continuous US land cover (NLCD tree canopy and percent
   impervious, with focal means) to built cities post hoc, for the sensitivity that swaps them in for WorldCover's
   class fractions.
+* :mod:`~sparc.core.lstair.calibrate` (extension study S1) calibrates an evaluate run's held-out maps with local
+  stations, simulated (k driven cells) and real (NOAA Global Hourly), by simple kriging of their residuals.
 * :mod:`~sparc.core.lstair.synthetic` plants worlds where the answer is known (LST informative, redundant,
   or measured at the wrong hour) to check that the harness says what it should before real data arrive.
 
 Like :mod:`sparc.core.identify`, the package sits below ``sparc/core`` and is not part of the resume
-fingerprint.  Run it with ``sparc core lstair dataset|add-landcover|evaluate|sensitivity|validate``.
+fingerprint.  Run it with ``sparc core lstair dataset|add-landcover|evaluate|sensitivity|calibrate|validate``.
 """
 
 from __future__ import annotations
