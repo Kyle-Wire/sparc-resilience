@@ -809,6 +809,32 @@ def test_vehicle_offsets_come_only_from_near_simultaneous_co_visits():
     assert _components(v["cell"].to_numpy(), v["vehicle"].to_numpy()).tolist() == [0, 0, 1, 1, 0]
 
 
+def test_co_visit_offsets_are_solved_and_centred_per_linked_group():
+    """D2: a chain 0–1–2 (0 and 2 never meet) is one group solved jointly; 3–4 is another; 5 meets nobody."""
+    true = np.array([0.5, 0.0, -0.5, 0.4, -0.4, 0.0])
+    cells, vi, t = [], [], []
+    for a, b, base in ((0, 1, 0), (1, 2, 100), (3, 4, 200)):
+        for k in range(6):                                        # 6 cells, 2 min apart
+            cells += [base + k, base + k]
+            vi += [a, b]
+            t += [10.0 * k, 10.0 * k + 120.0]
+    cells += [500, 501]                                           # vehicle 5 alone
+    vi += [5, 5]
+    t += [0.0, 5.0]
+    cells, vi, t = np.array(cells), np.array(vi), np.array(t)
+    w = np.bincount(vi, minlength=6).astype(float)
+    off, lab, links = D.co_visit_offsets(cells, vi, t, 30.0 + true[vi], w)
+    assert off[0] - off[1] == pytest.approx(0.5) and off[1] - off[2] == pytest.approx(0.5)
+    assert off[3] - off[4] == pytest.approx(0.8) and off[5] == 0.0
+    for g in ([0, 1, 2], [3, 4]):
+        assert np.average(off[g], weights=w[g]) == pytest.approx(0.0, abs=1e-12) and len(set(lab[g])) == 1
+    assert len(set(lab[[0, 3, 5]])) == 3 and sorted(ln["vehicles"] for ln in links) == [[0, 1], [1, 2], [3, 4]]
+    # a link needs MIN_CO_VISIT_CELLS cells within CO_VISIT_S: the same six cells 11 min apart link nobody
+    far = np.where(vi == 4, t + 540.0, t)
+    off, _, links = D.co_visit_offsets(cells, vi, far, 30.0 + true[vi], w)
+    assert off[3] == off[4] == 0.0 and [ln["vehicles"] for ln in links] == [[0, 1], [1, 2]]
+
+
 def _fe_case(vehicles, routes, local=None, drift=0.0, seed=0):
     """Each vehicle drives its streets (``routes[veh]``: rows of the grid) out and again 30 min later; ``local``
     adds a per-vehicle cooling (°C/h) on that vehicle's own readings (one route's weather)."""
@@ -942,6 +968,12 @@ def test_a_run_driven_by_one_car_is_excluded_by_default():
     # five cars sharing the run are not flagged
     rec, _, _ = _build(_run_points({f"CAPA{k}": _serpentine(10.0, y0=900.0 * k) for k in range(5)}))
     assert rec["qa_exclude"] == "" and rec["qa"]["top_sensor_visit_share"] == pytest.approx(0.2, abs=0.01)
+    # one car that re-drives its route 30 min later identifies its drift (fixed effects): not flagged
+    a, b = _serpentine(10.0, seconds=1800.0), _serpentine(10.0, seconds=1800.0, t0=1800.0)
+    b = (*b[:3], b[3] + 0.5)                                      # 30 min later at +1 °C/h
+    rec, _, _ = _build(_run_points({"1057": tuple(np.concatenate([a[i], b[i]]) for i in range(4))}))
+    assert rec["drift"]["method"] == "fe" and rec["drift"]["drift_per_h"] == pytest.approx(1.0, abs=0.05)
+    assert rec["qa"]["top_sensor_visit_share"] == 1.0 and rec["qa_exclude"] == ""
 
 
 def test_a_walked_traverse_is_flagged_by_its_speed():
