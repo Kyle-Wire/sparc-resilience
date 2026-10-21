@@ -12,8 +12,8 @@ surface and air heat islands differ several-fold (Venter, Chakraborty & Lee 2021
 2020), yet machine-learned air-temperature maps lean on it (Ho et al. 2014; Shandas et al. 2019, CAPA's
 own method).
 
-**Status.** Pre-registered (2026-10-20). Data built and checked. The analysis below is fixed **before**
-the full run. Results will be added under [Result](#result) without changing the rules.
+**Status.** Pre-registered (2026-10-20), run 2026-10-21. **Answer: no.** In the afternoon, LST adds no
+detectable skill beyond land cover in held-out cities ([Result](#result)).
 
 ## Data
 
@@ -134,7 +134,75 @@ showed the earlier scoring was dominated by one city.
 
 ## Result
 
-*To be added after the full run, under the rules above.*
+Full run 2026-10-21, under the rules above.
+- **Data.** 31 cities built with every data fix, NLCD land cover added, about 2.3 h on 4 CPUs.
+- **Units.** 27 held-out units in the afternoon window: Petersburg and Richmond are 19 km apart and are held out together.
+- **Not scored.** Abingdon (no clear Landsat scene); walked and single-car runs (Farmville, Lynchburg am/af,
+  Fort Lauderdale make-up runs).
+- **Output.** `sparc core lstair evaluate`, written to `results.md` in the run folder.
+
+**Answer: no.** In cities the models never saw, LST does not make afternoon street air temperature better
+predicted than land cover alone.
+
+| afternoon (primary) | mean ΔSS | 95% CI | Holm p | units better / worse | verdict |
+|---|---|---|---|---|---|
+| **B − A** (LST beyond land cover) | **+0.006** | −0.006 to +0.018 | 0.78 | 16 / 11 | **not shown** |
+| C − A (physics vs land cover) | −0.083 | −0.135 to −0.031 | 1 | 7 / 20 | not shown (worse) |
+| C − C0 (LST inside the physics) | +0.111 | +0.062 to +0.159 | 0.00025* | 22 / 5 | LST helps the physics |
+
+\* unadjusted; C − C0 is outside the claim family.
+
+- **Tight null.** Whatever LST adds lies below 2% of a city's afternoon anomaly variance, against the 5%
+  the claim needed.
+- **Robust.** No single unit changes the verdict: mean ΔSS stays between +0.004 and +0.008 when any one unit
+  is dropped.
+- **Absolute errors agree.** B − A is −0.027 °C² (−2%), CI −0.071 to +0.017.
+
+**The other windows (secondary).**
+- **Morning (06–07 h):** nothing. ΔSS −0.001, CI −0.004 to +0.003.
+- **Evening (19–20 h):** a small, consistent gain. ΔSS +0.027, CI +0.008 to +0.045, Holm p 0.018, better in 22
+  of 27 units, and robust to dropping any unit. It falls short of the 5% the claim needed, so it is not claimed.
+  It fits the physics: evening air is warmed by heat the surface stored during the day, and LST at the
+  10:30 overpass measures that surface.
+
+**How well anything transfers.**
+- **Land cover alone, in the afternoon:** it explains about 15% of a held-out city's street-level anomaly
+  variance (mean SS_A 0.15).
+- **Same city, held-out blocks:** about 37% (interpolation-prone).
+- **Worse than predicting nothing:** Los Angeles and San Diego, where coast-to-inland marine air dominates and
+  no predictor here carries it.
+
+**The physics.** As transferred (per-parameter medians of the other cities' fits), C is worse than the
+land-cover model in every window.
+- **Afternoon:** SS 0.07 against 0.15.
+- **Morning:** SS −0.87, worse than predicting nothing. Several fits switch the source off (amplitude ≤ 0),
+  and the medians of fits that disagree do not transfer.
+- **Inside the physics:** LST does help (C − C0). The fixed-form land-cover source misses what LST carries.
+- **L at its bounds:** in the afternoon, 6 of 28 fits sit at the 60 m cell size and 6 at the ceiling.
+
+So the cross-city weakness is the parameter transfer and the resolution, not the equation alone.
+
+**What this means for SPARC.**
+- **LST as an estimator:** a satellite LST map is not a stand-in for afternoon street air temperature in a
+  new city. It adds nothing a land-cover model does not already know. To map a city's air, use the physics
+  with land cover, and calibrate it on that city's traverses or stations where they exist.
+- **LST in the physics:** LST is worth keeping inside the physics, as a surface-heat source or diagnostic,
+  and as an evening predictor.
+- **Next for the physics:** a coherent parameter transfer, finer cells, and a marine-air or sea-breeze term
+  for coastal cities.
+
+**Sensitivities.** Run on the primary window and reported in `sens_af/sensitivity.md`; results are added
+below when they finish:
+- weights ∝ 1/n;
+- walked and single-car runs included;
+- NLCD canopy and impervious in place of WorldCover;
+- the medoid city's whole physics parameter vector.
+
+Not run, to save compute:
+- **LST local-only, and regional controls:** both guard against LST getting credit it does not deserve, and
+  LST earned none here.
+- **Physics at 30 m cells:** it costs four times the cells.
+- **Virginia as one group:** it only merges units, which is conservative.
 
 ## References
 
