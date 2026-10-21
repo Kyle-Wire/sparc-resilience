@@ -184,6 +184,7 @@ class Settings:
     lst_mode: str = "full"                      # "local": B's LST minus its 3 km focal mean
     regional: bool = False                      # A and B also get 3 km focal elevation and impervious anomalies
     land_cover: str = "worldcover"              # "nlcd": NLCD tree canopy and percent impervious instead
+    extra_features: tuple = ()                  # table columns added to A and B as within-run anomalies (extensions)
     physics: bool = True
     physics_cell_m: float = 60.0
     physics_iter: int = 60
@@ -206,16 +207,18 @@ class Settings:
 def model_columns(s: Settings | None = None) -> tuple[list[str], list[str]]:
     """The A and B model columns under ``s`` (``regional`` adds the 3 km elevation and impervious anomalies)."""
     s = s or Settings()
+    extra = [f"{k}_c" for k in s.extra_features]
     if not s.regional:
-        return list(A_COLS), list(B_COLS)
-    a = [f"{k}_c" for k in CENTRED + REGIONAL] + ["canopy", "impervious"]
+        return list(A_COLS) + extra, list(A_COLS) + extra + LST_COLS
+    a = [f"{k}_c" for k in CENTRED + REGIONAL] + ["canopy", "impervious"] + extra
     return a, a + LST_COLS
 
 
 def raw_predictors(s: Settings | None = None) -> tuple[list[str], list[str]]:
     """The table columns a cell needs for A, and in addition for B, under ``s`` (the predictor filter)."""
     s = s or Settings()
-    a = [k if k != "log_water" else "water_distance" for k in CENTRED] + (REGIONAL if s.regional else [])
+    a = ([k if k != "log_water" else "water_distance" for k in CENTRED] + (REGIONAL if s.regional else [])
+         + list(s.extra_features))
     lst = ["lst"] + [f"lst_f{r}" for r in LST_RADII] + ([f"lst_f{REGIONAL_M}"] if s.lst_mode == "local" else [])
     return a, lst
 
@@ -230,7 +233,7 @@ def design(table: pd.DataFrame, s: Settings | None = None) -> pd.DataFrame:
     df["log_water"] = np.log1p(np.clip(df["water_distance"].to_numpy(float), 0.0, None))
     keys = [df["slug"], df["run_id"]]
     g = df.groupby(keys, sort=False)
-    for k in CENTRED + (REGIONAL if s.regional else []):
+    for k in CENTRED + (REGIONAL if s.regional else []) + list(s.extra_features):
         df[f"{k}_c"] = df[k] - g[k].transform("median")
     reg = df[f"lst_f{REGIONAL_M}"] if s.lst_mode == "local" else 0.0
     base = df["lst"] - reg
@@ -288,6 +291,10 @@ def prepare(cities: list[CityData], s: Settings) -> tuple[list[CityData], list[d
     with at least :data:`MIN_CELLS` usable cells with LST (with every cell when no city has LST); a city that is
     not scored anyway (no LST over its cells) is left out as it would be."""
     flagged, usable = [], []
+    lacking = [f"{c.slug} ({', '.join(k for k in s.extra_features if k not in c.table)})" for c in cities
+               if any(k not in c.table for k in s.extra_features)]
+    if lacking:
+        raise ValueError("extra_features: these cities lack the columns: " + "; ".join(lacking))
     for c in cities:
         t = c.table
         if "qa_exclude" in t:

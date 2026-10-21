@@ -676,3 +676,31 @@ def test_sensitivity_runs_each_variant_and_reuses_the_physics_fits(tmp_path, mon
     assert "## B − A" in md and "## C − A" in md and "| weights_n (" in md and "not run:" in md
     assert main(["lstair", "sensitivity", "--data", str(tmp_path / "data"), "--out", str(tmp_path / "x"),
                  "--variants", "nope"]) == 1
+
+
+def test_extra_features_enter_a_and_b_as_within_run_anomalies():
+    """Extension studies (coast distance, JEPA embeddings) add table columns to A and B, centred per run like the
+    land-cover predictors; a city without the columns is refused, not silently dropped."""
+    import pandas as pd
+    import pytest as _pt
+
+    from sparc.core.lstair.evaluate import Settings, design, model_columns, prepare, raw_predictors
+
+    s = Settings(extra_features=("coast_km",))
+    a, b = model_columns(s)
+    assert "coast_km_c" in a and b[:len(a)] == a
+    assert "coast_km" in raw_predictors(s)[0]
+    n = 6
+    tab = pd.DataFrame({"slug": "x", "run_id": ["r1"] * 3 + ["r2"] * 3, "water_distance": 10.0, "lst": 30.0,
+                        "coast_km": [1.0, 2.0, 6.0, 3.0, 3.0, 9.0],
+                        **{k: 0.0 for k in ("canopy", "impervious", "ndvi", "albedo", "elevation", "canopy_f100",
+                                            "canopy_f300", "canopy_f1000", "impervious_f100", "impervious_f300",
+                                            "impervious_f1000", "ndvi_f100", "ndvi_f300", "ndvi_f1000", "albedo_f100",
+                                            "albedo_f300", "albedo_f1000", "lst_f100", "lst_f300")}})
+    d = design(tab, s)
+    assert d["coast_km_c"].tolist() == [-1.0, 0.0, 4.0, 0.0, 0.0, 6.0]
+
+    class _C:
+        slug, table, rasters = "y", tab.drop(columns="coast_km"), {}
+    with _pt.raises(ValueError, match="lack the columns"):
+        prepare([_C()], s)

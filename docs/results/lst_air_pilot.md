@@ -204,10 +204,85 @@ Not run, to save compute:
 - **Physics at 30 m cells:** it costs four times the cells.
 - **Virginia as one group:** it only merges units, which is conservative.
 
+## Extension studies (pre-registered 2026-10-21, before any of them is run)
+
+The primary test closed one question: LST is not a substitute for air temperature in a new city. These
+studies ask what *does* make a held-out city's street-level heat map good.
+
+**Shared rules.** Every study uses the primary analysis's machinery unchanged:
+- the same 31 cities, data checks and held-out units (city; node+date link within 50 km);
+- the same scoring: skill SS against N, ΔSS paired over units, one-sided sign-flip, 95% t-interval;
+- the same claim thresholds: p ≤ 0.025 after Holm *within the study*, CI above 0, mean ΔSS ≥ 0.05, mean SS of
+  the better model above 0;
+- the afternoon window (15–16 h) is primary in every study; am and pm are secondary.
+
+Each study is its own family, and none of them reopens the primary verdict.
+
+### S1. Calibrating with local stations
+
+**If** a city has a few point measurements of air temperature at the hour, **then** spreading their residuals
+(regression kriging; Hengl, Heuvelink & Rossiter 2007) makes the held-out map better.
+
+- **Base.** A (the best uncalibrated model of the primary test).
+- **Residual field.** The station residuals (observed minus predicted anomaly, minus their mean) are
+  interpolated by simple kriging. The exponential covariance's range and nugget come from the *training*
+  cities' residual variograms (pooled per window), never from the held-out city.
+- **Simulated stations (primary).** k ∈ {3, 10, 30} driven cells per run are taken as perfect stations, at
+  least 1 km apart, in 20 random draws. Scoring is on the driven cells more than 500 m from every station,
+  averaged over draws.
+- **Comparison.** ΔSS = SS(A calibrated) − SS(A), with Holm over the three k.
+- **Real stations (secondary).**
+  - NOAA Global Hourly (ISD/ASOS) stations inside the grid, at the run's hours; at least 2 stations.
+  - Scoring is on all driven cells.
+  - Airport sites stand for open ground, not streets, so this tests the network a city already has.
+
+### S2. Marine and lake air
+
+**If** sea or lake breezes cool the neighbourhoods near large water, **then** distance to large water improves
+the transfer, above all in coastal cities.
+
+- **Predictor.** `coast_km`, the distance to the nearest water body of at least 100 km², from WorldCover water
+  over the grid plus a 30 km margin. Its log goes into A and B as a within-run anomaly.
+- **Comparison.** A_coast − A (primary).
+- **Secondary.** C_marine − C: the physics with a marine sink, q −= c_m·exp(−d/λ_m), with λ_m fitted in 1–30 km
+  and c_m ≥ 0 transferred like the other parameters.
+
+### S3. JEPA representation
+
+**If** a self-supervised representation of the predictor maps captures neighbourhood context the hand-made
+focal features miss, **then** adding it improves the transfer.
+
+- **Representation.** SPARC's JEPA components (EMA trunk and latent predictor with spatial patch masking)
+  are pretrained on the predictor rasters of all 31 cities: land cover, NDVI, albedo, elevation, water
+  distance. Neither LST nor labels are used, so a held-out city's predictors may be seen, as they would be in
+  any new city.
+- **Embedding.** It is reduced to 8 principal components over all cities' cells and added to A as anomalies.
+- **Comparisons.** A_jepa − A (primary) and B_jepa − A_jepa (LST beyond JEPA land cover), with Holm over the
+  two.
+
+### S4. Physics transfer
+
+**If** the physics fails across cities because per-parameter medians mix incompatible fits and L is
+grid-limited, **then** these help C:
+- a coherent parameter vector (the medoid city's fit);
+- a 30 m physics cell (L floor 30 m, ceiling 5 km).
+
+C_medoid − C and C_30 − C are compared, with Holm over the two.
+
+### S5. Afternoon LST (when an Earthdata token is available)
+
+**If** the 10:30 Landsat overpass is too early to reflect the afternoon surface–air coupling, **then** ECOSTRESS
+LST from 13–17 h local (±16 days, ≥ 50% clear) adds what Landsat did not.
+
+The comparison is B_eco − A, on the cities that have such a scene (at least 8 units, or the study is not
+testable).
+
 ## References
 
 - Ho, H.C., Knudby, A., Sirovyak, P., Xu, Y., Hodul, M. & Henderson, S.B. (2014). Mapping maximum urban air
   temperature on hot summer days. *Remote Sens. Environ.* 154, 38–45.
+- Hengl, T., Heuvelink, G.B.M. & Rossiter, D.G. (2007). About regression-kriging: from equations to case
+  studies. *Comput. Geosci.* 33, 1301–1315.
 - Holm, S. (1979). A simple sequentially rejective multiple test procedure. *Scand. J. Stat.* 6, 65–70.
 - Murphy, A.H. (1988). Skill scores based on the mean square error and their relationships to the
   correlation coefficient. *Mon. Weather Rev.* 116, 2417–2424.

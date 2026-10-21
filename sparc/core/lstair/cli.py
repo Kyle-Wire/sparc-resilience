@@ -92,6 +92,9 @@ def add_lstair_parser(subs) -> None:
     e.add_argument("--land-cover", choices=("worldcover", "nlcd"), default="worldcover",
                    help="canopy and impervious from WorldCover (registered) or NLCD tree canopy and percent impervious "
                         "(sensitivity; every scored city needs the NLCD columns)")
+    e.add_argument("--extra-features", default="", metavar="COL[,COL...]",
+                   help="table columns added to A and B as within-run anomalies (extension studies, e.g. the coast "
+                        "distance or JEPA embedding columns; every scored city needs them)")
     e.add_argument("--physics-transfer", choices=("median", "medoid"), default="median",
                    help="physics transfer: per-parameter medians (registered) or the medoid city's whole parameter "
                         "vector (sensitivity)")
@@ -263,6 +266,7 @@ def cmd_evaluate(args) -> int:
         s = _settings(args, weights=args.weights, same_node_km=None if args.node_link_any_distance else SAME_NODE_KM,
                       include_flagged=args.include_flagged, lst_mode=args.lst_mode, regional=args.regional,
                       land_cover=args.land_cover, physics_transfer=args.physics_transfer,
+                      extra_features=tuple(c.strip() for c in args.extra_features.split(",") if c.strip()),
                       within_city=not args.no_within_city)
         res = run_evaluation(args.data, args.out, s)
     except ValueError as exc:
