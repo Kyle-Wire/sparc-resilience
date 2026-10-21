@@ -1,0 +1,62 @@
+# QA registry of the cross-city LST pilot (sparc/core/lstair/exclusions.py reads it).
+#
+# Faults of single CAPA Heat Watch campaigns that no generic filter catches, each one found by the review of the
+# 31 built cities in the raw OSF files and confirmed by a second, skeptical reading of the same evidence.
+#
+#   slug         the city's slug (cities/<slug>/)
+#   kind         readings: drop one sensor's readings of one run (between from_local and until_local)
+#                run:      exclude the whole run by default (its qa_exclude says why)
+#   sensor       readings only: the sensor id as the reader parses it (vehicle_id, e.g. CAPA2037)
+#   date         the run's local date, YYYY-MM-DD, and
+#   window       its window (morning | midday | evening | night): the run id "<date> <window>" of meta.json
+#   from_local   readings only, optional: local clock HH:MM, readings at or after it
+#   until_local  readings only, optional: local clock HH:MM, readings before it
+#   reason       what is wrong, in a few words (it becomes the run's qa_exclude, or the build's note)
+#   evidence     one line: what the raw files show (a folded >- block reads as one line)
+#
+# Quote dates and times: YAML reads an unquoted 15:05 as the number 905.
+
+- slug: asheville_nc
+  kind: readings
+  sensor: CAPA2037
+  date: "2023-07-24"
+  window: midday
+  from_local: "15:05"
+  reason: "rain-cooled route (RH 40 -> 68%, -5.8 C)"
+  evidence: >-
+    CAPA2037 (east Asheville, ~35.61 N, -82.38 E) cools from 29.6 to 23.8 C while its RH rises from 40 to 68%
+    between 15:06 and 15:28 at constant elevation; the other 11 sensor files stay at RH 31-42%; its 756 af
+    cells (mean dTa -1.82 C) hold 46% of the run's sum of squares (af dTa SD 1.09 with them, 0.84 without)
+
+- slug: los_angeles_ca
+  kind: readings
+  sensor: CAPA47
+  date: "2019-09-15"
+  window: morning
+  until_local: "06:16"
+  reason: "sensor warm-up (flat 23.9-24.2 C over 7 km, then 18.4 C)"
+  evidence: >-
+    CAPA47 reads a flat 23.9-24.2 C from 06:04 to 06:15 over 7.3 km (Century City / Westwood) while the other
+    sensors read 18.6-20.1 C (p5-p95), then falls to 18.4 C by 06:18; its 156 am cells (mean dTa +4.59 C) held
+    14.9% of the am sum of squares
+
+- slug: los_angeles_ca
+  kind: readings
+  sensor: CAPA47
+  date: "2019-09-15"
+  window: evening
+  until_local: "19:11"
+  reason: "warm-up transient (27.0 -> 21.6 C)"
+  evidence: >-
+    CAPA47 starts at 27.0 C at 19:08 and falls to 21.6 C by 19:11 while its RH rises from 31 to 78% (the other
+    sensors read 20.6-23.1 C, p5-p95); 45 pm cells, 0.5% of the run's sum of squares
+
+- slug: fort_lauderdale_fl
+  kind: run
+  date: "2019-09-18"
+  window: morning
+  reason: "rain over 5 of 7 routes (51% of readings at RH >= 99%)"
+  evidence: >-
+    RH >= 99% for 51% of the run's readings: CAPA79 100%, CAPA69 95%, CAPA75 70%, CAPA76 57%, CAPA70 22% (CAPA67,
+    CAPA73 0%); CAPA75 jumps from 85 to 100% RH with a -1.7 C step at 06:15; the af and pm runs stay below 76 /
+    89% RH; r(dTa, impervious) -0.01, r(dTa, LST) -0.13

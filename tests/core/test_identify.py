@@ -428,3 +428,131 @@ def test_a_shapefile_clock_cut_to_datetim_is_read_as_the_local_datetime(tmp_path
     pts, report = scan_traverses(tmp_path, timezone="America/Denver")
     assert [r["status"] for r in report] == ["read"]
     assert pts["time"].iloc[0] == pd.Timestamp("2021-07-09 15:00:00") and pts["time"].notna().all()
+
+
+def test_a_row_index_id_column_does_not_hide_the_sensor_in_the_file_name(tmp_path):
+    """Asheville, Longmont, Salt Lake City and Sedona 2023: a row-index 'ID' (one value per row, rejected as an id)
+    next to the logger ``file`` names; the sensors are the vehicles, not one merged vehicle per run.  A real id
+    column (here ``car``) still wins over the file names."""
+    from sparc.core.identify.traverses import scan_traverses, sensor_ids
+
+    n = 300                                                       # > 200 rows: a row-unique ID is no id
+    t = pd.date_range("2023-07-24 15:00:00", periods=n, freq="1s")
+    df = pd.DataFrame({"ID": np.arange(n) * 10 + 9663, "datetime": t.strftime("%Y-%m-%d %H:%M:%S"),
+                       "lat": 35.58, "lon": -82.46 + 1e-5 * np.arange(n), "t_f": 84.0,
+                       "file": np.where(np.arange(n) % 3 == 0, "CAPA2037_240723_184625_0", "CAPA2033_240723_184612_0")})
+    df.to_csv(tmp_path / "af_trav.csv", index=False)
+    pts, report = scan_traverses(tmp_path)
+    assert [r["status"] for r in report] == ["read"] and len(pts) == n
+    assert sorted(pts["vehicle_id"].unique()) == ["CAPA2033", "CAPA2037"]
+    assert pts["vehicle_key"].nunique() == 2 and sorted(sensor_ids(pts).unique()) == ["CAPA2033", "CAPA2037"]
+    assert (pts.loc[pts["vehicle_id"] == "CAPA2037", "lon"].to_numpy() == df.loc[::3, "lon"].to_numpy()).all()
+
+    df.assign(car=np.where(np.arange(n) < n // 2, "A", "B")).to_csv(tmp_path / "af_trav.csv", index=False)
+    pts, _ = scan_traverses(tmp_path)
+    assert sorted(pts["vehicle_id"].unique()) == ["A", "B"]
+
+
+def _capa_cut_clock(utc: pd.DatetimeIndex, zone: str, sensors: list[str]) -> pd.DataFrame:
+    """A CAPA hasFix table whose dttm_lc / dttm_tc are cut to the minute (Houston 2020, Sacramento and Fort
+    Lauderdale 2019) while the GPS ``time`` (UTC HHMMSS.sss) has the seconds; the GPS ``date`` is corrupt."""
+    loc = utc.tz_localize("UTC").tz_convert(zone).tz_localize(None)
+    n = len(utc)
+    return pd.DataFrame({"hasFix": 1, "date": "180919M", "time": utc.strftime("%H%M%S.000"),
+                         "t_c": 26.0, "t_f": 78.8 + 0.01 * np.arange(n), "rh": 80.0,
+                         "file": [f"{sensors[i % len(sensors)]}_180919_225500.306_0.csv" for i in range(n)],
+                         "dttm_tc": utc.floor("min").strftime("%Y-%m-%d %H:%M:%S"),
+                         "dttm_lc": loc.floor("min").strftime("%Y-%m-%d %H:%M:%S"), "tz": zone,
+                         "lat": 26.12, "lon": -80.14 + 1e-5 * np.arange(n)})
+
+
+def test_a_minute_cut_capa_clock_gets_the_gps_seconds_across_utc_midnight(tmp_path):
+    """dttm_lc 19:59:00 for a reading at 19:59:40 EDT: the GPS 'time' gives the seconds.  The evening run crosses
+    UTC midnight (23:59 → 00:01 UTC) and the GPS 'date' is corrupt ('180919M'), so the date comes from dttm_tc.
+    Without a zone, or when dttm_tc and the GPS time disagree on the minute, the clock is left as published."""
+    from sparc.core.identify.traverses import scan_traverses
+
+    zone = "America/New_York"
+    utc = pd.date_range("2019-09-18 23:58:50", "2019-09-19 00:01:10", freq="1s")
+    true_local = utc.tz_localize("UTC").tz_convert(zone).tz_localize(None)
+    df = _capa_cut_clock(utc, zone, ["CAPA67", "CAPA69"])
+    df.to_csv(tmp_path / "pm_trav.csv", index=False)
+    pts, report = scan_traverses(tmp_path)
+    assert [r["status"] for r in report] == ["read"]
+    assert "cut to the minute" in report[0]["clock"] and zone in report[0]["clock"]
+    got = pts.sort_values("temp_f")["time"].to_numpy()
+    assert (got == true_local.to_numpy()).all()                   # every second, both sides of UTC midnight
+    assert set(pts["run"]) == {"2019-09-18 evening"} and set(pts["vehicle_id"]) == {"CAPA67", "CAPA69"}
+    assert pts["clock"].notna().all()                             # known clock: the build's UTC check leaves it
+
+    # only dttm_tc (no local clock): converted with the tz column, with the seconds
+    df.drop(columns="dttm_lc").to_csv(tmp_path / "pm_trav.csv", index=False)
+    pts, report = scan_traverses(tmp_path)
+    assert (pts.sort_values("temp_f")["time"].to_numpy() == true_local.to_numpy()).all()
+    assert "cut to the minute" in report[0]["clock"]
+
+    # dttm_tc rounded to the nearest minute, not cut: half the readings name another minute than the GPS time
+    bad = df.assign(dttm_tc=utc.round("min").strftime("%Y-%m-%d %H:%M:%S"))
+    bad.to_csv(tmp_path / "pm_trav.csv", index=False)
+    pts, report = scan_traverses(tmp_path)
+    assert (pts["time"].dt.second == 0).all() and "cut to the minute" not in str(report[0].get("clock"))
+
+    # no zone at all (no tz column, none given): the published local clock as it is
+    df.drop(columns="tz").to_csv(tmp_path / "pm_trav.csv", index=False)
+    pts, report = scan_traverses(tmp_path)
+    assert (pts["time"].dt.second == 0).all() and not report[0].get("clock")
+    assert set(pts["run"]) == {"2019-09-18 evening"}
+
+
+def test_a_1hz_logger_next_to_minute_cut_ones_keeps_its_own_clock(tmp_path):
+    """Burlington 2020 mixes loggers in one layer: CAPA1034's dttm_lc has the seconds, the others' are cut to the
+    minute.  Each logger file is judged on its own clock; the 1 Hz one is read as published."""
+    from sparc.core.identify.traverses import scan_traverses
+
+    zone = "America/New_York"
+    utc = pd.date_range("2020-08-10 23:00:05", periods=240, freq="1s")
+    cut = _capa_cut_clock(utc, zone, ["CAPA1029"])
+    hz = _capa_cut_clock(utc, zone, ["CAPA1034"]).assign(
+        dttm_tc=utc.strftime("%Y-%m-%d %H:%M:%S"),
+        dttm_lc=(utc - pd.Timedelta(hours=4)).strftime("%Y-%m-%d %H:%M:%S"),
+        time=(utc - pd.Timedelta(seconds=1)).strftime("%H%M%S.000"))  # a GPS clock 1 s behind: not used
+    pd.concat([cut, hz]).to_csv(tmp_path / "pm_trav.csv", index=False)
+    pts, report = scan_traverses(tmp_path)
+    true_local = (utc - pd.Timedelta(hours=4)).to_numpy()
+    for sensor in ("CAPA1029", "CAPA1034"):
+        got = pts.loc[pts["vehicle_id"] == sensor].sort_values("temp_f")["time"].to_numpy()
+        assert (got == true_local).all(), sensor
+    assert "240 of 480 readings" in report[0]["clock"]
+
+
+def test_exact_repeats_within_a_file_are_read_once_and_counted(tmp_path):
+    """Burlington 2020's pm layer holds CAPA1034's logger file twice (3,093 of its 6,074 readings repeat exactly);
+    a repeat counts with the copies of another file's readings.  Readings that share a time and a position but not
+    the temperature are both kept."""
+    from sparc.core.identify.traverses import scan_traverses
+
+    t = pd.date_range("2020-08-10 19:00:00", periods=20, freq="1s").strftime("%Y-%m-%d %H:%M:%S")
+    one = pd.DataFrame({"datetime": t, "lat": 44.48, "lon": -73.21 + 1e-4 * np.arange(20), "T_F": 75.0,
+                        "car": "CAPA1034"})
+    pd.concat([one, one.iloc[:8], one.iloc[[3]].assign(T_F=75.4)]).to_csv(tmp_path / "a_pm.csv", index=False)
+    one.iloc[10:].to_csv(tmp_path / "b_pm.csv", index=False)          # a later file repeating 10 readings
+    pts, report = scan_traverses(tmp_path)
+    by = {r["file"]: r for r in report}
+    assert len(pts) == 21 and by["a_pm.csv"]["duplicates"] == 8 and by["a_pm.csv"]["duplicates_in_file"] == 8
+    assert by["b_pm.csv"]["duplicates"] == 10 and "duplicates_in_file" not in by["b_pm.csv"]
+    assert sorted(pts.loc[pts["lon"] == one["lon"].iloc[3], "temp_f"]) == [75.0, 75.4]
+
+
+def test_non_vehicle_sensors_are_found_by_their_id():
+    """Sacramento 2019's 'Bicycle_CAPA56' rides the American River Parkway inside the car files; New Orleans 2020's
+    CAPABIKE1002 likewise.  The id is vehicle_id, else the vehicle key after its last ':' (the source file)."""
+    from sparc.core.identify.traverses import non_vehicle_sensors
+
+    pts = pd.DataFrame({
+        "vehicle_id": ["Bicycle_CAPA56_140819_215431_303_0", "CAPA20", "CAPABIKE1002", "Walk_3", "pedestrian1",
+                       "sidewalk_7", None, None],
+        "vehicle_key": ["x.shp:Bicycle_CAPA56_140819_215431_303_0", "x.shp:CAPA20", "x.shp:CAPABIKE1002",
+                        "x.shp:Walk_3", "x.shp:pedestrian1", "x.shp:sidewalk_7",
+                        "nola/bicycle_traverses_chw_neworleans.zip/pm_trav_norm.shp", "nola/cars.zip/pm_trav.shp"]})
+    assert non_vehicle_sensors(pts).tolist() == [True, False, True, True, True, False, True, False]
+    assert non_vehicle_sensors(pts.iloc[:0]).shape == (0,)

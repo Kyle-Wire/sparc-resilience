@@ -1,0 +1,1267 @@
+{
+ "Abingdon, VA": {
+  "node": "3xvmg",
+  "hint": "Abingdon",
+  "matched": [
+   "Abingdon"
+  ],
+  "kept": [
+   {
+    "path": "Abingdon/traverses_chw_abingdon_110121.zip",
+    "size": 1644330
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Abingdon/rasters_chw_abingdon_110121.zip"
+  ],
+  "kept_mb": 1.6
+ },
+ "Albuquerque, NM": {
+  "node": "np4q9",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_albuquerque_100421.zip",
+    "size": 2039705
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_albuquerque_101321.zip",
+   "Heat Watch Albuquerque_Report_111921.pdf"
+  ],
+  "kept_mb": 2.0
+ },
+ "Anchorage, AK": {
+  "node": "tdsy7",
+  "hint": "Anchorage",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Arlington, VA": {
+  "node": "3xvmg",
+  "hint": "Arlington",
+  "matched": [
+   "Arlington"
+  ],
+  "kept": [
+   {
+    "path": "Arlington/traverses_chw_arlington_102921.zip",
+    "size": 1026324
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Arlington/rasters_chw_arlington_102921.zip"
+  ],
+  "kept_mb": 1.0
+ },
+ "Asheville, NC": {
+  "node": "mtxy5",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_asheville_091123.zip",
+    "size": 3168312
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_asheville_091123.zip",
+   "Summary Report_Heat Watch Asheville_091423.pdf"
+  ],
+  "kept_mb": 3.2
+ },
+ "Atlanta, GA": {
+  "node": "r74h2",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_atlanta_112921.zip",
+    "size": 2609907
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 304
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_atlanta_112921.zip",
+   "Heat Watch Atlanta_Report_120621.pdf"
+  ],
+  "kept_mb": 2.6
+ },
+ "Austin, TX": {
+  "node": "h8cte",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 309
+   },
+   {
+    "path": "All Data_Heat Watch Austin_101420.zip",
+    "size": 89567218
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Summary Report_Heat Watch Austin_102020.pdf"
+  ],
+  "kept_mb": 89.6
+ },
+ "Baltimore, MD": {
+  "node": "tdsy7",
+  "hint": "Baltimore",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Boise, ID": {
+  "node": "tdsy7",
+  "hint": "Boise",
+  "matched": [
+   "Boise, ID"
+  ],
+  "kept": [
+   {
+    "path": "Boise, ID/Traverse Points (Boise, ID)/Traverse Points_Boise.zip",
+    "size": 2840074
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "Boise, ID/Surface Models (Boise, ID)/Area-wide_Boise.zip",
+   "Boise, ID/Final Report_Boise_121019.pdf"
+  ],
+  "kept_mb": 2.8
+ },
+ "Boston, MA": {
+  "node": "tdsy7",
+  "hint": "Boston",
+  "matched": [
+   "Boston, MA"
+  ],
+  "kept": [
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.cpg",
+    "size": 5
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_ev.shp",
+    "size": 567016
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_ev.shx",
+    "size": 162076
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.prj",
+    "size": 145
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.dbf",
+    "size": 3082603
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.shx",
+    "size": 136332
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_am.cpg",
+    "size": 9
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.shp",
+    "size": 476912
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_am.prj",
+    "size": 143
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_am.dbf",
+    "size": 4534366
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_am.shp",
+    "size": 561836
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_am.shx",
+    "size": 160596
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_ev.cpg",
+    "size": 9
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_ev.prj",
+    "size": 143
+   },
+   {
+    "path": "Boston, MA/Traverse Points (Boston, MA)/Boston_ev.dbf",
+    "size": 4576176
+   },
+   {
+    "path": "Boston, MA/READ ME_NOAA_Data.txt",
+    "size": 200
+   },
+   {
+    "path": "Boston, MA/All Data_Boston_Heat Watch 2019.zip",
+    "size": 72396055
+   }
+  ],
+  "n_skipped": 32,
+  "skipped_sample": [
+   "Boston, MA/Traverse Points (Boston, MA)/Boston_ev.sbn",
+   "Boston, MA/Traverse Points (Boston, MA)/Boston_ev.sbx",
+   "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.sbx",
+   "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.sbn",
+   "Boston, MA/Traverse Points (Boston, MA)/Boston_pm_revised.shp.xml",
+   "Boston, MA/Traverse Points (Boston, MA)/Boston_am.sbx",
+   "Boston, MA/Traverse Points (Boston, MA)/Boston_am.sbn",
+   "Boston, MA/Surface Models (Boston, MA)/Afternoon_Area-wide_Temperature_Boston.tfw",
+   "Boston, MA/Surface Models (Boston, MA)/Evening_Area-wide_HeatIndex_Boston.tfw",
+   "Boston, MA/Surface Models (Boston, MA)/Afternoon_Area-wide_Temperature_Boston.tif.aux.xml",
+   "Boston, MA/Surface Models (Boston, MA)/Evening_Area-wide_HeatIndex_Boston.tif.aux.xml",
+   "Boston, MA/Surface Models (Boston, MA)/Evening_Area-wide_Temperature_Boston.tfw",
+   "Boston, MA/Surface Models (Boston, MA)/Afternoon_Area-wide_Temperature_Boston.tif.ovr",
+   "Boston, MA/Surface Models (Boston, MA)/Evening_Area-wide_Temperature_Boston.tif.aux.xml",
+   "Boston, MA/Surface Models (Boston, MA)/Evening_Area-wide_HeatIndex_Boston.tif.ovr"
+  ],
+  "kept_mb": 86.7
+ },
+ "Boulder, CO": {
+  "node": "ek7r5",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_boulder_082222.zip",
+    "size": 454478
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_boulder_082222.zip",
+   "Summary Report_Heat Watch Boulder_090622.pdf"
+  ],
+  "kept_mb": 0.5
+ },
+ "Brockton, MA": {
+  "node": "rk75w",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_brockton_092823.zip",
+    "size": 571588
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_brockton_092823.zip",
+   "Summary Report_Heat Watch Brockton_101123.pdf"
+  ],
+  "kept_mb": 0.6
+ },
+ "Bronx, NY": {
+  "node": "j6eqr",
+  "hint": "Bronx",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Brooklyn, NY": {
+  "node": "c6xjv",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_brooklyn_092922.zip",
+    "size": 741716
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_brooklyn_092922.zip",
+   "Summary Report_Heat Watch Brooklyn_100422.pdf"
+  ],
+  "kept_mb": 0.7
+ },
+ "Burlington, VT": {
+  "node": "tezb9",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 309
+   },
+   {
+    "path": "All Data_Heat Watch Burlington_111820.zip",
+    "size": 54636187
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Summary Report_Heat Watch Burlington_111720.pdf"
+  ],
+  "kept_mb": 54.6
+ },
+ "Cedar Rapids, IA": {
+  "node": "rbd3q",
+  "hint": "Cedar Rapids",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Charleston, SC": {
+  "node": "b4tfy",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_charleston_111821.zip",
+    "size": 1883676
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 304
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_charleston_111821.zip",
+   "Heat Watch Charleston_Report_120221.pdf"
+  ],
+  "kept_mb": 1.9
+ },
+ "Charlotte, NC": {
+  "node": "86ume",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "ReadMeFileNotation.txt",
+    "size": 402
+   },
+   {
+    "path": "traverses_chw_charlotte_north_carolina_082324.zip",
+    "size": 1495680
+   }
+  ],
+  "n_skipped": 3,
+  "skipped_sample": [
+   "rasters_chw_charlotte_north_carolina_080624.zip",
+   "Summary Report_Heat Watch Charlotte NC_CAPA 112224.pdf",
+   "Espa\u00f1ol_Summary Report_Heat Watch Charlotte NC_CAPA 020625.pdf"
+  ],
+  "kept_mb": 1.5
+ },
+ "Chicago, IL": {
+  "node": "6d7p2",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_chicago_101623.zip",
+    "size": 2785979
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_chicago_101623.zip",
+   "Summary Report_Heat Watch Chicago_CAPA 122023.pdf"
+  ],
+  "kept_mb": 2.8
+ },
+ "Columbia, MO": {
+  "node": "ucmde",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_columbia mo_100422.zip",
+    "size": 576168
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "Summary Report_Heat Watch Columbia_100422.pdf",
+   "rasters_chw_columbia mo_100422.zip"
+  ],
+  "kept_mb": 0.6
+ },
+ "Columbia, SC": {
+  "node": "nqwyr",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_columbia_092222.zip",
+    "size": 1263256
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   },
+   {
+    "path": "stationary_chw columbia sc_052223.zip",
+    "size": 1177576
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_columbia_101722.zip",
+   "Summary Report_Heat Watch Columbia SC_111122.pdf"
+  ],
+  "kept_mb": 2.4
+ },
+ "Dallas, TX": {
+  "node": "tdsy7",
+  "hint": "Dallas",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Denver, CO": {
+  "node": "tdsy7",
+  "hint": "Denver",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "El Paso, TX": {
+  "node": "tdsy7",
+  "hint": "El Paso",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Elizabeth, NJ": {
+  "node": "6rwbg",
+  "hint": "Elizabeth",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Farmville, VA": {
+  "node": "3xvmg",
+  "hint": "Farmville",
+  "matched": [
+   "Farmville"
+  ],
+  "kept": [
+   {
+    "path": "Farmville/traverses_chw_farmville_110121.zip",
+    "size": 1534421
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Farmville/rasters_chw_farmville_110121.zip"
+  ],
+  "kept_mb": 1.5
+ },
+ "Fort Lauderdale, FL": {
+  "node": "tdsy7",
+  "hint": "Fort Lauderdale",
+  "matched": [
+   "Fort Lauderdale, FL"
+  ],
+  "kept": [
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/am_trav.prj",
+    "size": 145
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/af_trav.shp",
+    "size": 491388
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/am_trav.cpg",
+    "size": 5
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/af_trav.shx",
+    "size": 140468
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/pm_trav.cpg",
+    "size": 5
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/am_trav.shx",
+    "size": 166348
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/pm_trav.prj",
+    "size": 145
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/am_trav.shp",
+    "size": 581968
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/pm_trav.shp",
+    "size": 451348
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/pm_trav.shx",
+    "size": 129028
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/af_trav.cpg",
+    "size": 5
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/af_trav.prj",
+    "size": 145
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/am_trav.dbf",
+    "size": 31151649
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/pm_trav.dbf",
+    "size": 24158814
+   },
+   {
+    "path": "Fort Lauderdale, FL/Traverse Points (Fort Lauderdale, FL)/af_trav.dbf",
+    "size": 26302384
+   },
+   {
+    "path": "Fort Lauderdale, FL/READ ME_NOAA_Data.txt",
+    "size": 213
+   },
+   {
+    "path": "Fort Lauderdale, FL/All Data_Fort Lauderdale_Heat Watch 2019.zip",
+    "size": 25425756
+   }
+  ],
+  "n_skipped": 31,
+  "skipped_sample": [
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/af_t_f_ranger.tif.aux.xml",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_heat_index_f_ranger.tfw",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/af_t_f_ranger.tif.ovr",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_heat_index_f_ranger.tif.aux.xml",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/af_t_f_ranger.tif",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_t_f_ranger.tfw",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_t_f_ranger.tif.aux.xml",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_heat_index_f_ranger.tif.ovr",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/pm_heat_index_f_ranger.tfw",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_t_f_ranger.tif.ovr",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/pm_heat_index_f_ranger.tif.aux.xml",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/pm_t_f_ranger.tfw",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_heat_index_f_ranger.tif",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/pm_t_f_ranger.tif.aux.xml",
+   "Fort Lauderdale, FL/Surface Models (Fort Lauderdale, FL)/am_t_f_ranger.tif"
+  ],
+  "kept_mb": 109.0
+ },
+ "Houston, TX": {
+  "node": "yqh5u",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 309
+   },
+   {
+    "path": "All Data_Heat Watch Houston Harris County_112320.zip",
+    "size": 220863054
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Summary Report_Heat Watch Houston Harris County_112320.pdf"
+  ],
+  "kept_mb": 220.9
+ },
+ "Iowa City, IA": {
+  "node": "rbd3q",
+  "hint": "Iowa City",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Jackson, MS": {
+  "node": "tdsy7",
+  "hint": "Jackson",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Jacksonville, FL": {
+  "node": "xpuhk",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 304
+   },
+   {
+    "path": "traverses_chw_jacksonville_080122.zip",
+    "size": 2275727
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_jacksonville_072522.zip",
+   "Summary Report_Heat Watch Jacksonville_081222.pdf"
+  ],
+  "kept_mb": 2.3
+ },
+ "Jersey City, NJ": {
+  "node": "6rwbg",
+  "hint": "Jersey City",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Kansas City, KS": {
+  "node": "hxyrv",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_johnson_wyandotte_101523.zip",
+    "size": 4024461
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_johnson_wyandotte_101523.zip",
+   "Summary Report_Heat Watch Johnson & Wyandotte Counties_CAPA 112723.pdf"
+  ],
+  "kept_mb": 4.0
+ },
+ "Kansas City, MO": {
+  "node": "tdsy7",
+  "hint": "Kansas City",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Las Cruces, NM": {
+  "node": "zd5mb",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 309
+   },
+   {
+    "path": "All Data_CHW_LasCruces_091520.zip",
+    "size": 37858724
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Summary Report_Heat Watch Las Cruces_091520.pdf"
+  ],
+  "kept_mb": 37.9
+ },
+ "Las Vegas, NV": {
+  "node": "xsvjm",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw clark county_102422.zip",
+    "size": 2559476
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   },
+   {
+    "path": "stationary_chw clark county_052223.zip",
+    "size": 350277
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw clark county_102422.zip",
+   "Summary Report_Heat Watch Clark County_122022.pdf"
+  ],
+  "kept_mb": 2.9
+ },
+ "Longmont, CO": {
+  "node": "usp5x",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_longmont_091123.zip",
+    "size": 1028507
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_longmont_091123.zip",
+   "Summary Report_Heat Watch Longmont_091523.pdf"
+  ],
+  "kept_mb": 1.0
+ },
+ "Los Angeles, CA": {
+  "node": "tdsy7",
+  "hint": "Los Angeles",
+  "matched": [
+   "Los Angeles, CA"
+  ],
+  "kept": [
+   {
+    "path": "Los Angeles, CA/Traverse Points (Los Angeles, CA)/processed-traverse-north-los-angeles-california.zip",
+    "size": 3102865
+   },
+   {
+    "path": "Los Angeles, CA/Traverse Points (Los Angeles, CA)/processed-traverse-south-los-angeles-california.zip",
+    "size": 3769420
+   },
+   {
+    "path": "Los Angeles, CA/Read Me_File Notation.txt",
+    "size": 309
+   }
+  ],
+  "n_skipped": 3,
+  "skipped_sample": [
+   "Los Angeles, CA/Final Report_LosAngeles_041520.pdf",
+   "Los Angeles, CA/Surface Models (Los Angeles, CA)/surface models_north los angeles_california.zip",
+   "Los Angeles, CA/Surface Models (Los Angeles, CA)/surface models_south los angeles_california.zip"
+  ],
+  "kept_mb": 6.9
+ },
+ "Louisville, KY": {
+  "node": "tdsy7",
+  "hint": "Louisville",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Lynchburg, VA": {
+  "node": "3xvmg",
+  "hint": "Lynchburg",
+  "matched": [
+   "Lynchburg"
+  ],
+  "kept": [
+   {
+    "path": "Lynchburg/traverses_chw_lynchburg_110121.zip",
+    "size": 542999
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Lynchburg/rasters_chw_lynchburg_102621.zip"
+  ],
+  "kept_mb": 0.5
+ },
+ "Manhattan, NY": {
+  "node": "j6eqr",
+  "hint": "Manhattan",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Miami, FL": {
+  "node": "tdsy7",
+  "hint": "Miami",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Milwaukee, WI": {
+  "node": "khmnd",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_milwaukee_080622.zip",
+    "size": 948514
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 304
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_milwaukee_080622.zip",
+   "Summary Report_Heat Watch Milwaukee_090722.pdf"
+  ],
+  "kept_mb": 0.9
+ },
+ "New Orleans, LA": {
+  "node": "eau82",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 309
+   },
+   {
+    "path": "All Data_Heat Watch New Orleans_110420.zip",
+    "size": 50235443
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Summary Report_Heat Watch New Orleans_110520.pdf"
+  ],
+  "kept_mb": 50.2
+ },
+ "New York, NY": {
+  "node": "tdsy7",
+  "hint": "New York",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Newark, NJ": {
+  "node": "6rwbg",
+  "hint": "Newark",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Oklahoma City, OK": {
+  "node": "e6qfa",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Heat Results/traverses_chw_oklahoma_city_101623.zip",
+    "size": 4158545
+   },
+   {
+    "path": "Heat Results/Read Me_File Notation.txt",
+    "size": 363
+   },
+   {
+    "path": "Air Quality Results/mobile air quality data_bloomington in_capa 102124.zip",
+    "size": 7307789
+   }
+  ],
+  "n_skipped": 3,
+  "skipped_sample": [
+   "Heat Results/rasters_chw_oklahoma_city_101623.zip",
+   "Heat Results/Summary Report_Heat Watch Oklahoma City_CAPA 010224.pdf",
+   "Air Quality Results/Summary Report_OKC PM2-5 Study_CAPA 020824.pdf"
+  ],
+  "kept_mb": 11.5
+ },
+ "Omaha, NE": {
+  "node": "z7xw5",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_omaha_092022.zip",
+    "size": 706459
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_omaha_092022.zip",
+   "Summary Report_Heat Watch Omaha_100622.pdf"
+  ],
+  "kept_mb": 0.7
+ },
+ "Petersburg, VA": {
+  "node": "3xvmg",
+  "hint": "Petersburg",
+  "matched": [
+   "Petersburg"
+  ],
+  "kept": [
+   {
+    "path": "Petersburg/traverses_chw_petersburg_102921.zip",
+    "size": 737290
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Petersburg/rasters_chw_petersburg_102921.zip"
+  ],
+  "kept_mb": 0.7
+ },
+ "Philadelphia, PA": {
+  "node": "3xts6",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_philadelphia_092122.zip",
+    "size": 678358
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_philadelphia_092122.zip",
+   "Summary Report_Heat Watch Philadelphia_103122.pdf"
+  ],
+  "kept_mb": 0.7
+ },
+ "Portland, OR": {
+  "node": "e7js9",
+  "hint": null,
+  "error": "HTTPError: HTTP Error 401: Unauthorized"
+ },
+ "Providence, RI": {
+  "node": "wu9v7",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 309
+   },
+   {
+    "path": "All Data_Heat Watch RI_100620.zip",
+    "size": 38297340
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "Appendix Data_Heat Watch RI_100620.zip",
+   "Summary Report_Heat Watch Rhode Island_100820.pdf"
+  ],
+  "kept_mb": 38.3
+ },
+ "Raleigh, NC": {
+  "node": "rwjnx",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_raleigh-durham_110821.zip",
+    "size": 2906639
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 304
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_raleigh-durham_110821.zip",
+   "Heat Watch Raleigh Durham_Report_112221.pdf"
+  ],
+  "kept_mb": 2.9
+ },
+ "Richmond, VA": {
+  "node": "3xvmg",
+  "hint": "Richmond",
+  "matched": [
+   "Richmond"
+  ],
+  "kept": [
+   {
+    "path": "Richmond/traverses_chw_richmond va_110121.zip",
+    "size": 2675302
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Richmond/rasters_chw_richmond va_110121.zip"
+  ],
+  "kept_mb": 2.7
+ },
+ "Sacramento, CA": {
+  "node": "tdsy7",
+  "hint": "Sacramento",
+  "matched": [
+   "Sacramento (CA)"
+  ],
+  "kept": [
+   {
+    "path": "Sacramento (CA)/Traverse Points (Sacramento, CA)/TraversePoints_Sacramento.zip",
+    "size": 4253252
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "Sacramento (CA)/Surface Models (Sacramento, CA)/Area-wide_Sacramento.zip",
+   "Sacramento (CA)/Final Report_Sacramento_101319.pdf"
+  ],
+  "kept_mb": 4.3
+ },
+ "Salem, VA": {
+  "node": "3xvmg",
+  "hint": "Salem",
+  "matched": [
+   "Salem"
+  ],
+  "kept": [
+   {
+    "path": "Salem/traverses_chw_salem_102921.zip",
+    "size": 741381
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Salem/rasters_chw_salem_102921.zip"
+  ],
+  "kept_mb": 0.7
+ },
+ "Salt Lake City, UT": {
+  "node": "7k2u9",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_salt_lake_city_091923.zip",
+    "size": 1838841
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_salt_lake_city_091923.zip",
+   "Summary Report_Heat Watch Salt Lake City_092023.pdf"
+  ],
+  "kept_mb": 1.8
+ },
+ "San Bernardino, CA": {
+  "node": "tdsy7",
+  "hint": "San Bernardino",
+  "matched": [
+   "San Bernardino (CA)"
+  ],
+  "kept": [
+   {
+    "path": "San Bernardino (CA)/Traverse Points (San Bernardino, CA)/TraversePoints_SanBernardino.zip",
+    "size": 2361337
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "San Bernardino (CA)/Surface Models (San Bernardino, CA)/Area-wide_SanBernardino.zip",
+   "San Bernardino (CA)/Final Report_SanBernardino_041520.pdf"
+  ],
+  "kept_mb": 2.4
+ },
+ "San Diego, CA": {
+  "node": "m9g6t",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_san diego_120721.zip",
+    "size": 3061284
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 304
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_san diego_120721.zip",
+   "Heat Watch San Diego_Report_120921.pdf"
+  ],
+  "kept_mb": 3.1
+ },
+ "San Francisco, CA": {
+  "node": "ktr56",
+  "hint": "San Francisco",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Scranton, PA": {
+  "node": "8cnq4",
+  "hint": "Scranton",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Seattle, WA": {
+  "node": "mz79p",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 309
+   },
+   {
+    "path": "All Data_CHW_Seattle KingCounty_093020.zip",
+    "size": 318285637
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "rasters_chw_seattle king county_120120.zip",
+   "Summary Report_Heat Watch Seattle King County_022321.pdf"
+  ],
+  "kept_mb": 318.3
+ },
+ "Sedona, AZ": {
+  "node": "e5q7h",
+  "hint": null,
+  "matched": null,
+  "kept": [
+   {
+    "path": "traverses_chw_sedona_081523.zip",
+    "size": 565955
+   },
+   {
+    "path": "Read Me_File Notation.txt",
+    "size": 363
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "Summary Report_Heat Watch Sedona_090823.pdf",
+   "rasters_chw_sedona_091123.zip"
+  ],
+  "kept_mb": 0.6
+ },
+ "Victorville, CA": {
+  "node": "tdsy7",
+  "hint": "Victorville",
+  "matched": [
+   "Victorville, CA"
+  ],
+  "kept": [
+   {
+    "path": "Victorville, CA/Traverse Points (Victorville, CA)/TraversePoints_Victorville.zip",
+    "size": 1729406
+   }
+  ],
+  "n_skipped": 2,
+  "skipped_sample": [
+   "Victorville, CA/Surface Models (Victorville, CA)/Area-wide_Victorville.zip",
+   "Victorville, CA/Final Report_Victorville_041320.pdf"
+  ],
+  "kept_mb": 1.7
+ },
+ "Virginia Beach, VA": {
+  "node": "3xvmg",
+  "hint": "Virginia Beach",
+  "matched": [
+   "Virginia Beach"
+  ],
+  "kept": [
+   {
+    "path": "Virginia Beach/traverses_chw_virginia beach_1029121.zip",
+    "size": 1972174
+   }
+  ],
+  "n_skipped": 1,
+  "skipped_sample": [
+   "Virginia Beach/rasters_chw_virginia beach_102921.zip"
+  ],
+  "kept_mb": 2.0
+ },
+ "Wilkes-Barre, PA": {
+  "node": "8cnq4",
+  "hint": "Wilkes-Barre",
+  "matched": null,
+  "kept": [],
+  "n_skipped": 0,
+  "skipped_sample": [],
+  "kept_mb": 0.0
+ },
+ "Wilmington, DE": {
+  "node": "yef5w",
+  "hint": null,
+  "error": "HTTPError: HTTP Error 401: Unauthorized"
+ }
+}

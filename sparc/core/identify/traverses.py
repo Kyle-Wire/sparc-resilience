@@ -12,7 +12,8 @@ day it belongs to and which continuous pass.
   ``timestamp``, ``date`` + ``time``, …), position (``lat``/``lon``, or the geometry of a point layer in
   any coordinate system), temperature in °F (``T_F``, ``temp_f``, ``TempF``, …) or °C (converted).
 * A **vehicle** is the value of an id column when the file has one (``car``, ``vehicle``, ``route``,
-  ``sensor``, ``trip``, ``device``, ``id``), otherwise the source file.
+  ``sensor``, ``trip``, ``device``, ``id``; a CAPA table's sensor id is taken from its logger ``file`` names),
+  otherwise the source file.
 * A **run** (window) is a cluster of readings with no gap longer than ``run_gap_h`` hours, named by its
   local clock time: morning, midday (afternoon), evening or night.  Heat Watch drives the same routes
   in each run, so the runs are what the kilometre-scale design compares.
@@ -53,6 +54,15 @@ _LOCAL_TIME = ("dttm_lc", "datetime_lc", "datetime_local", "local_datetime", "dt
 _UTC_TIME = ("dttm_tc", "datetime_utc", "utc_datetime", "dttm_utc")
 # clock columns under the names shapefile exports cut them to (Albuquerque 2021: "datetim", the local clock)
 _TRUNCATED_TIME = {"datetim": "datetime", "date_tim": "date_time", "timestam": "timestamp", "time_sta": "time_stamp"}
+#: A logger file's clock is cut to the minute when more than this share of its readings fall on second 0 (Houston
+#: 2020: 94-100% per layer, Sacramento and Fort Lauderdale 2019: 99.9-100%, while a 1 Hz clock puts ~1.7% there)
+MINUTE_CLOCK_SHARE = 0.9
+#: ... and its GPS ``time`` (UTC HHMMSS) supplies the seconds only when it names the same minute as the cut clock for
+#: at least this share of the file's readings (100% in those cities); otherwise the clock is left as published
+CLOCK_AGREE_SHARE = 0.95
+#: Sensor ids of loggers carried by bicycle or on foot, not by a car, found inside the car files (Sacramento 2019:
+#: ``Bicycle_CAPA56``; New Orleans 2020: ``CAPABIKE1002``)
+NON_VEHICLE = re.compile(r"bicycle|bike|\bwalk|pedestrian", re.IGNORECASE)
 
 
 # --------------------------------------------------------------------------- #
@@ -108,6 +118,50 @@ def _file_zone(df: pd.DataFrame, norm: dict) -> str | None:
         return None
 
 
+def _gps_seconds(df: pd.DataFrame, norm: dict, utc: str | None, local: str | None, zone: str | None
+                 ) -> tuple[pd.Series, int] | None:
+    """The clock of a CAPA table at the GPS clock's second resolution, when the published clock is cut to the
+    minute: (local wall-clock times of every row, readings that got their seconds), or None to leave it alone.
+
+    Houston 2020, Sacramento and Fort Lauderdale 2019 (and New Orleans, Victorville) publish ``dttm_lc`` /
+    ``dttm_tc`` on whole minutes (time 004140.000 → dttm_lc 19:41:00) while the GPS ``time`` field (UTC
+    ``HHMMSS[.sss]``) has the seconds; passes then break at every minute (a 60 s gap > ``gap_s``).  For each logger
+    file (its ``file`` value; Burlington 2020 mixes cut and 1 Hz loggers in one layer) whose clock (``local``, else
+    ``utc``) is cut (:data:`MINUTE_CLOCK_SHARE`), a reading's UTC time becomes ``dttm_tc`` floored to the minute
+    plus the seconds of ``time`` where ``dttm_tc``'s HH:MM is ``time``'s HHMM and, with a local clock, the result
+    converted to ``zone`` falls in that clock's minute (the zone fits it); a file where that holds for fewer than
+    :data:`CLOCK_AGREE_SHARE` of its readings keeps its clock.  The GPS ``date`` field is never used: it holds
+    corrupt values ('180919M') and an evening run crosses UTC midnight, which ``dttm_tc``'s own date carries."""
+    if utc is None or "time" not in norm or not zone:
+        return None
+    tc = pd.to_datetime(df[utc], errors="coerce", utc=True)
+    clock = tc
+    if local is not None:
+        clock = pd.to_datetime(df[local], errors="coerce")
+        if getattr(clock.dt, "tz", None) is not None:
+            clock = clock.dt.tz_convert(zone).dt.tz_localize(None)
+    v = pd.to_numeric(df[norm["time"]], errors="coerce")
+    hhmm = np.floor(v) // 100
+    sec = v - hhmm * 100                                          # the GPS seconds (fraction kept)
+    good = (v >= 0) & (hhmm // 100 < 24) & (hhmm % 100 < 60) & (sec < 60)
+    agree = good & (tc.dt.hour * 100 + tc.dt.minute == hhmm)
+    utc_s = tc.dt.floor("min") + pd.to_timedelta(sec.where(agree, 0.0), unit="s")
+    loc = utc_s.dt.tz_convert(zone).dt.tz_localize(None)
+    if local is not None:
+        agree &= loc.dt.floor("min") == clock.dt.floor("min")
+    key = df[norm["file"]].astype(str).to_numpy() if "file" in norm else np.zeros(len(df))
+    g = pd.DataFrame({"cut": (clock.dt.second == 0).where(clock.notna()).astype(float).to_numpy(),
+                      "gps_cut": (np.floor(sec) == 0).where(good).astype(float).to_numpy(),
+                      "agree": agree.to_numpy(float)}).groupby(key)
+    share = {c: g[c].transform("mean").to_numpy() for c in ("cut", "gps_cut", "agree")}
+    use = (agree.to_numpy() & (share["cut"] > MINUTE_CLOCK_SHARE) & (share["gps_cut"] < 1.0 - MINUTE_CLOCK_SHARE)
+           & (share["agree"] >= CLOCK_AGREE_SHARE))
+    if not use.any():
+        return None
+    base = clock if local is not None else tc.dt.tz_convert(zone).dt.tz_localize(None)
+    return base.where(~use, loc), int(use.sum())
+
+
 def _window_hint_2019(name: str) -> str | None:
     """Run names of the 2019 NIHHIS traverse files (``AM_…``, ``PM_…``, ``Eve_…``; ``Boston_am``, ``Boston_pm…``,
     ``Boston_ev``): PM there is the 15–16 h afternoon run and Eve/ev the 19–20 h evening one."""
@@ -122,7 +176,8 @@ def _standardise(df: pd.DataFrame, timezone: str | None = None, campaign_date: s
     """Temperature columns under a name the CAPA parser knows (``temp_f`` / ``temp_c``), and lat/lon
     from a point geometry (reprojected to WGS-84) in place of projected x/y columns.  A table whose only clock
     is the 2019 NIHHIS ``time_n`` (UTC ``HHMMSS``, no date) gets a local ``datetime`` when the campaign's local
-    date and time zone are known (:func:`utc_hms_to_local`); ``attrs["clock"]`` says which clock was used."""
+    date and time zone are known (:func:`utc_hms_to_local`); a CAPA clock cut to the minute gets the GPS clock's
+    seconds (:func:`_gps_seconds`); ``attrs["clock"]`` says which clock was used."""
     have = {_norm(c): c for c in df.columns}
     cut = {have[k]: v for k, v in _TRUNCATED_TIME.items() if k in have and v not in have}
     if cut:
@@ -136,24 +191,34 @@ def _standardise(df: pd.DataFrame, timezone: str | None = None, campaign_date: s
             ren[c] = "temp_c"
     norm = {_norm(c): c for c in df.columns}
     local = next((norm[n] for n in _LOCAL_TIME if n in norm), None)
+    utc = next((norm[n] for n in _UTC_TIME if n in norm), None)
+    clock = None
     if local is not None:
+        zone = _file_zone(df, norm) or timezone
+        sec = _gps_seconds(df, norm, utc, local, zone)
+        if sec is not None:                                       # a clock cut to the minute gets the GPS seconds
+            df = df.assign(**{local: sec[0].to_numpy()})
+            clock = (f"{local} cut to the minute: {utc} (UTC) + the seconds of {norm['time']} (GPS HHMMSS), "
+                     f"converted to {zone}, for {sec[1]:,} of {len(df):,} readings")
         ren[local] = "datetime"
         for n in ("datetime", "date_time", "timestamp", "time_stamp", "time", "date"):
             if n in norm and norm[n] != local:
                 ren[norm[n]] = f"gps_{n}"                 # the UTC GPS clock: kept, not used as the time
-    clock = None
     if local is None and not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp", "local_time",
                                                      "time_local")):
-        utc = next((norm[n] for n in _UTC_TIME if n in norm), None)
         if utc is not None:
             # the GPS clock in UTC is the only time: convert it with the file's own zone (CAPA tables carry a
             # ``tz`` column, e.g. America/New_York) or the caller's; without either it is read as recorded
             zone = _file_zone(df, norm) or timezone
             if zone:
-                t = pd.to_datetime(df[utc], errors="coerce", utc=True).dt.tz_convert(zone).dt.tz_localize(None)
+                sec = _gps_seconds(df, norm, utc, None, zone)
+                t = (pd.to_datetime(df[utc], errors="coerce", utc=True).dt.tz_convert(zone).dt.tz_localize(None)
+                     if sec is None else sec[0])
                 df = df.assign(datetime=t.dt.strftime("%Y-%m-%d %H:%M:%S").to_numpy())
                 ren[utc] = f"gps_{_norm(utc)}"
-                clock = f"{utc} (UTC) converted to {zone}"
+                clock = f"{utc} (UTC) converted to {zone}" + ("" if sec is None else (
+                    f"; cut to the minute: + the seconds of {norm['time']} (GPS HHMMSS) for {sec[1]:,} of "
+                    f"{len(df):,} readings"))
             else:
                 ren[utc] = "datetime"
     if "time_n" in norm and not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp",
@@ -165,8 +230,11 @@ def _standardise(df: pd.DataFrame, timezone: str | None = None, campaign_date: s
             clock = f"time_n (UTC HHMMSS) on the local date {campaign_date} in {timezone}"
         else:
             clock = "time_n (UTC HHMMSS, no date): no timestamps without the campaign date and time zone"
-    if "file" in norm and not any(n in norm for n in ID_COLUMNS):
-        # one logger file per sensor and run: the sensor id (e.g. CAPA1061) is the vehicle
+    if "file" in norm and _id_column(df) is None:
+        # one logger file per sensor and run: the sensor id (e.g. CAPA1061) is the vehicle.  An id column that
+        # :func:`_id_column` rejects does not hide it: the 2023 tables of Asheville, Longmont, Salt Lake City and
+        # Sedona carry a row-index 'ID' (17,675 values in Asheville's 17,675 af rows), which merged 6-12 sensors
+        # into one vehicle per run
         sensor = df[norm["file"]].astype(str).str.extract(r"^([A-Za-z]+\d+)", expand=False)
         df = df.assign(sensor=sensor.fillna(df[norm["file"]].astype(str)))
     out = df.rename(columns=ren)
@@ -278,7 +346,10 @@ def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | 
     afternoon and evening traverses in its main archive and again in an appendix archive).  A time-stamped
     reading of a vehicle id at a position (5 decimals of a degree, ~1 m) that an earlier file already holds is
     dropped, the first copy (in path order) kept; without an id column the key is the time and the position.
-    Each file's report entry gets ``duplicates``, the number of its readings dropped."""
+    Within one file, an exact repeat of a reading (vehicle id, time, position and temperature) is dropped too
+    (Burlington 2020's pm layer holds CAPA1034's logger file twice: 3,093 of its 6,074 readings).  Each file's
+    report entry gets ``duplicates``, the number of its readings dropped (both kinds), and
+    ``duplicates_in_file``, those repeated within the file."""
     p = Path(path)
     if not p.exists():
         raise FileNotFoundError(f"{p} does not exist")
@@ -323,24 +394,34 @@ def scan_traverses(path: str | Path, timezone: str | None = None, utc_to: str | 
 
 
 def _drop_duplicates(pts: pd.DataFrame, report: list[dict]) -> pd.DataFrame:
-    """The readings without the copies of an earlier file's readings (see :func:`scan_traverses`)."""
+    """The readings without the copies of an earlier file's readings and without exact repeats within a file
+    (see :func:`scan_traverses`)."""
     have = pts["time"].notna().to_numpy()
-    if not have.any() or pts["source_file"].nunique() < 2:
+    if not have.any():
         return pts
     vid = pts["vehicle_id"] if "vehicle_id" in pts else pd.Series(None, index=pts.index)
     key = pd.DataFrame({"v": vid.astype(object).where(vid.notna(), ""), "t": pts["time"],
                         "la": pts["lat"].round(5), "lo": pts["lon"].round(5)})
     src = pts["source_file"].astype(str)
-    first = src.groupby([key["v"], key["t"], key["la"], key["lo"]], sort=False, dropna=False).transform("first")
-    dup = (key.duplicated(keep="first") & (src != first)).to_numpy() & have          # copies in another file only
-    if not dup.any():
+    dup = np.zeros(len(pts), dtype=bool)
+    if src.nunique() > 1:
+        first = src.groupby([key["v"], key["t"], key["la"], key["lo"]], sort=False, dropna=False).transform("first")
+        dup = (key.duplicated(keep="first") & (src != first)).to_numpy() & have      # copies in another file
+    same = pd.DataFrame({"s": src, "v": key["v"], "t": pts["time"], "la": pts["lat"], "lo": pts["lon"],
+                         "f": pts["temp_f"]}).duplicated(keep="first").to_numpy() & have & ~dup
+    drop = dup | same
+    if not drop.any():
         return pts
-    counts = pts.loc[dup, "source_file"].value_counts()
+    counts = pts.loc[drop, "source_file"].value_counts()
+    within = pts.loc[same, "source_file"].value_counts()
     for r in report:
         if r.get("status") == "read" and r["file"] in counts.index:
             r["duplicates"] = int(counts[r["file"]])
-    log.info("traverses: dropped %d readings that repeat an earlier file's", int(dup.sum()))
-    return pts.loc[~dup].reset_index(drop=True)
+            if r["file"] in within.index:
+                r["duplicates_in_file"] = int(within[r["file"]])
+    log.info("traverses: dropped %d readings that repeat an earlier file's and %d exact repeats within a file",
+             int(dup.sum()), int(same.sum()))
+    return pts.loc[~drop].reset_index(drop=True)
 
 
 def read_traverses(path: str | Path, timezone: str | None = None, utc_to: str | None = None) -> pd.DataFrame:
@@ -351,6 +432,26 @@ def read_traverses(path: str | Path, timezone: str | None = None, utc_to: str | 
         skipped = "; ".join(f"{r['file']}: {r.get('reason')}" for r in report[:8])
         raise ValueError(f"no traverse points found under {path}" + (f" (skipped {skipped})" if skipped else ""))
     return pts
+
+
+def sensor_ids(points: pd.DataFrame) -> pd.Series:
+    """Each reading's sensor id as parsed: ``vehicle_id`` (the id column's value, or the sensor taken from a CAPA
+    ``file`` name), else the part of ``vehicle_key`` after its last ':' (the source file when there is no id)."""
+    key = points["vehicle_key"].astype(str).str.rsplit(":", n=1).str[-1]
+    if "vehicle_id" not in points:
+        return key
+    vid = points["vehicle_id"]
+    return vid.astype(object).where(vid.notna(), key).astype(str)
+
+
+def non_vehicle_sensors(points: pd.DataFrame) -> np.ndarray:
+    """True for the readings of a sensor carried by bicycle or on foot (:data:`NON_VEHICLE` matches its id,
+    :func:`sensor_ids`).  Sacramento 2019's ``Bicycle_CAPA56`` rides the American River Parkway inside the car
+    files: 680-760 cells per run that the cars never share, median canopy 72% against 0-6%, and 98% of the pm
+    cells with |dTa| > 5 °C.  Not applied here: the dataset build drops them and says so."""
+    if not len(points):
+        return np.zeros(0, dtype=bool)
+    return sensor_ids(points).str.contains(NON_VEHICLE, regex=True, na=False).to_numpy(bool)
 
 
 def _window_name(hour: float) -> str:
@@ -824,4 +925,5 @@ def estimate_markdown(res: dict) -> str:
 
 
 __all__ = ["scan_traverses", "inspect_markdown", "run_winds", "read_traverses", "lonlat_to_grid", "grid_to_lonlat",
-           "snap", "to_campaign", "campaign_csv", "estimate", "headline", "estimate_markdown", "WINDOWS"]
+           "snap", "to_campaign", "campaign_csv", "estimate", "headline", "estimate_markdown", "WINDOWS",
+           "sensor_ids", "non_vehicle_sensors"]

@@ -1,0 +1,1163 @@
+{
+ "reviews": [
+  {
+   "review": {
+    "cities": [
+     {
+      "slug": "abingdon_va",
+      "verdict": "exclude_city",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "5. LST",
+        "severity": "blocker",
+        "evidence": "There is no LST. No Landsat scene within \u00b116 days is at least 50% clear over the traverses. Candidates: 2021-07-21 row 34 clear 0.38, row 35 0.19; 2021-07-05 0.29 / 0.25. LST NaN share is 1.0. evaluate.py scores A and B only on cells that have LST (ok = ok_a & has_lst), and physics_inputs refuses C below 20% LST cover, so the city can only enter C0.",
+        "proposed_action": "Drop the city from the cross-city test, including C0, so that C and C0 are compared on the same cities. Rebuilding with a wider LST window is not advised: the nearest scenes are already 6-10 days away and still cloudy."
+       },
+       {
+        "check": "8. measurement platform",
+        "severity": "major",
+        "evidence": "This is a pedestrian campaign, not the car-mounted protocol. The raw kmph median is 4.4-4.7 km/h in every run, at 1 Hz sampling: median step 1.4 m against about 10 m in the vehicle cities. 8-10 'B'-suffixed sensors cover only 1,135-1,280 cells per run over a 6.5 x 3.5 km area (36.695-36.727 N, -82.009 to -81.936 E, the town of Abingdon). A slow-moving shield in afternoon sun (SW 797 W/m2) is ventilated differently from one on a car at 30-50 km/h, and sidewalks and paths are not street centrelines.",
+        "proposed_action": "Even if a scene became available, do not pool this city with the vehicle campaigns without a platform flag."
+       },
+       {
+        "check": "3. drift",
+        "severity": "note",
+        "evidence": "af and pm fall back to protocol drift (-0.51 and -0.20 \u00b0C/h; only 12-13 cells revisited \u226515 min apart). The target differs little from the undetrended one: RMS 0.14 / 0.06 \u00b0C, r 0.989 / 0.999. am uses fe (+0.07 \u00b0C/h) with offsets of at most 0.45 \u00b0C (RMS 0.20 \u00b0C against no offsets).",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "asheville_nc",
+      "verdict": "exclude_runs",
+      "runs_to_exclude": [
+       "2023-07-24 midday"
+      ],
+      "issues": [
+       {
+        "check": "4. target spread (rain-cooled route)",
+        "severity": "major",
+        "evidence": "In af, one sensor's route was rained on. CAPA2037 (east Asheville, about 35.61 N, -82.38 E) cooled from 29.6 to 23.8 \u00b0C while its RH rose from 40% to 68%, between 15:06 and 15:28 at constant elevation. Its cells average 687 m against 636-684 m on the other routes, with similar impervious cover (32% against 12-59%). The route ends at 15:36; the others end at about 15:56-15:59. The other 11 sensor files show RH 31-42%. Those 756 cells are 9.2% of af cells with mean dTa -1.82 \u00b0C and hold 46% of the run's sum of squares. af dTa SD is 1.087 with them and 0.836 without; skew -1.10, kurtosis 3.1, min -5.27.",
+        "proposed_action": "Exclude the af run. Alternatively rebuild after dropping CAPA2037's af readings from 15:05 on, which needs the sensor-ID fix below. am and pm are clean: SD 0.64 / 1.18, r(dTa, LST) 0.29 / 0.67."
+       },
+       {
+        "check": "7/3. vehicles not identified",
+        "severity": "minor",
+        "evidence": "The 2023 tables have a row-index 'ID' column that is unique per row (17,675 values in 17,675 af rows). Because 'id' is in ID_COLUMNS, _standardise skips parsing the sensor from 'file'. As a result, 10-12 CAPA20xx sensor files per run collapse into one vehicle (QA vehicles=1). Readings of different cars interleave, so 'revisits' are inflated: 7,690 of 9,872 am cells, against 18 / 3 / 1 revisited \u226515 min apart, which forces protocol drift. That drift is small (-0.05, +0.05, -0.13 \u00b0C/h), so the target is barely affected. The real cost is that per-sensor QA such as the rain cut above is impossible.",
+        "proposed_action": "Fix the sensor parsing and rebuild.",
+        "code_fix": "sparc/core/identify/traverses.py _standardise: replace `if \"file\" in norm and not any(n in norm for n in ID_COLUMNS):` with `if \"file\" in norm and _id_column(df) is None:` so that a row-unique 'ID' (rejected by _id_column's nunique <= max(200, len/50) test) no longer blocks the sensor id taken from 'file'."
+       },
+       {
+        "check": "5/6. LST and features",
+        "severity": "note",
+        "evidence": "LST is from LC08 2023-07-27 (+3 d), clear 0.971, NaN on 2-4% of driven cells, p5-p95 33.2-45.8 \u00b0C, r(LST, impervious) 0.62-0.63. Only one Sentinel-2 scene (\u226420% cloud) fed NDVI and albedo. Feature NaN share is 0. Location 35.43-35.67 N, -82.69 to -82.32 E is Asheville / Buncombe County.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "boise_id",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "2. clock",
+        "severity": "note",
+        "evidence": "The time_n UTC clock is dated 2019-08-14 from the report (known). Runs span exactly 06-07, 15-16 and 19-20 MDT. The background minus ERA5 is consistent across runs (-1.36, -0.98, -0.93 \u00b0C), as is SW-down (0.4, 827, 179 W/m2), so there is no time-zone error.",
+        "proposed_action": "None."
+       },
+       {
+        "check": "3. drift",
+        "severity": "note",
+        "evidence": "pm fe drift is -2.73 \u00b0C/h (SE 0.03, 67 spread cells) against protocol -1.92. Raw 10-minute medians fall from 33.1 to 31.4 \u00b0C over the hour, which is plausible semi-arid evening cooling about 1.5 h before sunset. am is +0.98 \u00b0C/h around sunrise at 06:48. The files carry no sensor id, so there is one 'vehicle' per area (Boise, Nampa), unlinked, with offsets 0.",
+        "proposed_action": "None."
+       },
+       {
+        "check": "4. target spread",
+        "severity": "note",
+        "evidence": "am is bimodal: peaks at -0.4 and +2.6 \u00b0C, SD 1.56, 6.1% of cells with |dTa| > 3. The warm mode is downtown / the bench, where readings exceed the run median by more than 2 \u00b0C (r(dTa, elev) +0.33, r(dTa, imp300) +0.42). That is a dawn inversion plus urban heat island, genuine physics. The grid spans Boise and Nampa (45 x 28 km, -116.60 to -116.10 E); the Nampa share of readings is about 11%.",
+        "proposed_action": "Keep."
+       },
+       {
+        "check": "5. LST",
+        "severity": "note",
+        "evidence": "LST is from 2019-08-18 (+4 d), clear 0.999, NaN 0, p5-p95 37-46 \u00b0C, r(LST, impervious) 0.36. r(dTa, LST) is 0.43 / 0.22 / 0.49.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "charleston_sc",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "5. LST cloud cover and cloud-edge contamination",
+        "severity": "major",
+        "evidence": "No scene in the window is at least 80% clear, so the fallback chose LC08 2021-07-23 (-8 d) at 0.609 clear; 2021-08-08 is 0.216. LST is NaN on 39-41% of driven cells per run, in scattered cloud blobs covering 35% of the grid. Clear cells near the mask are biased cool. After regressing out land cover, the LST residual of driven cells is -1.71 \u00b0C at 0-60 m from masked pixels, -0.73 at 60-120 m and -0.41 at 120-240 m, against +1.04 / +1.10 at 0.5-2 km. r(dTa, LST) is 0.39-0.58 within 150 m against 0.53-0.67 beyond 300 m, and 728-1,107 LST cells per run lie within 150 m. B is therefore scored on a cloud-selected 59% of cells, with a degraded predictor near the edges.",
+        "proposed_action": "Buffer the QA cloud mask by about 300 m and rebuild LST, then keep the city on the remaining cells. Do not exclude it: r(dTa, LST) stays 0.52-0.62.",
+        "code_fix": "sparc/data/collect/landsat.py campaign_lst: after `bad = qa_mask(qa_t, qa_bits)`, keep the undilated mask for clear_fraction but mask LST with `bad_lst = scipy.ndimage.binary_dilation(bad, iterations=10)` (10 x 30 m = 300 m) and use `k_t[bad_lst] = np.nan`; record the buffer in the result."
+       },
+       {
+        "check": "2/4. weather (evening run after a storm)",
+        "severity": "minor",
+        "evidence": "The evening run follows a thunderstorm. af SW was 435 W/m2, and af RH rose from 69% to 89% between 15:35 and 16:00. In pm, RH is 91-94% throughout, the run median of 26.5 \u00b0C sits below the morning's 27.8, and background minus ERA5 is -3.36 \u00b0C (af +2.32). Routes are fragmented: 4 of 11 sensor files start after 19:16 or hold fewer than 250 readings. pm dTa is bimodal (-0.9 / +0.6). The land-cover signal persists: r(dTa, imp300) 0.58, r(dTa, LST) 0.57.",
+        "proposed_action": "Keep, but flag pm for a sensitivity run without it."
+       },
+       {
+        "check": "1/3/7. location, drift, cells",
+        "severity": "note",
+        "evidence": "Location 32.67-32.94 N, -80.13 to -79.82 E is Charleston. Protocol drift is small in every run (-0.05, -0.08, -0.12 \u00b0C/h), within 0.18 \u00b0C/h of the within-vehicle slopes, with RMS \u22640.03 \u00b0C against no detrending. Runs have 6,706-9,158 cells. The 'cleaned_1114_..._094952' file in af is a genuine afternoon route (15:00-15:17, 31.5 \u00b0C), not a copy of the morning.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "houston_tx",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "2. clock resolution",
+        "severity": "minor",
+        "evidence": "The dttm_lc / dttm_tc fields used as the clock are truncated to the minute for 96.9% of readings. The raw 'time' field 'HHMMSS.000' parsed as HH:MM:00; for example time 004140.000 became dttm_lc 19:41:00. dttm_tc minus the true UTC from 'date' + 'time' is 0-59 s, mean 29.5 s; no other city in this batch has it (share of :00 seconds is about 0.017 elsewhere). The effect on drift is below 0.02 \u00b0C, but visits split at every minute boundary (gap_s = 30 s) and revisit counts are inflated.",
+        "proposed_action": "Rebuild the clock from date + time. Not urgent: the target barely changes.",
+        "code_fix": "sparc/core/identify/traverses.py _standardise: when the chosen local clock has seconds == 0 for more than 90% of rows and 'date' (DDMMYY) and 'time' (HHMMSS[.sss], UTC) columns exist, rebuild `utc = pd.to_datetime('20'+date[4:6]+'-'+date[2:4]+'-'+date[0:2]+' '+time[:2]+':'+time[2:4]+':'+time[4:6], utc=True)` and convert it with the file's tz column."
+       },
+       {
+        "check": "8. duplicate files",
+        "severity": "note",
+        "evidence": "The 216,593 dropped duplicates are correct: each *_humidity.shp is a strict subset of *_temp.shp (no humidity-only rows), and the 4,142-6,057 remaining temp-only rows per run are distinct readings. Each sensor still appears as two vehicle keys, one per file. am fe offsets are \u22640.29 \u00b0C, RMS 0.023 \u00b0C against no offsets.",
+        "proposed_action": "Optional: key vehicles by sensor id rather than by file."
+       },
+       {
+        "check": "3/4/5. drift, target, LST",
+        "severity": "note",
+        "evidence": "pm protocol drift -1.26 \u00b0C/h matches the within-vehicle -1.33. dTa SD is 0.72-0.82 with |dTa| > 3 under 0.4%. CAPA1111 pm has a cool, moist patch (19:20-19:36 CDT, -2 \u00b0C, RH 75-79% against 69-71%) covering 4% of cells: a park, bayou or shower. LST is from 2020-08-04 (-3 d), clear 0.989, p5-p95 45-55 \u00b0C, r(LST, impervious) 0.44. Location 29.64-29.95 N, -95.62 to -94.94 E.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "los_angeles_ca",
+      "verdict": "exclude_runs",
+      "runs_to_exclude": [
+       "2019-09-15 morning"
+      ],
+      "issues": [
+       {
+        "check": "3. vehicle offsets",
+        "severity": "major",
+        "evidence": "In am, the fe fit set CAPA34 +1.369 (on both the north and south keys) and CAPA39 -1.387 from a single link: 19 shared cells, 52 minutes apart, at sunrise. Their median difference is 2.75 \u00b0C with SD 0.05, which is one street stretch. The raw route anomalies, +0.27 and -0.23 \u00b0C, become about +1.66 and -1.6 after the offsets. fe dTa against the no-offset version: r 0.909, RMS 0.57 \u00b0C. The offsets are unstable across the day: CAPA39 is -1.39 / -0.88 / +0.02 in am / af / pm and CAPA34 +1.37 / 0 / 0, so they are not sensor biases. af has CAPA39 -0.875 and CAPA44 +0.941 from one 20-cell link 42 minutes apart (RMS 0.44 \u00b0C, but r 0.993 given SD 3.5). pm offsets are about 0.",
+        "proposed_action": "Rebuild with the offset fix (see richmond_va). Until then exclude am; keep af and pm.",
+        "code_fix": "sparc/core/lstair/dataset.py adjust_visits: shrink vehicle offsets with a ridge prior (SD 0.3 \u00b0C): append rows `sqrt(lam) * I` on the V columns (lam = s2 / 0.3**2, from a first unpenalised fit) to X with zero targets before lsqr; or zero the offsets of vehicles whose links have fewer than 30 shared cells visited within 10 minutes of each other."
+       },
+       {
+        "check": "4. sensor warm-up",
+        "severity": "major",
+        "evidence": "S:CAPA47 reads a flat 23.9-24.2 \u00b0C from 06:04 to 06:15 while driving about 6 km (Century City / Westwood), then drops to 18.4 \u00b0C within 4 minutes; the other sensors read 17-20 \u00b0C. That is equilibration, not weather. Its 156 am cells have mean dTa +4.59 \u00b0C and hold 14.9% of the am sum of squares; am p99 is 4.92 with them and 3.28 without. In pm, CAPA47 starts at 27.0 \u00b0C and reaches 21.6 within 3 minutes (45 cells, 0.5% of the sum of squares).",
+        "proposed_action": "Drop CAPA47's am readings before 06:16 and its pm readings before 19:11; add a generic warm-up filter.",
+        "code_fix": "Before to_campaign, per sensor file: drop the leading readings while the 1-minute medians stay within 0.3 \u00b0C over at least 5 minutes, the car has moved more than 2 km, and the level differs by more than 2 \u00b0C from the median of the following 10 minutes."
+       },
+       {
+        "check": "4. target spread (sea breeze)",
+        "severity": "note",
+        "evidence": "af dTa SD is 3.50 \u00b0C, multimodal, with |dTa| > 3 on 56% of cells. The San Fernando Valley routes (N:ID4 mean dTa +4.4) contrast with the coastal basin (S:CAPA42 -5.1, S:CAPA47 -4.5). r(dTa, impervious) is -0.01 and r(dTa, elevation) 0.81. pm is similar (SD 2.06). This is a genuine marine-air gradient, and r(dTa, LST) is 0.53 / 0.52.",
+        "proposed_action": "Keep af and pm: the test should face this."
+       },
+       {
+        "check": "2/5. clock and LST",
+        "severity": "note",
+        "evidence": "dttm_lc is UTC-7 (PDT) on every row. Runs span 06-07, 15-16 and 19-20. Background minus ERA5 is -1.1 / -1.6 / -1.3 \u00b0C; SW is 5 / 572 / 0 W/m2, with sunset at 19:06. LST is from 2019-09-03 (-12 d), clear 0.999, p5-p95 42-52 \u00b0C, r(LST, impervious) 0.39-0.42. Location 33.92-34.32 N, -118.61 to -118.20 E.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "petersburg_va",
+      "verdict": "keep",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "all",
+        "severity": "note",
+        "evidence": "This city is clean. The date is 2021-07-15 (file names 150721, the VFIC day), and runs span 06:00-07:00, 15:00-16:00 and 19:00-19:59 EDT. Background minus ERA5 is -0.86 / +0.33 / +1.97 \u00b0C; SW is 37 / 577 / 70 W/m2. There are 3 sensors and 2,676-2,911 cells. fe offsets are \u22640.33 \u00b0C (RMS 0.11 / 0.29 \u00b0C against no offsets, r \u2265 0.974). The am protocol drift is +0.11 \u00b0C/h (RMS 0.03). dTa SD is 0.46-1.08. LST is from 2021-07-16 (+1 d), clear 0.999, r(LST, impervious) 0.69, r(dTa, LST) 0.56-0.77. Location 37.17-37.24 N, -77.44 to -77.34 E.",
+        "proposed_action": "Keep."
+       }
+      ]
+     },
+     {
+      "slug": "richmond_va",
+      "verdict": "exclude_runs",
+      "runs_to_exclude": [
+       "2021-07-15 midday",
+       "2021-07-15 evening"
+      ],
+      "issues": [
+       {
+        "check": "3. vehicle offsets",
+        "severity": "major",
+        "evidence": "The fe vehicle offsets rest on tiny links. In af, 1094 gets +1.78 \u00b0C from 11 cells shared with 1103 (19 minutes apart, one stretch, SD 0.14). 1082 gets -1.29 and 1072 +0.71 from 5 shared cells 24 minutes apart. The af offset range is 3.07 \u00b0C against raw route means within 0.3 \u00b0C of the median. fe dTa against no offsets: r 0.733, RMS 0.74 \u00b0C; SD rises from 0.896 to 1.078. In pm, 1102 gets -1.04, 1088 +0.83 and 1094 +0.82 from links of 3-7 cells (1-57 minutes apart): r 0.815, RMS 0.57. 1102's route, at +1.71 mean dTa of which +1.04 is the offset, holds 36% of the pm sum of squares; 1094's af route (-1.58) holds 23%. The offsets are inconsistent within the day: 1094 is 0 / +1.78 / +0.82 in am / af / pm while its raw route anomaly is +0.02 / +0.24 / +0.33 \u00b0C, and 1082 is -0.26 / -1.29 / -0.41. am is fine (RMS 0.17).",
+        "proposed_action": "Rebuild with offset shrinkage or a minimum link (see the code fix); then all three runs are usable. Until then exclude af and pm.",
+        "code_fix": "sparc/core/lstair/dataset.py adjust_visits: trust an offset only when the vehicle's links total at least 30 shared cells visited within 10 minutes of each other; otherwise set it to 0 and keep the fe drift. Alternatively add a ridge prior on the V block (prior SD 0.3 \u00b0C) by stacking `sqrt(s2/0.3**2) * I` rows into X with zero targets."
+       },
+       {
+        "check": "2/4/5. clock, target, LST",
+        "severity": "note",
+        "evidence": "Runs span 06-07, 15-16 and 19-20 EDT on 2021-07-15. Background minus ERA5 is -0.68 / +0.07 / +1.75 \u00b0C. There are 9,962-11,089 cells per run. LST is from 2021-07-16 (+1 d), clear 0.96, NaN 3.3%, r(LST, impervious) 0.65-0.69. A small cloud-edge cool bias of -1.98 \u00b0C affects 75 cells within 60 m of the mask. Location 37.46-37.66 N, -77.59 to -77.33 E.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "salt_lake_city_ut",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "7/3. vehicles not identified",
+        "severity": "minor",
+        "evidence": "The same parsing problem as Asheville: a row-unique 'ID' column (20,339 values in 20,339 af rows) blocks the sensor parse from 'file', so 10 CAPA20xx sensors collapse into vehicles=1. af and pm fe drifts (+0.005 and -0.19 \u00b0C/h) rest on only 21 and 30 spread revisits by pooled cars; the protocol line differs by RMS 0.02-0.10 \u00b0C.",
+        "proposed_action": "Apply the _standardise fix listed under asheville_nc and rebuild."
+       },
+       {
+        "check": "2. background vs ERA5",
+        "severity": "note",
+        "evidence": "am background minus ERA5 is +2.99 \u00b0C (af +0.96, pm +1.69). SW is 31 / 898 / 209 W/m2, consistent with the 06-07, 15-16 and 19-20 MDT windows, so this is not a clock error. The ERA5 cell includes Wasatch terrain.",
+        "proposed_action": "None."
+       },
+       {
+        "check": "4/5. target and LST",
+        "severity": "note",
+        "evidence": "pm has a heavy cold tail (skew -1.27, min -6.1): CAPA2159 shows 2-4 minute dips of -4 \u00b0C with RH rising from 13% to 20% near 40.78 N, -111.89 E, consistent with irrigated parks or canyon outflow (a genuine oasis effect). am has a cold tail to -5.2 (canyon drainage). LST is same-day (2023-07-15), clear 1.0, p5-p95 42-51 \u00b0C. r(LST, impervious) is weak (0.06-0.29; slope 0.008 \u00b0C per %) because dry bare ground is as hot as pavement, but r(dTa, LST) is 0.33-0.63.",
+        "proposed_action": "Keep."
+       }
+      ]
+     },
+     {
+      "slug": "seattle_wa",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "5. LST coverage",
+        "severity": "minor",
+        "evidence": "LST is NaN on 21-24% of driven cells, and the cause is not cloud. The east of the 56 x 68 km King County grid lies outside the footprint of the LC08 047027 scene (2020-07-29, +2 d): one NaN blob of 2.1 million cells with a straight diagonal edge, 50% of the grid. The 047026 scene of the same date has 0.0 of the study area in its footprint. Because A and B are scored only on LST cells, rural east King County (CAPA1031 / CAPA1036, mean am dTa -3.0) is left out of the test. The 2020-08-07 path-046 scene (0.675 clear) covers it.",
+        "proposed_action": "Keep; note the coverage. Optionally fill the gap from the next path's scene, accepting a date seam.",
+        "code_fix": "sparc/data/collect/landsat.py campaign_lst: count fill (out-of-footprint) pixels apart from cloud in clear_fraction, and allow a 2-scene mosaic when the gap is footprint, not cloud."
+       },
+       {
+        "check": "3. drift",
+        "severity": "note",
+        "evidence": "pm fe drift is -3.19 \u00b0C/h (SE 0.21, 24 spread cells), against protocol -2.60 and within-vehicle -2.32. Raw 10-minute medians fall from 30.9 to 28.75 \u00b0C, plausible evening cooling after a 32 \u00b0C afternoon; the target correlates 0.992 with the protocol version. am is +1.13 \u00b0C/h after a 05:47 sunrise. Offsets are \u22640.24 \u00b0C (RMS \u22640.19).",
+        "proposed_action": "None."
+       },
+       {
+        "check": "4. target spread",
+        "severity": "note",
+        "evidence": "am is multimodal (-3.9 / -3.1 / +0.4, SD 1.90): rural valley cold pools on CAPA1029 / 1031 / 1036, each about -3 \u00b0C. In af, r(dTa, impervious) is -0.01 but r(dTa, LST) 0.44, with the north Seattle routes near Puget Sound (CAPA1037 / 1038) at -2.1 / -2.5. Both are genuine marine and terrain physics. Location 47.20-47.78 N, -122.40 to -121.71 E is King County.",
+        "proposed_action": "Keep."
+       }
+      ]
+     },
+     {
+      "slug": "virginia_beach_va",
+      "verdict": "exclude_runs",
+      "runs_to_exclude": [
+       "2021-07-15 midday"
+      ],
+      "issues": [
+       {
+        "check": "3. drift (protocol fallback)",
+        "severity": "major",
+        "evidence": "The af protocol drift of +2.29 \u00b0C/h comes from route composition, not warming. Four of 10 sensors (1040, 1065, 1069, 1074: the eastern / oceanfront routes, -75.98 to -76.07 E) stop at 15:26-15:27. The warmest inland route (1068, -76.18 E, mean 34.2 \u00b0C) starts at 15:18. Raw 10-minute medians therefore climb from 31.6 to 34.1 \u00b0C, while the within-vehicle slope is only +1.06 \u00b0C/h. No cell is revisited \u226515 minutes apart (0 of 233), so fe cannot check the drift. The detrend raises the early coastal readings and lowers the late inland ones by up to about 1 \u00b0C, damping the sea-breeze contrast: protocol against undetrended dTa, r 0.923, RMS 0.61 \u00b0C. am and pm use fe with tiny offsets (RMS \u22640.06).",
+        "proposed_action": "Rebuild af with a within-vehicle protocol line; until then exclude af.",
+        "code_fix": "sparc/core/lstair/dataset.py adjust_visits.protocol: fit `temp ~ vehicle dummies + P` (`V = pd.get_dummies(veh).to_numpy(float); b = np.linalg.lstsq(np.column_stack([V, P]), temp, rcond=None)[0]; slope = b[V.shape[1]:]`) and return `temp - P @ slope`, so that routes ending early cannot alias space into time."
+       },
+       {
+        "check": "5. LST cloud edges",
+        "severity": "minor",
+        "evidence": "LST is from 2021-07-09 (-6 d), clear 0.851, NaN on 13.6-14.8% of driven cells (scattered cloud). Driven cells within 60 m of the mask have a land-cover residual of -1.10 \u00b0C against +1.46 at 0.5-1 km. r(dTa, LST) is 0.12-0.16 within 150 m against 0.21-0.37 beyond 300 m (827-975 cells per run within 150 m).",
+        "proposed_action": "Apply the 300 m QA-mask buffer (see charleston_sc)."
+       },
+       {
+        "check": "4. target spread (sea breeze)",
+        "severity": "note",
+        "evidence": "pm dTa SD is 1.82 and multimodal. Route means run from 26.5 \u00b0C (oceanfront 1040 / 1074) to 31.6 \u00b0C (inland 1068), while am routes span only 24.3-25.4 \u00b0C, so the sensors agree. r(dTa, LST) is 0.15 in pm. This is a genuine coast-to-inland gradient. Location 36.76-36.92 N, -76.23 to -75.97 E.",
+        "proposed_action": "Keep pm and am."
+       }
+      ]
+     }
+    ]
+   },
+   "verify": {
+    "verdicts": [
+     {
+      "slug": "abingdon_va",
+      "check": "5. LST",
+      "upheld": true,
+      "reasoning": "The fault is real. meta.json lists four L8 candidates, with clear fractions 0.382 and 0.187 for 2021-07-21 (rows 34 and 35) and 0.289 and 0.253 for 2021-07-05. I checked whether the two rows of one overpass could be joined. I reprojected the cached QA_PIXEL files onto the city grid with the 300 m study mask, and both rows cover the whole area (fill share 0). Their union is still only 0.386 clear for 07-21 and 0.294 for 07-05, below min_clear 0.5. Landsat 9 had not launched in July 2021, so no other scene exists. LST NaN share is 1.0. One part of the reasoning is wrong: the city could not enter C0 alone. In evaluate_window, ok = ok_a & has_lst whenever any city has LST. Abingdon's cells are therefore dropped before `slugs` is formed, and physics_fits (C and C0) runs only on `slugs`. The city is already left out of A, B, C and C0 in every window and is listed in res['excluded'] ('no LST over its driven cells'). C and C0 are therefore already compared on the same cities.",
+      "recommended_action": "Exclude the city (no LST). No code change is needed, because evaluate.py already drops it from A, B, C and C0 and records why. Do not rebuild with a wider window: only L8 scenes exist, and the next ones are about 22-26 days away."
+     },
+     {
+      "slug": "abingdon_va",
+      "check": "8. measurement platform",
+      "upheld": true,
+      "reasoning": "Confirmed from the raw shapefiles. The per-file median kmph is 3.6-5.3 for every sensor in all three runs (one pm file, CAPA1018B with 65 rows, reads 0.7). The median step is 1.4 m, the files carry the 'B' suffix, and the bounds are -82.009 to -81.936 E and 36.695 to 36.726 N. This is a walking campaign. I found no sign in the data that solar heating of a slow shield shapes the anomalies: r(dTa, canopy) is -0.421 in af (SW 797) and -0.425 in pm (SW 144), and dTa SD is 0.95 against 1.09. The concern about the platform rests on physics, not on anything shown in these data. The point is moot for now, since the city has no LST and is excluded anyway. A platform flag costs little and is fair.",
+      "recommended_action": "Record a 'pedestrian platform' flag in the city's meta and QA. Platform alone is not a reason to exclude. If LST ever becomes available, include the city only as a flagged sensitivity case."
+     },
+     {
+      "slug": "abingdon_va",
+      "check": "3. drift",
+      "upheld": true,
+      "reasoning": "I rebuilt the visits with scan_traverses, to_campaign and adjust_visits; the result matches table.parquet exactly (max difference 0). af and pm use protocol drift (-0.512 and -0.202 \u00b0C/h, n_spread 12 and 13). Against the undetrended target: af r 0.989, RMS 0.143; pm r 0.999, RMS 0.055. am uses fe (+0.070 \u00b0C/h, SE 0.108) with offsets of at most 0.45 \u00b0C, giving RMS 0.200 against no adjustment. The note is accurate and nothing needs doing.",
+      "recommended_action": "None."
+     },
+     {
+      "slug": "asheville_nc",
+      "check": "4. target spread (rain-cooled route)",
+      "upheld": true,
+      "reasoning": "Confirmed from the raw af_trav.shp. CAPA2037 moves east from -82.47 to -82.33 E (Swannanoa / Black Mountain). Its 2-minute medians fall from 29.6 \u00b0C to 23.8 \u00b0C while RH rises from 39% to 68.5%, a steady decline from about 15:12 to 15:28. corr(T, RH) is -0.98, against -0.59 to -0.88 for the other sensors, whose RH stays at 26-46%. With constant moisture the RH would reach only about 57% for that cooling, so moisture was added: rain-cooled air, not land cover. Elevation cannot explain it (687 m against 636-684 m is about 0.5 K). Mapped to cells, the route has 756 af cells (9.2%) with mean dTa -1.82 and holds 43.9% of the af sum of squares. af SD is 1.087 with it and 0.836 without; skew goes from -1.10 to 0.04. Without it, r(dTa, LST) rises from 0.48 to 0.585 and r(dTa, impervious) from 0.38 to 0.49. No other af sensor shows the signature (CAPA2145's 5 \u00b0C range is a hot spot at 59% impervious with RH below 44%). The rest of the af run is the city's best data, so a targeted cut fits better than losing the window.",
+      "recommended_action": "Apply the sensor-ID fix, drop CAPA2037's af readings from 15:05 on (or its whole 36-minute af route), rebuild, and keep af. Exclude af only until that rebuild. am and pm are kept. CAPA2037's short pm route (197 cells, RH 66%, 2.9% of the sum of squares) is post-rain and can stay with a note."
+     },
+     {
+      "slug": "asheville_nc",
+      "check": "7/3. vehicles not identified",
+      "upheld": true,
+      "reasoning": "Confirmed in the code and the data. _norm('ID') is 'id', which is in ID_COLUMNS, so _standardise skips the sensor taken from 'file'. _id_column then rejects 'ID', because nunique 17,675 > max(200, 353). Each run becomes one vehicle: QA vehicles=1, against 10 sensors in 10-12 files per run. Interleaved readings inflate the revisit counts (7,690 of 9,872 am cells) while n_spread stays at 18 / 3 / 1, so protocol drift (-0.048, +0.054, -0.133 \u00b0C/h) is used. The target is barely affected, but per-sensor QA such as the CAPA2037 cut cannot be done. The fix is correct. After it, _parse_frame's _id_column picks the new 'sensor' column, because 'sensor' comes before 'id' in ID_COLUMNS and has 10-12 values. A valid 'id' column is still used as before. I found no route overlap between sensors (no cell is shared by two sensors), so fe will still fall back to protocol and the target changes little.",
+      "recommended_action": "Apply the proposed fix in sparc/core/identify/traverses.py _standardise (`if \"file\" in norm and _id_column(df) is None:`) and rebuild Asheville, along with any other city whose files carry a row-index ID next to 'file'."
+     },
+     {
+      "slug": "asheville_nc",
+      "check": "5/6. LST and features",
+      "upheld": true,
+      "reasoning": "Verified. The scene is LC08 018035 2023-07-27 (+3 d), clear 0.971 (table 0.973). LST is NaN on 2.0-4.0% of driven cells, p5-p95 is 33.1-46.0 \u00b0C, and r(LST, impervious) is 0.62-0.63. One Sentinel-2 scene was used and no feature has NaNs. The bbox is 35.43-35.67 N and -82.69 to -82.31 E, and the WorldCover and DEM tiles cover it. No problem.",
+      "recommended_action": "None."
+     },
+     {
+      "slug": "charleston_sc",
+      "check": "5. LST cloud cover and cloud-edge contamination",
+      "upheld": true,
+      "reasoning": "The fault is real, but 300 m is more buffer than the evidence needs. I computed each cell's distance to the nearest LST-NaN pixel and regressed LST on the land-cover and focal features. The residual is -1.73 to -1.97 \u00b0C at 0-60 m, -0.95 to -1.10 at 60-120 m and -0.40 to -0.49 at 120-240 m. The dTa residual in the same bins is about 0 (-0.07 to +0.13), so the air is not cooler there: the LST is contaminated, consistent with TIRS's 100 m pixels and edges just outside the shadow mask. Part of the reviewer's gradient is geographic, though. Measured within 2 km blocks, the edge bias is -0.75 to -0.95 at 0-60 m, -0.32 to -0.35 at 60-120 m and only -0.04 to -0.06 at 120-240 m. I also cannot reproduce +1.04 / +1.10 at 0.5-2 km; I get +0.5 at 0.5-1 km and 0 to +0.28 at 1-2 km. r(dTa, LST) matches the reviewer: 0.39-0.58 within 150 m and 0.53-0.67 beyond 300 m. A 150 m buffer already gives r of 0.54 / 0.64 / 0.63 and keeps 80-83% of LST cells, while 300 m keeps only 62-67% (38-43% of driven cells). The contamination is noise in B's predictor and is uncorrelated with dTa, so it works against finding a B-A gain rather than for it. A and B are scored on the same cells, so the cloud selection does not bias B-A. Keeping the city is right.",
+      "recommended_action": "Keep the city. Dilate the QA cloud mask before masking LST, but by about 150 m (5 cells) rather than 300 m. Dilate only the cloud, dilated_cloud, cirrus and cloud_shadow bits, not 'fill', so scene edges are not eaten. Keep the undilated mask for clear_fraction, record the buffer, and rebuild LST."
+     },
+     {
+      "slug": "los_angeles_ca",
+      "check": "3. vehicle offsets",
+      "upheld": true,
+      "reasoning": "Confirmed for am. CAPA34 (both the N and S keys) is +1.369 and CAPA39 is -1.387, a two-vehicle component linked by 19 shared cells 52 minutes apart (dT 2.84, SD 0.05). Against fe drift only: r 0.933, RMS 0.49. I checked out of sample with near-simultaneous visits of different vehicles to nearby but different cells. The am offsets make agreement worse: within 1.5 km and 30 min the mean squared difference rises from 0.31 to 1.86. CAPA38-CAPA39 goes from -0.56 to -1.94 (5,122 pairs) and CAPA34-CAPA63 from -0.24 to -1.60 (6,585 pairs). The af offsets (CAPA39 -0.875, CAPA44 +0.941), however, are mostly corroborated: CAPA44-CAPA48 goes from +0.91 to -0.03 (1,221 pairs) and CAPA39-CAPA44 from -1.62 to +0.20 (1,675 pairs), so keeping af with its offsets is right. pm offsets are about 0. Neither proposed code fix works. The ridge as specified (lam = s2/0.09 = 5.3) still leaves CAPA34 / CAPA39 at about +1.0 / -1.1, because the link looks precise. The minimum-link rule would also zero the corroborated af offsets here and all of Richmond's.",
+      "recommended_action": "Exclude am (or rebuild am with CAPA47's warm-up cut and with no offsets for the CAPA34/CAPA39 component). Keep af and pm with their fe offsets. Do not adopt the ridge or the minimum-link rule as written. Instead, check offsets against near-simultaneous visits of different vehicles to nearby cells, or use those pairs as extra links. Leave offsets off for components of two vehicles joined by a single stretch."
+     },
+     {
+      "slug": "los_angeles_ca",
+      "check": "4. sensor warm-up",
+      "upheld": true,
+      "reasoning": "Confirmed. S:CAPA47's 1-minute medians are a flat 23.9-24.2 \u00b0C from 06:04 to 06:14 over 7.2 km, then fall to 18.4 \u00b0C by 06:18. Other sensors in the same 15 minutes have a median of 19.3 (p10-p90 18.1-20.2). The 150 cells it visited before 06:16 have mean dTa +4.65 and hold 14.8% of the am sum of squares; am p99 is 4.92 with them and 3.28 without. In pm it starts at 27.0 and is down to 21.6 by 19:11 (44 cells, 0.4% of the sum of squares). The proposed generic rule needs a flat level, so it would catch the am case but not the short pm transient.",
+      "recommended_action": "Drop CAPA47's am readings before 06:16; dropping pm before 19:11 is optional and harmless. A generic warm-up filter is reasonable, but test it on the other cities for false positives before relying on it."
+     },
+     {
+      "slug": "los_angeles_ca",
+      "check": "4. target spread (sea breeze)",
+      "upheld": true,
+      "reasoning": "Verified from QA: af dTa SD 3.50 with 14.7% of cells beyond |5|, r(dTa, impervious) -0.006, r(dTa, elevation) 0.81, r(dTa, LST) 0.527 in af and 0.515 in pm, pm SD 2.06. The af offsets are corroborated and small relative to the spread (r 0.995). The gradient is a real inland / marine-air contrast that the land-cover model, with elevation and water distance, has to face.",
+      "recommended_action": "Keep af and pm."
+     },
+     {
+      "slug": "los_angeles_ca",
+      "check": "2/5. clock and LST",
+      "upheld": true,
+      "reasoning": "Verified. dttm_lc minus dttm_tc is exactly -7 h on all 21,370 am_trav rows, with tz America/Los_Angeles. QA gives run windows 06-07, 15-16 and 19-20, background minus ERA5 of -1.11 / -1.59 / -1.30 and SW of 5 / 572 / 0. The LST scene is 2019-09-03 (-12 d), clear 0.999, p5-p95 42.3-52.5 \u00b0C, and r(LST, impervious) is 0.39-0.42. The prefer_clear rule chose it over the 0.579-clear scene of 09-19 (+4 d), as designed.",
+      "recommended_action": "None."
+     },
+     {
+      "slug": "richmond_va",
+      "check": "3. vehicle offsets",
+      "upheld": false,
+      "reasoning": "The numbers are right (af fe vs drift-only r 0.733, RMS 0.74; pm r 0.816, RMS 0.57), but the claim that the offsets are not sensor biases does not hold. The signs are consistent across the day: 1072 is +0.45 / +0.71 / +0.35, 1082 -0.26 / -1.29 / -0.41 and 1104 -0.24 / -0.89 / -0.20. 1094's am '0' only means it was not linked in am. The larger af values fit a sun-dependent shield error. I tested out of sample with near-simultaneous visits of different vehicles to nearby but different cells; these pairs are independent of the shared-cell links. The fe offsets halve the mismatch: af 0.70 to 0.44 (within 300 m and 10 min) and 1.92 to 0.95 (within 800 m and 20 min, 40,528 pairs); pm 1.07 to 0.36 and 1.17 to 0.60. Specific links are corroborated: 1094-1103 af goes from +1.35 to -0.42 (12,379 pairs), 1072-1082 af from +2.04 to +0.05 (2,208) and 1093-1094 pm from -0.68 to +0.08 (15,707). So excluding af is not warranted. pm has a local fault: 1102's -1.04 comes from a two-vehicle component {1088, 1102} joined by 7 cells 57 minutes apart, and nearby pairs contradict it (1094-1102 goes from -0.51 to -2.37 with 784 pairs; 1088-1102 from +0.95 to -0.92). That route holds 34% of the pm sum of squares. The proposed minimum-link rule (at least 30 shared cells within 10 min) would zero every Richmond offset, including the corroborated ones. The ridge halves them without telling good from bad.",
+      "recommended_action": "Keep am and af with their fe offsets. Exclude pm until a rebuild that sets 1102's offset to zero (or drops the offsets of the {1088, 1102} component). Do not adopt the minimum-link rule. Check offsets against near-simultaneous visits to nearby cells, or use those pairs as links, and leave offsets off for two-vehicle components joined by one short stretch."
+     },
+     {
+      "slug": "richmond_va",
+      "check": "2/4/5. clock, target, LST",
+      "upheld": true,
+      "reasoning": "Verified from QA and the table. Runs are 06-07, 15-16 and 19-20 on 2021-07-15, background minus ERA5 is -0.68 / +0.07 / +1.75, and there are 9,962-11,089 cells per run. The LST scene is 015034 2021-07-16 (+1 d), clear 0.96, NaN 3.2-3.3%, and r(LST, impervious) is 0.65-0.69. The cloud-edge bias is small: about 24-38 cells per run lie within 60 m with residual -2.3 to -2.9 \u00b0C, and a 150 m buffer would remove only about 1-2% of LST cells. Nothing to do beyond the general buffer fix.",
+      "recommended_action": "None (the general 150 m LST mask buffer, if adopted, covers it)."
+     },
+     {
+      "slug": "virginia_beach_va",
+      "check": "3. drift (protocol fallback)",
+      "upheld": true,
+      "reasoning": "Confirmed. In af, n_spread is 0 (233 cells revisited, none 15 or more minutes apart), so protocol is used. Sensors 1040, 1065, 1069 and 1074 (-75.98 to -76.07 E) stop at 15:26:51-15:27:00, and 1068 (-76.18 E, mean 34.2 \u00b0C) starts at 15:18. The 10-minute medians run from 31.6 to 34.1 \u00b0C. The pooled slope is +2.29 \u00b0C/h, against +1.06 within vehicles (vehicle dummies plus time), and +2.29 is not plausible at 15-16 h. Protocol against undetrended dTa: r 0.923, RMS 0.61. Protocol against within-vehicle dTa: r 0.976, RMS 0.33. The protocol detrend weakens the coast-inland signal: r(dTa, lon) is -0.455 undetrended, -0.408 within-vehicle and -0.330 protocol, and r(dTa, LST) is 0.327, 0.313 and 0.282. The code fix is sound and general: it reduces to the current line when every vehicle runs the whole hour. am and pm use fe with offsets of at most 0.15 (RMS 0.06-0.08).",
+      "recommended_action": "Apply the within-vehicle protocol line in adjust_visits.protocol, updating drift_per_h and drift_coef, and rebuild. Exclude af only until then; keep am and pm."
+     },
+     {
+      "slug": "virginia_beach_va",
+      "check": "5. LST cloud edges",
+      "upheld": true,
+      "reasoning": "Confirmed. The LST scene is 2021-07-09 (-6 d), clear 0.851, with 13.9% of driven cells NaN. Land-cover LST residuals are -1.84 to -2.28 \u00b0C at 0-60 m and -1.34 to -1.65 at 60-120 m. Within 2 km blocks they are -1.43 to -1.83 and -0.70 to -0.87, then -0.16 to -0.27 at 120-240 m and about 0 beyond. The within-block dTa residual is about 0, so this is contamination, not real cool air. r(dTa, LST) is 0.12-0.16 within 150 m and 0.21-0.37 beyond 300 m (827-975 cells within 150 m), matching the reviewer. A 150 m buffer gives r of 0.18 / 0.32 / 0.30 and keeps 87-89% of LST cells, while 300 m keeps 74-76%.",
+      "recommended_action": "Apply the LST mask buffer, at about 150 m (5 cells, at most 240 m) rather than 300 m, as for charleston_sc."
+     },
+     {
+      "slug": "virginia_beach_va",
+      "check": "4. target spread (sea breeze)",
+      "upheld": true,
+      "reasoning": "Verified. pm route means run from 26.5 \u00b0C (1074) and 26.7 (1040, oceanfront) to 31.6 (1068, inland), while am route means span only 24.3-25.4, so the sensors agree and the pm spread is real. pm dTa SD is 1.82 with a broad, multimodal histogram, and r(dTa, LST) is 0.148. The bbox is 36.76-36.92 N and -76.23 to -75.97 E. This is a genuine coast-to-inland gradient.",
+      "recommended_action": "Keep am and pm."
+     }
+    ]
+   }
+  },
+  {
+   "review": {
+    "cities": [
+     {
+      "slug": "albuquerque_nm",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "3. Drift adjustment / vehicle offsets",
+        "severity": "major",
+        "evidence": "fe is used in both runs (spread-revisit cells 97/66, drift SE 0.22 \u00b0C/h). The vehicle offsets span 3.42 \u00b0C (am) and 3.08 \u00b0C (af), e.g. CAPA1021 -2.22 and 1048 +1.85. These offsets are real sensor biases. The same sensor pairs differ by the same amount in both runs at shared cells: 1031-1036 by 1.58 \u00b0C (am, 29 cells, 6.9 min apart) and 1.53 \u00b0C (af, 26 cells, 4.6 min); 1048-CAPA1021 by 1.95 / 1.98 \u00b0C (7 cells each). After the fe correction, a check against neighbour cells within 150 m (other vehicles) leaves the linked sensors within \u00b10.3 \u00b0C (1031, 1048, CAPA1021, over 1152-1929 pairs). But the 11 am vehicles form 5 linked groups and the 17 af vehicles 7 groups, so unlinked vehicles keep their bias at offset 0. Example: sensor 1029 (af, 914 cells, about 6% of the run) reads 2.18 \u00b0C above its only neighbour, 1025 (48 pairs within 150 m, 4 min apart, 94% of pairs above 2 \u00b0C). In am, 1046 and CAPA1022 differ by 1.34 \u00b0C over 763 pairs.",
+        "proposed_action": "Keep. The fe correction works where vehicles are linked. Note that the unlinked routes still carry sensor biases of about 1-2 \u00b0C (route-level noise, not an LST-specific bias). Better: estimate one offset per sensor across am and af (11 sensor ids appear in both runs) and link vehicles through neighbour cells within about 100 m, not only identical cells. Alternatively drop sensor 1029 from af."
+       },
+       {
+        "check": "5. LST coverage",
+        "severity": "minor",
+        "evidence": "The selected scene LC08_L2SP_034035_20210705 (row 35) ends inside the grid. Grid LST NaN by row band, south to north: 1.00, 0.97, 0.67, 0.29, 0.01, then 0. 8.7% of driven cells have no LST, all in the south (NaN centroid 35.023 N against 35.116 N for all cells). The row-36 scene of the same overpass (LC08_L2SP_034036_20210705, 41% cloud) was a candidate but never inspected. LST p1/p50/p99 on driven cells is 44/55/59 \u00b0C, plausible for July desert. r(LST, impervious) is +0.11, weak because of the desert.",
+        "proposed_action": "Optional: mosaic scenes with the same path and date (adjacent rows) before computing the clear fraction and choosing a scene.",
+        "code_fix": "sparc/data/collect/landsat.py campaign_lst: group candidates by (path, date), mosaic their rows onto the city grid (QA-mask each one), then compute clear_fraction on the mosaic."
+       },
+       {
+        "check": "2. Clock / runs",
+        "severity": "note",
+        "evidence": "Times are local MDT (-6 h). Every logger file name (UTC start time) comes 0.03-0.32 h before that sensor's first local reading. Runs are 06:00-07:00 and 15:00-16:00 on 2021-07-09, consistent with the logger file dates (090721). The published zip has no pm traverse (only am_trav and af_trav). One logger file, 1030_050180, has a GPS-epoch file name, but its timestamps fall inside the window and its neighbour difference is +0.02 \u00b0C. bg-ERA5 is +1.29 (am) and +2.82 \u00b0C (af): the ERA5 cells include the Sandia high ground. ERA5 6\u21927 h tendency is +0.57 \u00b0C/h against fe +1.39; 15\u219216 h is -1.12 against fe -0.40.",
+        "proposed_action": "None. The city contributes only am and af."
+       }
+      ]
+     },
+     {
+      "slug": "atlanta_ga",
+      "verdict": "keep",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "5. LST",
+        "severity": "note",
+        "evidence": "The scene LC08 019037 2021-08-29 (-6 d) has 59% scene cloud and 0.632 clear near the traverses. 36% of driven cells have no LST, mostly in the south (row bands 0.65-0.73 NaN). LST p1-p99 on driven cells is 29.6-47.7 \u00b0C. r(LST, impervious) is +0.62. LST medians rise from 34.9 to 41.3 \u00b0C across impervious bins.",
+        "proposed_action": "None. B is scored on cells that have LST."
+       },
+       {
+        "check": "3. Drift",
+        "severity": "note",
+        "evidence": "All three runs fall back to protocol (5-12 cells revisited \u226515 min apart). For pm, protocol gives +0.20 \u00b0C/h, the forced fe -1.69\u00b10.30, and ERA5 19\u219220 EDT -0.57 \u00b0C/h. Neighbour-cell differences between vehicles stay within \u00b10.9 \u00b0C, except 1109 in pm at +1.33 (150 pairs, 28 min apart, consistent with drift misfit).",
+        "proposed_action": "None for this city. A generic protocol-drift limitation."
+       },
+       {
+        "check": "1/2/6/7. Location, clock, features, cells",
+        "severity": "note",
+        "evidence": "Centroid 33.78 N, -84.41 E, 4.3 km from downtown. Each logger file's UTC start comes 0.0-0.5 h before that sensor's first local reading at -4 h. Runs are 06-07, 15-16 and 19-20 h on 2021-09-04. Feature NaN is 0. Sentinel-2 covers Aug-Oct 2021. Runs have 8893-10016 cells and 13-15 vehicles. Sensor 1064 has a second af file with a GPS-epoch name (118 visits, 15:00-15:12) whose times are in the window.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "boston_ma",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "3. Vehicles / drift",
+        "severity": "minor",
+        "evidence": "The 2019 NIHHIS tables have no vehicle or sensor id (columns lat, long, time_n, speed, T_C, RH, T_F, case, HI_F, HI_C). There are about 5-6 readings per second, i.e. several cars, so every run is one 'vehicle'. Consecutive time-sorted readings jump between cars, which makes the reported median step 0.0 m and the share of cells with \u22652 visits 0.78 artifacts of the merge. fe was used with no vehicle offsets (drift am +1.12, af -0.28, pm -1.45 \u00b0C/h), so sensor offsets between cars are neither estimable nor removed, as in protocol cities. 57,338 readings duplicated between the folder copy and the 'All Data' zip were dropped correctly.",
+        "proposed_action": "Keep. Note that sensor offsets cannot be corrected here. A possible upgrade is to rebuild car identities by linking each second's readings to the nearest previous position."
+       },
+       {
+        "check": "5. LST",
+        "severity": "note",
+        "evidence": "The scene LC08 012031 2019-07-22 (-7 d) has 77% scene cloud but 0.858 clear within 300 m of the traverses. 14% of driven cells have no LST. LST p1-p99 is 28-50 \u00b0C. r(LST, impervious) is +0.49. r(dTa, LST) is +0.22 to +0.35.",
+        "proposed_action": "None."
+       },
+       {
+        "check": "2/4. Clock and spread",
+        "severity": "note",
+        "evidence": "time_n UTC am 10:00-11:00, Boston_pm_revised 19:00-20:00 and ev 23:00-24:00 map to 06-07, 15-16 and 19-20 EDT, matching the 2019 naming (pm = afternoon). bg-ERA5 is +0.40/+1.57/+0.99 \u00b0C. dTa SD is 0.76-0.86 and p1/p99 about -2.7 to +2.3 \u00b0C, with no bimodality. af SW-down of 474 W/m\u00b2 points to a partly cloudy afternoon.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "farmville_va",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "8. Platform",
+        "severity": "major",
+        "evidence": "This is a pedestrian traverse, not a vehicle one. kmph p10/p50/p90 is 2.7/4.2/5.5 (am), 3.1/5.0/6.7 (af) and 3.3/5.2/6.6 (pm). 78% of am readings are below 5 km/h. The median step between readings is 1.3-1.6 m at about 0.73 readings/s (Lynchburg, same day: median 31-36 km/h, 9-10 m steps). Each run covers only 947-1317 cells within about 5 km. The af dTa SD of 1.25 \u00b0C is the highest of the seven inland VFIC cities that day (0.60-1.08); only coastal Virginia Beach is higher (1.46), while am is 0.53. Neighbour checks within 75 m show no >2 \u00b0C disagreements, so I have no proof of a radiation fault. Sensor height and aspiration still differ from car-mounted sensors. Abingdon (step 1.4 m) appears to be walked too.",
+        "proposed_action": "Keep but tag it as a pedestrian campaign. Run the cross-city verdict with and without walking campaigns (Farmville, Abingdon). Add a platform check to the build.",
+        "code_fix": "sparc/core/lstair/dataset.py build_city: per run, compute the median speed from consecutive positions of each vehicle (from to_campaign steps / dt). If it is below 10 km/h, append a warning 'pedestrian-speed traverse (median X km/h)' and store qa['median_speed_kmh'] in meta, so the evaluation can filter on platform."
+       },
+       {
+        "check": "Evaluation unit (campaign_groups)",
+        "severity": "major",
+        "evidence": "campaign_groups links cities that share an OSF node and a date. VFIC node 3xvmg on 2021-07-15 holds 8 separate city campaigns 100-400 km apart, each with its own sensors: abingdon, arlington, farmville, lynchburg, petersburg, richmond, salem, virginia_beach. They all become one held-out group, i.e. one independent unit. The same happens to boise_id + sacramento_ca (node tdsy7, 2019-08-14, about 800 km apart). That collapses 10 cities into 2 units, which cuts power and counts toward MIN_VERDICT_CITIES wrongly.",
+        "proposed_action": "Link by node and date only when the grids are near each other (for one campaign split into catalog cities, e.g. Bronx/Manhattan), e.g. within 50 km.",
+        "code_fix": "sparc/core/lstair/evaluate.py campaign_groups: compute gx, gy first, then `same = na is not None and na == nb and da is not None and da == db and math.hypot(gx, gy) <= SAME_NODE_KM` with SAME_NODE_KM = 50.0; keep `near` as is."
+       },
+       {
+        "check": "5/2. LST and clock",
+        "severity": "note",
+        "evidence": "The scene LC08 015034 2021-07-16 (+1 d) has 0.968 clear. 1.9% of driven cells lack LST (scene's west edge). r(LST, impervious) is +0.67 and r(dTa, LST) +0.38 to +0.54. Logger UTC starts come 0.0-0.18 h before the first local readings (EDT). Runs are full hours 06-07, 15-16 and 19-20.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "las_cruces_nm",
+      "verdict": "keep",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "5. LST sign (desert)",
+        "severity": "note",
+        "evidence": "r(LST, impervious) is -0.21 on driven cells; LST medians fall from 60.0 to 58.2 \u00b0C as impervious rises, because bare desert is hotter than the city. af r(dTa, LST) of -0.21 is pure elevation confounding: r(dTa, elevation) is -0.74 (the east mesa is higher and cooler), r(LST, elevation) is +0.29, and the partial r(dTa, LST | elevation) is +0.10. LST p1-p99 of 52-62 \u00b0C on 2020-07-11 (+1 d, 0.986 clear) is plausible.",
+        "proposed_action": "None. This is genuine desert physics."
+       },
+       {
+        "check": "4. pm left tail",
+        "severity": "note",
+        "evidence": "pm dTa p1 is -3.79 \u00b0C (skew -1.26). It comes from CAPA1022's west-side route, median -1.49 \u00b0C. That sensor drives the same route as in am/af (84-91% cell overlap), where its median is -0.17/+0.18. Within 150 m of other sensors in pm it reads only -0.31 \u00b0C lower (113 pairs). The cold cells form one compact area (about 0.6 km spread), so the tail is spatial, not a sensor fault.",
+        "proposed_action": "None."
+       },
+       {
+        "check": "2/3/8. Clock, drift, files",
+        "severity": "note",
+        "evidence": "dttm_lc minus dttm_tc is -6 h for every row; windows are 06-07, 15-16 and 19-20 MDT on 2020-07-10. The pm protocol drift is -1.77 \u00b0C/h against ERA5 19\u219220 h at -1.57. bg-ERA5 is -2.73 (am) and -2.34 (pm), the valley floor being cooler than the ERA5 cell. The bicycle traverse shapefiles (*_trav_norm.shp, normalised values) are skipped because they have no temperature column, which is correct. One logger file name has the GPS epoch (CAPA1023_050180) but valid date/time columns.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "lynchburg_va",
+      "verdict": "exclude_runs",
+      "runs_to_exclude": [
+       "2021-07-15 morning",
+       "2021-07-15 midday"
+      ],
+      "issues": [
+       {
+        "check": "7/3. Single-vehicle am and af runs",
+        "severity": "major",
+        "evidence": "am is one car, 1057, with 971 of 1076 visits (06:01-06:51), plus 1055 with 105 visits at 06:51-06:56. af is 1057 alone, 938 of 948 visits (15:00-15:46); 1055 has 10 visits at 15:55. The 1055 logger started at 05:45/14:45 EDT, so its data were dropped upstream. Coverage is 1067/942 cells in the east of the city (centroids -79.153/-79.149) against 4293 cells and 5 cars in pm (-79.188). With one car, time and route position are the same axis: 0 cells were revisited \u226515 min apart, so the protocol drift is just the route's temperature gradient. af protocol gives +1.43 \u00b0C/h (car 1057 alone +1.36, land-cover-adjusted +1.17) against ERA5 15\u219216 EDT +0.53. am gives -0.63 \u00b0C/h, driven by 1055's 5-minute fragment (dTa median -0.52); car 1057 alone gives -0.31, ERA5 +0.09. The detrend therefore removes up to about \u00b10.45 \u00b0C of real along-route signal, comparable to the am dTa SD of 0.32.",
+        "proposed_action": "Exclude am and af and keep pm (5 cars, fe drift +0.49 \u00b0C/h, 4293 cells). If they are kept, flag them as single-vehicle runs whose large-scale pattern is not identifiable."
+       },
+       {
+        "check": "5. LST",
+        "severity": "minor",
+        "evidence": "The scene LC08 016034 2021-07-07 (-8 d) has 0.516 clear near the traverses. 44.6% of driven cells have no LST (pm 43.5%). r(LST, impervious) is +0.62 and r(dTa, LST) in pm +0.65.",
+        "proposed_action": "Keep. B is scored only on the cells that have LST."
+       },
+       {
+        "check": "Evaluation unit (campaign_groups)",
+        "severity": "major",
+        "evidence": "Lynchburg is merged with the 7 other VFIC cities (node 3xvmg, 2021-07-15) into one held-out group, although each city has its own sensors 100-400 km apart. See farmville_va.",
+        "proposed_action": "Link node+date only within about 50 km (code fix under farmville_va)."
+       },
+       {
+        "check": "4. pm left tail",
+        "severity": "note",
+        "evidence": "pm dTa p1 is -3.4 \u00b0C (skew -1.0). The coldest cells have 100% canopy, 0% impervious, NDVI 0.73 and lie about 430 m from water: forest roads in the evening, i.e. physics.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "providence_ri",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "5. LST",
+        "severity": "minor",
+        "evidence": "The scene LC08 012031 2020-08-09 is +11 d after the campaign (+10 d for ni). The -5 d scene had 0 clear. It is 0.545 clear near the traverses, 45.9% of driven cells lack LST, and coverage is patchy (western column bands 0.59-0.78 NaN). r(LST, impervious) is +0.42.",
+        "proposed_action": "Keep. Weak LST coverage, so B is scored on about 54% of cells."
+       },
+       {
+        "check": "3. Drift am",
+        "severity": "minor",
+        "evidence": "am protocol drift is +2.41 \u00b0C/h (above 2), with 0 cells revisited \u226515 min apart. All 6 cars warm within their own run: land-cover-adjusted slopes +0.73 to +2.92 \u00b0C/h. ERA5 6\u21927 EDT shows only +0.21. Plausible post-sunrise street warming (sunrise about 05:40), but up to \u00b11.2 \u00b0C of route-timed error is possible if part of it is geography.",
+        "proposed_action": "Keep, with a note."
+       },
+       {
+        "check": "4/3. af sensor disagreement",
+        "severity": "minor",
+        "evidence": "CAPA1082 and CAPA1083 meet at only one street (41.8156 N, -71.433 E). There they agree within 0.11-0.49 \u00b0C in am, pm and ni (73-105 pairs). In af, 1082 reads 31.4 \u00b0C at 15:24 and 1083 34.2 \u00b0C at 15:35 (median difference 2.31 \u00b0C, 73 pairs). 1083 jumps from 31.1 to 32.4-33.7 \u00b0C between 15:30 and 15:32 while moving at 13-25 km/h, and its af land-cover-adjusted slope is +3.25 \u00b0C/h (others -0.5 to +1.3). The cause (sensor heating in sun or a local front) cannot be attributed.",
+        "proposed_action": "Keep. Optionally check CAPA1083 af (767 cells) in a sensitivity run."
+       },
+       {
+        "check": "2. Clock / night run",
+        "severity": "note",
+        "evidence": "dttm_lc minus dttm_tc is -4 h everywhere. The ni run (00:00-00:59 on 07-30) is the campaign night, inside the 0-1 h protocol window. All four runs have 6 sensors and 5082-5695 cells.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "sacramento_ca",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "8/4. Bicycle sensor mixed into the car traverses",
+        "severity": "major",
+        "evidence": "Sensor 'Bicycle_CAPA56' is in all three car files. It rides off-street on the American River Parkway: 680-760 cells per run, almost none shared with cars, median canopy 72% against 0-6%, impervious 8-25% against 75-81%, about 190 m from water. In pm its cells have median dTa -3.14 \u00b0C (p5 -6.49) and account for 98% of the 293 cells with |dTa| > 5. Without them the pm dTa p1 rises from -6.21 to -3.19 \u00b0C and the SD drops from 1.63 to 1.23. Within 150 m of car CAPA20 it reads 4.6 \u00b0C colder in pm (607 pairs, 17 min apart) and 2.25 \u00b0C colder in am (14 pairs). Las Cruces' bicycle files are already left out (no temperature column), so the treatment is inconsistent.",
+        "proposed_action": "Drop the bicycle sensor from all Sacramento runs and rebuild. If no rebuild is possible, exclude the pm run (2019-08-14 evening).",
+        "code_fix": "sparc/core/lstair/dataset.py build_city, after scan_traverses: `bike = points['vehicle_key'].astype(str).str.contains(r'bicycle|bike|walk', case=False, regex=True); if bike.any(): warnings.append(f'{int(bike.sum()):,} readings of non-vehicle sensors dropped ({sorted(points.loc[bike, \"vehicle_key\"].str.split(\":\").str[-1].str[:20].unique())})'); points = points[~bike]`"
+       },
+       {
+        "check": "Evaluation unit (campaign_groups)",
+        "severity": "major",
+        "evidence": "Sacramento shares node tdsy7 and date 2019-08-14 with Boise ID, about 800 km away with different sensors. campaign_groups merges them into one held-out unit.",
+        "proposed_action": "Link node+date only within about 50 km (code fix under farmville_va)."
+       },
+       {
+        "check": "3. Drift pm",
+        "severity": "note",
+        "evidence": "pm protocol drift is -3.27 \u00b0C/h. ERA5 19\u219220 PDT is even steeper, 38.99 \u2192 33.92 (-5.07 \u00b0C/h), so the drift is physical (sunset cooling). am/af protocol drift is +0.92/+0.87 \u00b0C/h.",
+        "proposed_action": "None."
+       },
+       {
+        "check": "2. Clock resolution",
+        "severity": "minor",
+        "evidence": "dttm_lc has minute resolution: 100% of timestamps have second 0, while the UTC 'time' field has seconds (e.g. 220046.000 becomes 15:00:00). Passes therefore break every minute (gap 60 s > 30 s) and the drift has 1-min resolution. The offset dttm_lc minus dttm_tc is -7 h (PDT), as expected.",
+        "proposed_action": "Minor. Rebuild local time from date + time (UTC) and tz when the local clock carries no seconds.",
+        "code_fix": "sparc/core/identify/traverses.py _standardise: if the chosen local column has all-zero seconds and 'date' + 'time' (UTC HHMMSS[.fff]) plus a tz column exist, build datetime from them via _file_zone instead."
+       },
+       {
+        "check": "1. Location / grid",
+        "severity": "note",
+        "evidence": "The grid is 43 \u00d7 42 km (warning in meta). The centroid is 11.5 km east of downtown, with 1253 cells east of -121.2 and 1214 south of 38.45 (suburbs inside the campaign area). Feature NaN is 0. LST 2019-08-07 (-7 d) is fully clear, with r(LST, impervious) +0.41.",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "san_bernardino_ca",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "4. Target spread am (inversion)",
+        "severity": "minor",
+        "evidence": "am dTa SD is 2.99 \u00b0C, p1/p99 -3.9/+8.2, and 10.8% of cells have |dTa| > 5. This is a strong dawn inversion on the alluvial fans. Median dTa by elevation: -0.79 (300-350 m), -1.34 (350-400), +1.46 (400-450), +1.95 (450-500), +3.98 (500-600). Four independent sensors show it: r(temp, elevation) is 0.90/0.93/0.89/0.76 for CAPA24, CAPA64, CAPA82 and PR4, with slopes of 5.0-6.0 \u00b0C per 100 m. CAPA82 returns to 20 \u00b0C at the same high cells at the end of its loop. Linked sensors agree (PR2-PR4 0.3 \u00b0C over 74 shared cells, CAPA24-CAPA64 0.2 \u00b0C over 24), so this is not a sensor fault. The date (2019-10-12, offshore conditions) fits.",
+        "proposed_action": "Keep, as genuine physics. Note that this run's MSE (about 9 \u00b0C\u00b2, against roughly 0.2-3.6 elsewhere) will dominate mean \u0394MSE in the am window. Report a per-city relative MSE or skill alongside it."
+       },
+       {
+        "check": "2. Background vs ERA5",
+        "severity": "note",
+        "evidence": "bg-ERA5 is +2.3 (am), +4.6 (af) and +3.9 \u00b0C (pm), positive all day. ERA5 uses two cells weighted 0.49 each at 34.0 and 34.25 N; the northern one covers the San Bernardino Mountains. An hour shift cannot explain it: ERA5 at 14, 15 and 16 h is 25.45, 25.80 and 25.66 \u00b0C, against a 30.35 \u00b0C background. dttm_lc minus dttm_tc is -7 h (PDT), and the logger file names match the 2019-10-12 date.",
+        "proposed_action": "None. This is an orography offset."
+       },
+       {
+        "check": "5. LST",
+        "severity": "note",
+        "evidence": "Scene 2019-10-14 (+2 d), 0.977 clear, 1.9% NaN, LST 29-38 \u00b0C. r(LST, impervious) is +0.05: LST medians are flat at 34.4-34.5 \u00b0C across impervious bins, as dry-season grass and soil run as hot as pavement. am r(dTa, LST) of -0.11 is a morning run under the inversion (partial given elevation +0.26).",
+        "proposed_action": "None."
+       },
+       {
+        "check": "3. Drift",
+        "severity": "note",
+        "evidence": "fe is used in all runs. pm drift -2.66 \u00b0C/h against ERA5 19\u219220 h -2.2. Vehicle offsets range 0.33-0.95 \u00b0C. After fe, neighbour checks are within \u00b10.4 \u00b0C, except CAPA15 in am at +1.74 (24 min apart, under the inversion).",
+        "proposed_action": "None."
+       }
+      ]
+     },
+     {
+      "slug": "sedona_az",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "3/7. Vehicles merged (ID column bug)",
+        "severity": "minor",
+        "evidence": "The tables have a per-row 'ID' (5579-6017 unique values) and a 'file' column with 7 sensors (CAPA2007, 2009, 2010, 2017, 2022/2031, 2039, 2047). Because an 'id' column exists, _standardise skips the file\u2192sensor fallback, and _id_column then rejects ID as too unique, so each run is one vehicle. That inflates visits (5873 against 2346 when keyed by sensor) and the 'revisited' counts (1898 cells). Re-keyed by sensor, the target hardly changes: protocol dTa r = 0.9999/0.9997/0.9999 against the build, max |difference| 0.40 \u00b0C. fe would fall back to protocol anyway (0 cells revisited \u226515 min apart). The same bug sets vehicles to 1 in asheville_nc, longmont_co and salt_lake_city_ut, where fe was used without sensor offsets.",
+        "proposed_action": "Fix the code and rebuild the affected cities. For Sedona itself the effect is immaterial.",
+        "code_fix": "sparc/core/identify/traverses.py _standardise: replace `if \"file\" in norm and not any(n in norm for n in ID_COLUMNS):` with `if \"file\" in norm and _id_column(df) is None:` (a row-index ID column must not block the sensor id from 'file')."
+       },
+       {
+        "check": "2. Short runs / ERA5 window",
+        "severity": "minor",
+        "evidence": "Runs last 32, 36 and 27 min (06:00-06:32, 15:00-15:35, 19:00-19:27 MST), with some sensors driving only 9-15 min. pm bg-ERA5 is +5.42 \u00b0C because era5_run averages 19 h and 20 h for a run that ended at 19:27. ERA5 is 25.96 at 19 h and 20.78 at 20 h; against 19 h alone the offset is +2.8, the same as af (+2.68, elevation). Logger UTC file names (e.g. 250623_0140) fit America/Phoenix (-7 h). am SW-down 197 W/m\u00b2 fits 06-07 MST (sunrise about 05:12).",
+        "proposed_action": "Minor: weight ERA5 hours by their overlap with the run, or interpolate to the run's mid time.",
+        "code_fix": "sparc/core/lstair/dataset.py era5_run: request hours floor(start)..ceil(end) and average t2m linearly interpolated at the run's mid time, not the plain mean of the bracketing hours."
+       },
+       {
+        "check": "4. am cold pool",
+        "severity": "note",
+        "evidence": "am dTa SD is 1.88 \u00b0C, p1 -5.8. Sensors CAPA2009 and CAPA2010 read medians of -2.1 and -1.9 with p1 near 5.6 \u00b0C. The cold cells spread over 1.5-2.3 km with slightly more canopy than the rest: dawn cold-air pooling in a canyon town, i.e. physics. The land-cover-adjusted time slope is +0.01 \u00b0C/h against ERA5 6\u21927 h +4.45 (plateau-dominated cell).",
+        "proposed_action": "None."
+       },
+       {
+        "check": "5. LST",
+        "severity": "note",
+        "evidence": "LC09 2023-06-22 (-2 d), fully clear, 0 NaN, LST 40-49 \u00b0C, r(LST, impervious) +0.38. af r(dTa, LST) is +0.01, flat (SD 0.59), not negative.",
+        "proposed_action": "None."
+       }
+      ]
+     }
+    ]
+   },
+   "verify": {
+    "verdicts": [
+     {
+      "slug": "albuquerque_nm",
+      "check": "3. Drift adjustment / vehicle offsets",
+      "upheld": true,
+      "reasoning": "I rebuilt the per-visit frames with the build's own code path. They match meta exactly: fe drift +1.391 / -0.397 \u00b0C/h, SE 0.22, 97/66 spread-revisit cells, 5 and 7 linked groups, offset ranges 3.42 / 3.08 \u00b0C. The raw differences at shared cells reproduce: 1031-1036 is +1.58 \u00b0C (29 cells, 6.9 min) in am and +1.53 \u00b0C (26 cells, 4.6 min) in af; 1048-CAPA1021 is +1.95 / +1.98 \u00b0C (7 cells each). A sensor-pair bias that repeats across two runs is real, so 1.5-2 \u00b0C sensor biases exist. Single-vehicle groups get offset 0 by construction (1023B, 1032 and 1037 in am; 1029, 1037, 1043 and 1044 in af), so the structural point holds. The 1029 vs 1025 figure also reproduces (48 pairs within 150 m, +2.18 \u00b0C, 94% above 2 \u00b0C). But 150 m neighbour differences are not clean evidence of bias. Pairs inside the same linked group differ just as much: 1030-1048 +3.97 \u00b0C (26 pairs), 1031-CAPA1021 +1.97 \u00b0C at 1.4 min. In a leave-sensor-out land-cover model, linked sensors carry route residuals as large as the singletons (1048 af -1.67, 1032 af +1.84, 1025 af -1.37; singleton 1029 +1.02). The linking itself is weak in places: 1025-1031 share 1 cell, and the 1048/CAPA1021 pair links to the main group only through cells 40-54 min apart. Its offset relative to the others shifts about 1.85 \u00b0C between am and af, while 1031/1036/1025/1039 stay within about 0.15. This error is route-level noise that hits A and B alike, not an LST-specific bias. So keep-with-note is right and 'major' overstates it.",
+      "recommended_action": "Keep both runs, with a note in meta/QA: '5 (am) and 7 (af) unlinked vehicle groups; sensor biases up to about 2 \u00b0C are corrected only within groups; singletons and weakly linked groups carry route-level errors of about 1-2 \u00b0C (noise for A and B alike).' Do not drop sensor 1029: its 48-pair excess is within the spread of linked sensors after land-cover adjustment. Do not adopt neighbour-cell linking within 100-150 m as stated: it would build spatial differences of up to about 4 \u00b0C into the offsets. If cross-run sensor offsets are tried later, test them first; the 1048/CAPA1021 relative swing shows they do not simply carry over."
+     },
+     {
+      "slug": "farmville_va",
+      "check": "8. Platform",
+      "upheld": true,
+      "reasoning": "Confirmed from raw consecutive positions per vehicle. Farmville moves at median 4.7 / 5.4 / 5.7 km/h (p10-p90 about 3-7 km/h), with 1.3-1.6 m steps at 1 reading/s. Lynchburg the same day moves at 32-37 km/h with 9-10 m steps. Abingdon is also walked (4.9-5.0 km/h, 1.4 m steps). No other city has steps under 7 m (Boston's 0.0 m is a different artefact). My percentiles are slightly higher than the reviewer's (for example 62% of am readings below 5 km/h, not 78%), but the conclusion is the same. Runs cover 947-1317 cells within about 4 \u00d7 6 km, and af dTa SD 1.25 \u00b0C is the highest of the inland VFIC cities (0.60-1.08), as stated. A slow, poorly aspirated sensor in daytime sun can exaggerate sun/shade contrasts, which correlate with canopy and LST, so walked runs matter specifically for B \u2212 A. There is no direct proof of a radiation fault, so tag-and-sensitivity is the proportionate response, not exclusion. Abingdon has no clear Landsat scene, so evaluate_window already drops it from every LST-present window. In practice the with/without run only changes Farmville.",
+      "recommended_action": "Keep Farmville, tag it as a pedestrian campaign, and report the B \u2212 A (and C \u2212 A) verdict with and without it; Abingdon is already out of LST-present windows. Add the platform check in sparc/core/lstair/dataset.py build_city as proposed: per run, the median speed from each vehicle's consecutive raw points (dt \u2264 30 s), stored as qa['median_speed_kmh'], with a warning below 10 km/h. Cars are \u2265 about 30 km/h, so the threshold separates cleanly."
+     },
+     {
+      "slug": "farmville_va",
+      "check": "Evaluation unit (campaign_groups)",
+      "upheld": true,
+      "reasoning": "Confirmed by running campaign_groups on the built dataset. 31 cities form 23 units, merged as abingdon+arlington+farmville+lynchburg+petersburg+richmond+salem+virginia_beach (node 3xvmg, 2021-07-15) and boise+sacramento (tdsy7, 2019-08-14). The VFIC grids are 19-505 km apart and each city has its own sensor ids. The function's own docstring says the node+date link is meant for one campaign split into catalog cities (Bronx/Manhattan), so this goes beyond its intent. One correction: merging can only reduce the number of units and average 8 cities into one MSE pair. That costs power and down-weights 8 cities, but it is conservative. It cannot make a verdict pass MIN_VERDICT_CITIES wrongly; with 23 units the threshold of 8 is met either way. Applying the proposed rule (node+date only when the grid gap is \u2264 50 km) gives 30 units, with petersburg+richmond still merged (19 km gap). There is a mild dependence channel among VFIC cities: same day and regional weather, and Farmville, Petersburg and Richmond share Landsat scene LC08 015034 2021-07-16. That justifies a sensitivity run, not the 8-city merge.",
+      "recommended_action": "Apply the code fix in sparc/core/lstair/evaluate.py campaign_groups: compute gx and gy before `same`, and require math.hypot(gx, gy) <= SAME_NODE_KM (50.0) for the node+date link; keep `near`. Update the docstring. Report the verdict also with the 8 VFIC cities as one group, as a conservative sensitivity. Fix the issue text: the merge loses power and is not anti-conservative."
+     },
+     {
+      "slug": "lynchburg_va",
+      "check": "7/3. Single-vehicle am and af runs",
+      "upheld": true,
+      "reasoning": "Confirmed. am is car 1057 with 971 visits (06:01-06:52), plus 1055 with 105 visits at 06:51-06:57. af is 1057 with 938 visits, plus 1055 with 10 visits at 15:56. Only 5 (am) and 0 (af) cells were revisited \u2265 15 min apart, so the build fell back to the protocol line (-0.634 / +1.432 \u00b0C/h). Car 1057 alone gives -0.31 / +1.36 \u00b0C/h. In am, 1055's 5-minute end fragment (raw slope +15 \u00b0C/h, dTa median -0.52) doubles the cooling. Centroids are -79.153 / -79.149 (east side) against -79.188 for the 5-car pm run. I could not verify the ERA5 hourly trends: meta stores only run means. The case stands without them. A sunrise cooling of -0.63 \u00b0C/h and +1.43 \u00b0C/h at 15-16 h are both physically doubtful. More to the point, the target is demonstrably sensitive to this unidentified slope, and in the quantity under test. Re-detrending af at +0.53 \u00b0C/h moves r(dTa, LST) from 0.57 to 0.44 (r with the original dTa 0.94). Re-detrending am at 0 to +0.09 \u00b0C/h moves r(dTa, impervious_f300) from 0.50 to 0.31-0.33 and r(dTa, LST) from 0.37 to 0.44-0.45. The induced SD is 0.17-0.34 \u00b0C against dTa SDs of 0.32 / 0.60. Both runs are small (1067 / 942 cells), so excluding them costs little. Other cities showing '1 vehicle' (Asheville, Longmont, Salt Lake City, Sedona, Boston) have thousands of one-cell passes: those are several cars merged under one key, not single cars. Only Fort Lauderdale's 2019-09-21 and 09-23 re-runs are true single-car runs like these.",
+      "recommended_action": "Exclude 'Lynchburg 2021-07-15 morning' and '2021-07-15 midday' and keep the pm run. For consistency, add a rule rather than a one-off. Flag runs where one vehicle holds \u2265 90% of visits and drift fell back to protocol, as 'drift not identifiable: single-vehicle run'. Detect this from actual passes and vehicles, not the vehicle-key count, because merged keys show as 1 vehicle. Apply the same treatment, or at least a sensitivity, to Fort Lauderdale's single-car re-runs."
+     },
+     {
+      "slug": "lynchburg_va",
+      "check": "5. LST",
+      "upheld": true,
+      "reasoning": "Facts reproduce. The scene is LC08_L2SP_016034_20210707 (-8 d), clear fraction 0.516; 44.6% of driven cells lack LST (pm 43.5%, af 47.9%, am 53.9%); r(LST, impervious) is +0.62 over unique cells; pm r(dTa, LST) is +0.65. No better scene was missed: the other candidates were 017034 07-14 (0% clear), 016034 07-23 (37%) and 017034 07-30 (0%), so the clearest-\u226550% rule chose correctly. A and B are scored on the same cells (ok = ok_a & has_lst) and the target is re-centred on them, so B \u2212 A is not biased. One nuance: the masked cells are colder and more variable in pm (mean dTa -0.54 vs -0.05, SD 1.22 vs 0.86). Lynchburg pm is therefore scored on a less variable subset that misses much of the cold forested area. That is fair to both models but worth a note.",
+      "recommended_action": "Keep. Add a note that 45% of Lynchburg's driven cells (including much of the pm cold tail) have no LST and are not scored in LST windows."
+     },
+     {
+      "slug": "lynchburg_va",
+      "check": "Evaluation unit (campaign_groups)",
+      "upheld": true,
+      "reasoning": "Same finding as farmville_va, confirmed. Lynchburg is in the 8-city VFIC group (node 3xvmg, 2021-07-15) and has its own sensors (1040, 1050, 1052, 1055, 1057). Its grid is 58-256 km from the other VFIC grids, and it uses its own Landsat scene (016034 2021-07-07). Under the proposed \u2264 50 km rule it becomes its own unit. The merge is conservative (a power loss), not anti-conservative.",
+      "recommended_action": "Apply the campaign_groups code fix described under farmville_va (node+date link only within 50 km grid gap), with a sensitivity run that keeps VFIC as one group."
+     },
+     {
+      "slug": "lynchburg_va",
+      "check": "4. pm left tail",
+      "upheld": true,
+      "reasoning": "Confirmed as physics, so no action is needed. pm dTa p1 is -3.40 \u00b0C, skew -1.0. The coldest 1% (43 cells) have median canopy 100%, impervious 0%, NDVI 0.87 and lie about 473 m from water. The reviewer's 0.73 and 430 m differ slightly, probably from a different selection; the conclusion is unchanged. The tail is not one sensor's artefact: 25 of the 43 cells are car 1057 and 18 are car 1040, and 1057 agrees with 1055 to -0.04 \u00b0C over 92 near-simultaneous neighbour pairs. One caveat outside the issue: all 5 pm vehicles are unlinked (5 groups, all offsets 0). Sensor 1040 reads about 0.9 \u00b0C below the other cars in the 10-70% impervious bins and drives mostly rural cells (827 of 1233 cells \u2264 10% impervious), so its level cannot be separated from its route.",
+      "recommended_action": "None for the tail. Optionally note that the pm vehicles are all unlinked, so sensor 1040's level (about -0.9 \u00b0C relative to the others at similar impervious cover) is uncorrected route-level noise."
+     },
+     {
+      "slug": "sacramento_ca",
+      "check": "8/4. Bicycle sensor mixed into the car traverses",
+      "upheld": true,
+      "reasoning": "Confirmed. Bicycle_CAPA56 appears in all three car files with 760 / 680 / 704 cells, sharing 0 / 0 / 6 of them with cars. Its cells have median canopy 67-75% (cars 0-6%), impervious 8-25% (cars 75-81%) and lie 163-247 m from water. In pm its cells have median dTa -3.14 \u00b0C (p5 -6.49) and make up 98% of the 293 cells with |dTa| > 5. Within 150 m of CAPA20 it reads -4.58 \u00b0C (pm, 17 min) and -2.25 \u00b0C (am, 14 pairs). Without it, pm SD drops from 1.63 to 1.23. The innocent explanation is partly true: cold air on the American River Parkway in the evening is plausible physics. But it is a different platform (lower, slower sensor) sampling an off-street domain that no other city's target contains. The bicycle files in Burlington, Las Cruces and New Orleans were skipped only because CAPA published them normalised to 0-1 with no temperature. So dropping it makes the target uniform (street-level traverses), and in pm it would otherwise dominate Sacramento's held-out MSE. The 'exclude pm' fallback is heavier than needed. The bike cells are disjoint from car cells, and the protocol drift barely moves without them (am 0.919 to 0.913, af 0.873 to 0.750, pm -3.27 to -3.17 \u00b0C/h). A full rebuild without the bike gives pm SD 1.23 / p1 -3.30, against 1.23 / -3.19 from simply dropping its rows; evaluate.recentre_target already re-centres on scored cells.",
+      "recommended_action": "Drop the bicycle sensor from all three Sacramento runs and rebuild. If no rebuild is possible, drop the bike-only rows from table.parquet rather than excluding the pm run; the result is nearly identical. Apply the code fix in build_city, but match on the sensor id (the part of vehicle_key after the last ':'), not the whole key with its folder path, and log what was dropped. Walking campaigns (Farmville, Abingdon) carry no 'walk' in their ids, so catch those with the speed-based platform check, not the regex."
+     },
+     {
+      "slug": "sacramento_ca",
+      "check": "Evaluation unit (campaign_groups)",
+      "upheld": true,
+      "reasoning": "Confirmed, and this is the clearest case of over-linking. Sacramento and Boise share node tdsy7 and date 2019-08-14, but their grids are 642 km apart (centroids 697 km), with different climates, sensors and Landsat scenes (044033 2019-08-07 vs 041030 2019-08-18). Boise's date was itself set with --campaign-date from its report. The shared date is a coincidence within a multi-city NIHHIS node, not one campaign. As with VFIC, the merge costs power rather than inflating the verdict.",
+      "recommended_action": "Apply the campaign_groups code fix described under farmville_va (node+date link only within 50 km); Boise and Sacramento then become separate units."
+     }
+    ]
+   }
+  },
+  {
+   "review": {
+    "cities": [
+     {
+      "slug": "arlington_va",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "location, clock, windows",
+        "severity": "note",
+        "evidence": "Driven-cell centroid is 38.881, -77.104 on a 14.6 x 13.9 km grid, which is Arlington VA. Runs on 2021-07-15: 06:00-06:54, 15:00-16:00 and 19:00-20:00 EDT. The logger file names carry UTC start times that agree (pm file 1105_150721_225935 = 18:59 EDT). SW-down is 43 / 646 / 70 W/m2. Background minus ERA5 is -0.57 / -0.49 / +1.11 C.",
+        "proposed_action": "none"
+       },
+       {
+        "check": "drift, target spread, LST correlations",
+        "severity": "note",
+        "evidence": "5 sensors. Protocol drift is +0.05 / -0.05 / +0.04 C/h; per-vehicle slopes range -0.86 to +0.66 C/h. dTa SD is 0.67-0.77 C with p1/p99 about -1.5/+1.8 and no bimodality (BC 0.43-0.49). r(dTa, impervious) is 0.30-0.43 and r(LST, impervious) is 0.54. No sensor saturated in any run.",
+        "proposed_action": "none"
+       },
+       {
+        "check": "LST scene and coverage",
+        "severity": "minor",
+        "evidence": "The scene used is 2021-06-30 (offset -15 d, clear fraction 0.72). The 2021-07-16 scene (+1 d, clear 0.64) was passed over by the 'no scene >= 80% clear: the clearest >= 50%' rule. 26-30% of driven cells have no LST, and those cells are cooler: mean dTa -0.07 to -0.19 against +0.16 to +0.25 for cells with LST. A and B drop those cells, so part of the cool side is not scored.",
+        "proposed_action": "Keep. Report the LST-NaN share and record that the scored cells lean warm.",
+        "code_fix": "sparc/data/collect/landsat.py scene choice: when no scene is >= prefer_clear, take the nearest scene whose clear fraction is within 0.1 of the clearest one, rather than the clearest alone."
+       },
+       {
+        "check": "campaign grouping",
+        "severity": "note",
+        "evidence": "Same OSF node (3xvmg) and date (2021-07-15) as 7 other VA cities, so campaign_groups holds them out as one unit.",
+        "proposed_action": "none (by design)"
+       }
+      ]
+     },
+     {
+      "slug": "austin_tx",
+      "verdict": "keep",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "location and clock",
+        "severity": "note",
+        "evidence": "Centroid is 30.264, -97.696 on a 23.6 x 34.2 km grid. In the raw files dttm_lc - dttm_tc is -5 h (CDT) for every reading, and the GPS time for the af file is 20:00-21:00 UTC. Runs on 2020-08-07: 06-07, 15-16 and 19-20 h. SW-down is 0.1 / 674 / 86 W/m2 (sunrise about 06:50 CDT).",
+        "proposed_action": "none"
+       },
+       {
+        "check": "drift size",
+        "severity": "note",
+        "evidence": "pm protocol drift is -1.33 C/h, and all 11 sensors cool on their own (-0.94 to -3.59 C/h). After detrending, the per-vehicle residual slopes have median -0.17. That is real pre-sunset cooling. af is +0.65 C/h, with every sensor between +0.2 and +1.2.",
+        "proposed_action": "none"
+       },
+       {
+        "check": "target and ERA5",
+        "severity": "note",
+        "evidence": "af dTa SD is 0.44 with r(dTa, impervious) 0.07 and r(dTa, LST) 0.14: a weak, well-mixed afternoon signal. am has a cold tail down to -2.5 C (dawn valleys). Background minus ERA5 is -0.47 / -1.67 / -1.91 C; the clocks are verified, so this is not a time-zone error. LST scene 2020-08-02 (-5 d), clear fraction 1.0, no NaN, r(LST, impervious) 0.48-0.51. Two sensors were saturated at dawn (CAPA1007 96%, CAPA1003 71%); median RH 94% is dew or fog, not rain.",
+        "proposed_action": "none"
+       }
+      ]
+     },
+     {
+      "slug": "burlington_vt",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "duplicated readings inside one file",
+        "severity": "minor",
+        "evidence": "In pm, CAPA1034 has 6,074 readings, 3,093 of them exact (time, position) duplicates; 2,981 times are unique, while the other sensors have about 2,400 readings each. _drop_duplicates only drops copies found in another file (src != first), so these stay. They do not change cell means.",
+        "proposed_action": "Keep. Optionally de-duplicate within files.",
+        "code_fix": "sparc/core/identify/traverses.py _drop_duplicates: also drop exact (vehicle_id, time, lat, lon, temp) repeats within a file."
+       },
+       {
+        "check": "drift and windows",
+        "severity": "note",
+        "evidence": "pm protocol drift is -1.90 C/h, and all 6 sensors cool (-0.39 to -2.97 C/h); sunset is about 20:05 EDT, so this is real. After detrending, the per-vehicle residual slopes have median +0.71 C/h, so the linear detrend partly over-corrects. Clock checked: dttm_lc - dttm_tc = -4 h. am drift is FE -0.13 (protocol +0.09; dTa r = 0.989 between the two).",
+        "proposed_action": "none"
+       },
+       {
+        "check": "target tails and fog",
+        "severity": "note",
+        "evidence": "af has excess kurtosis +2.75 from 34 cells at about -3 C. All of them are CAPA1034 at 15:47-15:48 in 98%-canopy woodland at 44.47, -73.02 (141 m), with RH +8% in 2 min: a forest cool island, and these cells have no LST anyway. In am, 5 of 7 sensors are 40-93% saturated (median RH 98%, dawn fog) and dTa is capped near +0.75 C. Its SD of 0.42 and r(dTa, impervious) of 0.31 are still physical.",
+        "proposed_action": "none"
+       },
+       {
+        "check": "LST",
+        "severity": "minor",
+        "evidence": "Scene 2020-08-07 (-3 d), clear fraction 0.70, cloud 37%. 24-29% of driven cells have no LST. LST p5/p50/p95 is 22.3 / 30.7 / 35.6 C. r(LST, impervious) is 0.48-0.51. The bicycle traverses (normalised, no temperature) were correctly skipped.",
+        "proposed_action": "none"
+       }
+      ]
+     },
+     {
+      "slug": "fort_lauderdale_fl",
+      "verdict": "exclude_runs",
+      "runs_to_exclude": [
+       "2019-09-21 morning",
+       "2019-09-21 midday",
+       "2019-09-21 evening",
+       "2019-09-23 morning",
+       "2019-09-18 morning",
+       "2019-09-18 midday"
+      ],
+      "issues": [
+       {
+        "check": "multi-day runs: re-drives or fragments",
+        "severity": "major",
+        "evidence": "The extra runs are single-sensor make-up drives. 09-21 is CAPA73 alone (am, af, pm); 09-23 is CAPA80 alone (am). They have 2,021-2,826 readings and 728-898 cells, and zero cells in common with the 09-18 runs (09-21 covers a route at 26.18-26.21N, -80.20 to -80.15; 09-23 one at 26.09-26.12N). Each one's background is that route's own median. dTa SD is 0.11-0.25 C, near the 0.1 C sensor resolution. On 09-23, 80% of cells have no LST. Each run is internally one day, but the four would be pooled into FL's scores: 1,626 of 5,927 am cells.",
+        "proposed_action": "Exclude the four 09-21 and 09-23 runs."
+       },
+       {
+        "check": "drift adjustment, 09-18 midday (FE artifact)",
+        "severity": "blocker",
+        "evidence": "The FE drift is -2.16 +/- 0.18 C/h, while the protocol slope is +0.20. All 22 cells revisited >= 15 min apart come from one vehicle, in 8 blocks of 300 m. No sensor's 5-minute medians show the trend: CAPA79 stays at 30.6-31.1 C and the 7-sensor mean slope is about 0. After the FE adjustment, every vehicle has a residual slope of +1.27 to +2.93 C/h (median +1.98), so a ramp of about +/-1 C was injected along each route. Rebuilt with protocol: r = 0.535 with the stored dTa, RMSE 0.80 C, SD 0.63 instead of 0.93, r_imp +0.05, r_LST +0.31. The vehicle offsets (range 1.83) are only partly real: CAPA67 reads 1.20 C below CAPA70 at 54 near-simultaneous pairs in af, but within +0.2 C at 114 pairs in am.",
+        "proposed_action": "Rebuild 09-18 midday with protocol detrending and re-admit it. Exclude it until then.",
+        "code_fix": "sparc/core/lstair/dataset.py adjust_visits: accept 'fe' only when the >= 15 min repeats come from >= 2 vehicles and >= 10 distinct 300 m blocks. Compute the drift SE clustered by pass or block, since the OLS SE ignores along-pass correlation. Fall back to protocol when |fe - protocol| > 0.75 C/h. Better still: take the drift from the protocol line and estimate vehicle offsets only from co-located near-simultaneous visits (|dt| <= 10 min)."
+       },
+       {
+        "check": "weather during 09-18 morning (rain)",
+        "severity": "major",
+        "evidence": "A rain band crossed the northern routes. CAPA75's RH jumps from 85% to 100% at 06:15-06:16 EDT with a -1.7 C step (26.1 to 24.4 C) at 26.13, -80.108. CAPA76 goes from 86% to 100% at 06:18 (26.0 to 25.2 C). CAPA79 is at 100% RH for the whole run and CAPA69 for 77% of its readings. The run's RH >= 99% share is 0.20, and the per-vehicle slopes run from -2.07 to +1.10 C/h. dTa shows no land-cover signal: r(dTa, impervious) is -0.01 and r(dTa, LST) is -0.13. The 09-18 af and pm runs have no saturation.",
+        "proposed_action": "Exclude 2019-09-18 morning (rain and wet sensors over 4 of 7 routes)."
+       },
+       {
+        "check": "duplicate files, clock resolution, coast",
+        "severity": "note",
+        "evidence": "The loose shapefiles repeat the zip's 54,443 readings, and they were dropped correctly. Clock: dttm_lc - dttm_tc = -4 h (EDT). dttm_lc has minute resolution (179 values per file, while the GPS 'time' has seconds), so passes break every minute (gap 60 s > gap_s 30 s); this is harmless for cell means. The pm run (SD 0.30, r_imp 0.15, r_LST 0.16) is clean. LST scene 2019-09-13 (-5 d), clear fraction 0.74; 25-37% of driven cells have no LST.",
+        "proposed_action": "Keep 2019-09-18 evening.",
+        "code_fix": "Optional: in sparc/core/identify/traverses.py _standardise, for CAPA hasFix tables build the time from dttm_tc's date plus the GPS 'time' HHMMSS.sss (UTC), converted with the tz column, to get second resolution."
+       }
+      ]
+     },
+     {
+      "slug": "longmont_co",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "vehicles and repeat visits (sensor ids lost)",
+        "severity": "minor",
+        "evidence": "The raw tables have a row-number 'ID' column (11,072 unique values in am). Because 'id' is in ID_COLUMNS, _standardise skips deriving the sensor from 'file', and _id_column rejects ID. The 6 sensors (CAPA2035, 2052, 2128, 2129, 2130, 2146) were therefore merged into 1 vehicle per run: 10,642 passes with a median of 1 cell, and 86% of cells counted as revisited. Rebuilt with the 6 sensors, drift is still protocol (only 3-4 cells revisited >= 15 min apart). The rebuilt dTa has r >= 0.997 with the stored values and RMSE <= 0.06 C, so the target is unaffected.",
+        "proposed_action": "Keep. Fix the reader for future builds.",
+        "code_fix": "sparc/core/identify/traverses.py _standardise: replace `if \"file\" in norm and not any(n in norm for n in ID_COLUMNS):` with `if \"file\" in norm and _id_column(df) is None:`. A row-number ID then no longer hides the per-file sensor id."
+       },
+       {
+        "check": "clock, ERA5, target, LST",
+        "severity": "note",
+        "evidence": "The logger names give UTC starts that agree (CAPA2035_230723_113622 = 05:36 MDT). Runs 06:00-06:55, 15:00-15:56 and 19:00-19:54 on 2023-07-23. Background minus ERA5 is -0.21 / +2.30 / +2.63 C; the ERA5 cell includes the foothills. dTa SD is 0.61-0.91 C, with cold tails to -3.4/-3.6 C (creek bottoms, irrigated land). LST scene 2023-07-27 (+4 d), clear fraction 0.98. r(LST, impervious) is only 0.21-0.23 and r(dTa, LST) 0.10-0.22: weak but positive, on a mosaic of irrigated and dry land.",
+        "proposed_action": "none"
+       }
+      ]
+     },
+     {
+      "slug": "new_orleans_la",
+      "verdict": "exclude_runs",
+      "runs_to_exclude": [
+       "2020-08-18 midday"
+      ],
+      "issues": [
+       {
+        "check": "drift adjustment, 2020-08-18 midday (FE offsets and drift)",
+        "severity": "major",
+        "evidence": "The FE drift is -0.97 +/- 0.12 C/h against a protocol slope of -0.13. Of the 38 repeat cells, 35 come from the same vehicles, and no 10-minute crossing between vehicles exists. The 10 sensors' series are flat (city mean 33.6 C at 15:00 and 33.4 C at 16:00). After FE, the per-vehicle residual slopes have median +0.46 C/h (range -1.18 to +2.39). The offsets span 2.22 C (CAPA1014 +0.88, CAPA1050 +0.68, CAPA1059 -1.35). They flip CAPA1059's New Orleans East lakefront route (water 268 m) from -0.84 C under protocol to +0.55 C. FE vs protocol dTa: r = 0.76, RMSE 0.64 C. Part of the CAPA1059 offset is real: in the 08-08 am run it reads 0.67 C below CAPA1050 at 24 near-simultaneous pairs, so its bias is about -0.7 C, and FE in af doubles it.",
+        "proposed_action": "Rebuild af with protocol detrending, optionally with a CAPA1059 offset of about -0.7 C from the am crossings, and re-admit it. Exclude it until then.",
+        "code_fix": "Same guard as fort_lauderdale_fl: FE only with spread repeats from >= 2 vehicles in >= 10 blocks of 300 m and |fe - protocol| <= 0.75 C/h, or offsets estimated only from near-simultaneous co-located visits."
+       },
+       {
+        "check": "multi-day campaign",
+        "severity": "note",
+        "evidence": "am comes from 08-08-traverses_chw_neworleans (2020-08-08: 12 sensors, 26,195 readings, 7,759 cells, a full drive). af and pm come from 08-18-traverses (2020-08-18, 10 and 12 sensors). Each run is internally one day. Clock checked: dttm_lc - dttm_tc = -5 h. LST scene 2020-08-15: offset +7 d for am and -3 d for af/pm, clear fraction 0.999, no NaN. am and pm FE are harmless (r = 0.981 and 0.974 against protocol).",
+        "proposed_action": "Keep 2020-08-08 morning and 2020-08-18 evening."
+       },
+       {
+        "check": "target tails",
+        "severity": "minor",
+        "evidence": "af upper tail: 45 cells at +3.0 to +5.1 C, all from CAPA1060 at 15:39-15:44 CDT. Over those minutes it reads 34 to 37.3 C, with RH falling from 52% to 46%, while moving at 12-35 km/h through 95%-impervious Mid-City (29.967, -90.10). This is 0.65% of the run; it looks like a plausible hot spot or sensor exposure. The am run includes a bicycle sensor (CAPABIKE1002, 350 cells), which agrees with CAPA1060 to within 0.2 C at 71 crossings.",
+        "proposed_action": "none"
+       }
+      ]
+     },
+     {
+      "slug": "raleigh_nc",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "location and extent",
+        "severity": "note",
+        "evidence": "The archive is traverses_chw_raleigh-durham_110821.zip, i.e. the Raleigh-Durham campaign. Grid is 45.9 x 42.5 km with centroid 35.828, -78.674, and sensors in both Durham (about 36.0, -78.9) and Raleigh. The 'large grid' warning is benign. Clocks agree with the logger names (af 1006_230721_185750 = 14:57 EDT). Runs on 2021-07-23 at 06-07, 15-16 and 19-20 h.",
+        "proposed_action": "Keep. Label the record as Raleigh-Durham."
+       },
+       {
+        "check": "LST scene offset",
+        "severity": "minor",
+        "evidence": "The scene is 2021-08-08 (+16 d, at the edge of the window), chosen as the nearest scene >= 80% clear (0.994). The campaign-day scene of 2021-07-23 was only 0.54 clear. LST p5/p50/p95 is 31.6 / 35.7 / 41.7 C, r(LST, impervious) is 0.63-0.64, and LST NaN is under 1%.",
+        "proposed_action": "none"
+       },
+       {
+        "check": "vehicle offsets",
+        "severity": "minor",
+        "evidence": "The am FE offsets span 1.75 C (sensor 1038 +1.08, 1064 -0.67, CAPA1035 -0.50). The crossings support them: 1038 reads 1.30 C above CAPA1035 at 109 near-simultaneous pairs in 13 blocks, and 1024 reads 0.49 C above 1042 at 33 pairs. FE vs protocol r is 0.82. The af run is protocol with 15 sensors and no offsets, so route-level sensor biases of about 1 C (e.g. 1038) stay in its target. pm FE is -0.46 against protocol +0.14, r = 0.976. Some sensors appear as two 'vehicles' because their logger files were split (1042 / 1042B).",
+        "proposed_action": "Keep. Note that af may carry about 1 C route biases."
+       }
+      ]
+     },
+     {
+      "slug": "salem_va",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "location, clock, ERA5",
+        "severity": "note",
+        "evidence": "Centroid is 37.285, -80.054 (Roanoke Valley) on a 14.3 x 12.5 km grid. The logger names agree with the times (pm 1058_150721_225021 = 18:50 EDT). Runs on 2021-07-15 at 06:00-06:55, 15:00-16:00 and 19:00-19:56. Background minus ERA5 is +2.10 / +1.66 / +1.05 C; the ERA5 cell includes the ridges. 3 sensors, 2,852-3,107 cells per run. Same 3xvmg group as the other VA cities.",
+        "proposed_action": "none"
+       },
+       {
+        "check": "drift (pm)",
+        "severity": "minor",
+        "evidence": "pm FE drift is -1.26 +/- 0.18 C/h against protocol -0.53. The per-sensor slopes are -1.84, -0.42 and +0.75. FE vs protocol dTa: r = 0.982, RMSE 0.22 C, so the effect is immaterial. am and af FE agree with protocol (r = 0.992 and 0.997).",
+        "proposed_action": "none"
+       },
+       {
+        "check": "target tail and LST coverage",
+        "severity": "minor",
+        "evidence": "pm has a cold tail to -3.8 C (p1 -3.35): 121 cells below -2.5 C in the first 15 minutes, from all 3 sensors, in 68% canopy and 12% impervious. That is evening cool woods, which is physical. LST scene 2021-07-14 (-1 d), clear fraction 0.64; 29-32% of driven cells have no LST. In pm those cells are the coolest (mean dTa -0.66 against -0.01; impervious 28% against 43%), so A and B scoring drops much of the cool tail.",
+        "proposed_action": "Keep. Note the selection effect."
+       }
+      ]
+     },
+     {
+      "slug": "san_diego_ca",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "coastal physics (keep)",
+        "severity": "note",
+        "evidence": "af dTa SD is 1.93 C with p1/p99 -3.4/+3.6, r(dTa, elevation) +0.49, r(dTa, impervious) -0.05 and median RH 91%: a sea-breeze or marine layer with a cool coast and hot inland. The am run (SW-down 10 W/m2, before sunrise) has r(dTa, LST) -0.37 and r(dTa, elevation) -0.81: inland valleys pool cold at dawn. Clocks agree with the logger names (pm 1025_140921_021205 = 19:12 PDT on 09-13). LST scene 2021-09-17 (+4 d), clear fraction 0.99.",
+        "proposed_action": "none"
+       },
+       {
+        "check": "pm bimodality",
+        "severity": "minor",
+        "evidence": "The pm histogram has peaks at about -0.9 and +0.6 C with a trough at 0 (BC 0.48), and it splits by route. The coastal sensors 1103 / 1114 / 1106 (water 265-670 m) average -0.6 to -1.5 C; the inland sensors 1100 / 1107 / 1115 (water 1.8-2.7 km) average +1.1 to +1.45 C. Within-route SDs are only 0.29-0.67. This is probably geography, but there are almost no near-simultaneous crossings (3 pairs), so sensor offsets cannot be ruled out.",
+        "proposed_action": "Keep. Note it."
+       },
+       {
+        "check": "af vehicle offsets",
+        "severity": "minor",
+        "evidence": "af FE offsets span 1.51 C, and the 1093 offset is real: 1093 reads 1.00 C below 1107 at 40 co-located pairs taken 0.07 min apart in 6 blocks (FE gives -1.03). The FE drift is -0.82 against protocol +0.21, but FE vs protocol r = 0.979. Sensor 1093 also drives in am, which is protocol and uncorrected, so its am route may read about 1 C cold.",
+        "proposed_action": "none"
+       }
+      ]
+     },
+     {
+      "slug": "victorville_ca",
+      "verdict": "keep_with_note",
+      "runs_to_exclude": [],
+      "issues": [
+       {
+        "check": "am window (7-8 h) and drift",
+        "severity": "minor",
+        "evidence": "The am run is 07:00-08:00 PDT by CAPA's own schedule: strt_tm/end_tim are 07:00/08:00, and the GPS time 14:02 UTC gives dttm_lc 07:02, so the clock is right. That is 50-110 min after sunrise (06:13). SW-down is 200 W/m2 and the protocol drift +3.86 C/h, with per-sensor slopes +1.49 to +5.09. This is a heating-phase morning, unlike the other cities' am runs near sunrise. After the linear detrend, the per-sensor residual slopes are -2.38 to +1.48 C/h, which leaves route-time errors of up to about +/-1 C. dTa SD is 1.09 C.",
+        "proposed_action": "Keep. Flag Victorville am as post-sunrise when comparing am windows."
+       },
+       {
+        "check": "desert physics (keep)",
+        "severity": "note",
+        "evidence": "r(LST, impervious) is -0.36 to -0.43 (bare soil is hotter than pavement), and r(dTa, impervious) is -0.17 in af and -0.14 in pm. r(dTa, LST) is +0.18 to +0.28 in all runs. LST p5/p50/p95 is 52.3 / 56.4 / 60.2 C (scene 2019-08-27, +3 d, clear fraction 1.0, no NaN), plausible for the high desert in August. pm drift is -2.29 C/h, with all sensors -0.89 to -4.01 (sunset 19:25): real. No saturation; median RH 15-46%. Centroid 34.522, -117.333 is Victorville; the grid takes in Hesperia and Apple Valley. 3,076-3,798 cells per run.",
+        "proposed_action": "none"
+       }
+      ]
+     }
+    ]
+   },
+   "verify": {
+    "verdicts": [
+     {
+      "slug": "fort_lauderdale_fl",
+      "check": "multi-day runs: re-drives or fragments",
+      "upheld": false,
+      "reasoning": "I rebuilt the visits with the pipeline's own functions (scan_traverses, to_campaign, adjust_visits). They reproduce the stored dTa exactly (max diff 0.0). Several of the reviewer's facts hold: 09-21 is CAPA73 alone (2,543/2,021/2,053 readings, 898/732/758 cells) on a route at 26.18-26.21N, -80.20 to -80.15 that no 09-18 route touches; 09-23 is CAPA80 alone (2,826 readings, 728 cells); 1,626 of 5,927 am cells; 80% of the 09-23 cells have no LST. The key claim is wrong for 09-23: it shares 433 cells with the 09-18 af run and 547 with the pm run. All of these are CAPA80's own route, and CAPA80 did not drive on the 09-18 morning. So 09-23 am is a make-up drive for that route's missing morning window, not a fragment. 09-21 covers a route nobody drove on 09-18 (CAPA73 has only 2 readings in the 09-18 pm). All of these readings sit in the same published am/af/pm_trav files that CAPA used for its own maps. The 'sensor resolution' argument also fails. The 0.1 C quantisation averaged over about 3 readings per cell gives about 0.02 C of noise, far below the SD of 0.11-0.25. And these runs carry FL's clearest land-cover signal: on 09-21, r(dTa, impervious_f300) is 0.26-0.38 and r(dTa, lst_f300) is 0.12-0.48. Weather was clean (RH 66-85%, no saturation). Each run's dTa is centred on its own median, and evaluate.py centres predictions per (slug, run_id), so a single-route run is a valid within-run anomaly test and adds no bias to B-A. The cells without LST on 09-23 simply drop out of the A/B comparison, which uses the same cells for both.",
+      "recommended_action": "Keep 2019-09-21 morning/midday/evening and 2019-09-23 morning. Add a note that they are single-sensor make-up drives (09-23 completes the morning on CAPA80's route; 09-21 adds a route not driven on 09-18). Optionally report FL's scores with and without them as a sensitivity check. Do not exclude them."
+     },
+     {
+      "slug": "fort_lauderdale_fl",
+      "check": "drift adjustment, 09-18 midday (FE artifact)",
+      "upheld": true,
+      "reasoning": "Confirmed by recomputation. The FE drift is -2.157 +/- 0.184 C/h against a protocol slope of +0.204. All 22 cells revisited 15 min or more apart belong to CAPA80 (54 visits, 8 blocks of 300 m), whose own revisits fall by 0.74 C over 0.49 h, a local cooling on its western route. The raw per-vehicle slopes are -0.89 to +0.77 (mean about 0). After FE every vehicle has a residual slope of +1.27 to +2.93 C/h (median +1.98), so the drift injected a spurious ramp along every route. FE vs protocol dTa: r 0.535, RMSE 0.80 C, SD 0.934 vs 0.626; r(impervious) +0.045, r(LST) +0.308 under protocol. The vehicle offsets (range 1.83) are not stable sensor biases. At 14 visit pairs within 10 min in the same cell, CAPA70 reads 1.21 C above CAPA67 in af (CAPA67-CAPA73: 0.0), but 0.2 C below CAPA67 in am. I scanned all 41 FE runs to judge the code fix (/tmp/claude-0/-home-user/4006e271-63a6-582b-9496-e7139ce15b63/scratchpad/qa_work/skeptic_fl_no/scan/). The proposed guard flips 17 of them, and 11 of those flips do nothing (r(fe, protocol) >= 0.97). Two parts of the guard are wrong: (1) The '>= 2 vehicles' rule would also hit single-vehicle runs (Boston, Salt Lake City, FL 09-23), where FE has no offsets to confuse and roughly equals protocol anyway. (2) The automatic fallback when |fe - protocol| > 0.75 would throw out well-identified FE runs: for Los Angeles 2019-09-15 morning (495 spread cells, 69 blocks, 5 vehicles), protocol gives -1.14 C/h at 6-7 am against FE +0.11, a sign that protocol is confused with route geography there.",
+      "recommended_action": "Exclude 2019-09-18 midday until it is rebuilt, then rebuild it with protocol detrending and re-admit it. Optionally apply a CAPA70 offset of about +1.2 C, estimated only from the near-simultaneous co-located pairs, and report the result with and without it. Code fix in adjust_visits is warranted, in a narrower form: when a run has 2 or more vehicles, require the 15-min repeats to come from 2 or more vehicles and 10 or more 300 m blocks. Cluster the drift SE by vehicle or block. Estimate vehicle offsets only from co-located visits with |dt| <= 10 min. Log |fe - protocol| > 0.75 C/h as a warning, not as an automatic fallback. Leave single-vehicle runs out of the vehicle-count rule."
+     },
+     {
+      "slug": "fort_lauderdale_fl",
+      "check": "weather during 09-18 morning (rain)",
+      "upheld": true,
+      "reasoning": "Confirmed from the raw shapefile RH, and the problem is worse than reported. 51% of the 09-18 am readings have RH >= 99% (the reviewer's 0.20 understates it). Per sensor: CAPA79 100% for the whole run, CAPA69 95%, CAPA75 70%, CAPA76 57%, CAPA70 22%; CAPA67 and CAPA73 0%. Several sensors step at once, with RH jumping to 99.9% while the temperature drops 0.7-1.7 C: CAPA75 at 06:14-06:15 (26.1 to 24.4 C at 26.13N), CAPA79 at 06:14 nearby (25.9 to 24.5), CAPA76 at 06:18 (25.9 to 24.8), CAPA70 at 06:31 (25.7 to 25.0). That is a shower passing over routes 3-8 km apart, and some sensors were probably wet from the start. Consequences: 51% of the dTa variance lies between routes, and the soaked CAPA75 and CAPA79 routes average -0.65 and -0.61 C. The protocol drift (-0.81 C/h) is itself driven by the rain onset, so even the dry routes carry a ramp. Within routes, land-cover correlations survive on the dry ones (CAPA67: r with imp_f300 0.46, with lst_f300 0.56) and vanish on the soaked ones (CAPA75 0.03/0.03, CAPA79 -0.09/-0.21). The 09-18 af and pm runs, and the 09-21 and 09-23 mornings, have no saturation. Salvaging part of the run would need a rebuild that drops 5 of 7 routes and re-estimates the drift. Excluding the whole run is proportionate.",
+      "recommended_action": "Exclude 2019-09-18 morning. FL's morning window then rests on the 09-21 and 09-23 make-up runs (1,626 cells, about 990 with LST), which should be kept; note this in FL's record."
+     },
+     {
+      "slug": "fort_lauderdale_fl",
+      "check": "duplicate files, clock resolution, coast",
+      "upheld": false,
+      "reasoning": "The reviewer's facts are right, and there is nothing here to fix. The loose shapefiles hold 20,781 + 17,546 + 16,116 = 54,443 readings, exactly the count dropped as duplicates of the zip. dttm_lc - dttm_tc is -4 h (EDT) for every reading. dttm_tc is the GPS time truncated to the minute (GPS minus dttm_tc is 0-59 s), so passes split every minute. That only reweights visits within a cell slightly and shifts t_s by under 60 s, which is harmless. 2019-09-18 evening is clean: no RH saturation, protocol drift (0 spread repeats), SD 0.30, r_imp 0.15, r_LST 0.16. The LST facts check out: scene 2019-09-13, clear fraction 0.74, 25%, 32% and 37% of driven cells without LST in am, af and pm.",
+      "recommended_action": "No action: keep 2019-09-18 evening. The optional second-resolution clock fix is fine but low priority. If it is done, take the date from dttm_tc (truncation never crosses a day), not from the GPS 'date' field: that field has corrupt values ('180919M'), and the pm run crosses UTC midnight (110 readings dated 19-09)."
+     },
+     {
+      "slug": "new_orleans_la",
+      "check": "drift adjustment, 2020-08-18 midday (FE offsets and drift)",
+      "upheld": true,
+      "reasoning": "Confirmed. FE drift is -0.966 +/- 0.115 C/h against a protocol slope of -0.125. Fleet 10-minute means barely move (33.77 to 33.45-33.47 C), and each sensor's 10-minute medians are flat (CAPA1059 stays at 32.3-32.9). The 35 same-vehicle revisits are 34 from CAPA1050 (-0.8 C over 0.61 h) plus 1 from CAPA1059. There is no cross-vehicle visit pair within 10 min. The offsets (CAPA1014 +0.88, CAPA1050 +0.68, CAPA1059 -1.35, range 2.22) rest on just 3 shared cells visited 30-45 min apart, so they are confused with the drift. The offsets cause most of the damage: offsets alone give RMSE 0.565 against protocol, drift alone 0.23. FE vs protocol dTa: r 0.760, RMSE 0.640. CAPA1059's lakefront route (water about 269 m) flips from -0.86 C under protocol to +0.53 C under FE. Part of the CAPA1059 offset is real: in the 08-08 am run it reads about 0.8 C below CAPA1050 at the same cell within a minute, and that run's FE offset gap is -0.72. The af FE gap (-2.03) is about 2.5 times that. One correction to the reviewer: the '>= 2 vehicles, >= 10 blocks' guard would not catch this run, because CAPA1050 and CAPA1059 both have self-revisits and the spread repeats fall in exactly 10 blocks. Only the |fe - protocol| test (0.84) or a rule that takes offsets only from near-simultaneous crossings catches it.",
+      "recommended_action": "Exclude 2020-08-18 midday until it is rebuilt, then rebuild it with protocol detrending and re-admit it. Apply a CAPA1059 offset of about -0.7 C only as a documented sensitivity, since it assumes the sensor's bias carried over from 08-08 to 08-18. For the code, the fix that matters here is estimating offsets only from co-located visits with |dt| <= 10 min, plus a clustered drift SE. Do not rely on the vehicle-count and block-count rules alone."
+     },
+     {
+      "slug": "new_orleans_la",
+      "check": "multi-day campaign",
+      "upheld": false,
+      "reasoning": "Facts verified, and there is no fault. am comes from the 08-08 traverse zip (2020-08-08: 12 sensors, 26,195 readings, 7,759 cells); af and pm come from the 08-18 zip (10 and 12 sensors). Each run is internally one day, is centred on its own median, and is scored with per-run centring. LST scene 2020-08-15, clear fraction 0.999, offset +7 d for am and -3 d for af/pm. am and pm FE are harmless: r 0.981 and 0.974 against protocol, RMSE 0.157 and 0.137.",
+      "recommended_action": "No action: keep 2020-08-08 morning and 2020-08-18 evening."
+     },
+     {
+      "slug": "new_orleans_la",
+      "check": "target tails",
+      "upheld": false,
+      "reasoning": "Facts verified, and they point to a real feature rather than a fault. 45 af cells (0.65%) have dTa of +3.10 to +5.11 C, nearly all from CAPA1060 at 15:33-15:44 CDT; its minute medians reach 36-37.3 C (max 38.6), RH falls 52% to 46%, and it moves at 12-35 km/h through 100%-impervious Mid-City (29.968, -90.104; LST 48 vs a run median of 45 C). The spot is warm in every run: the same cells average +0.89 C in the 08-08 am (about the 90th percentile) and +0.54 C in the 08-18 pm (about the 90th percentile), and af cells within 300 m, mostly driven by another sensor (CAPA1052), average +1.46 C. The bicycle sensor in the am run agrees with CAPA1060 (+0.02 C at 3 near-simultaneous cell pairs, +0.35 C over 9 shared cells about 19 min apart).",
+      "recommended_action": "No action. The tail survives a protocol rebuild (44 cells >= 3 C), and at 0.65% of the run it is negligible."
+     }
+    ]
+   }
+  }
+ ],
+ "critic": {
+  "concerns": [
+   {
+    "title": "The B \u2212 A statistic and the A/B training loss both use absolute \u00b0C\u00b2 MSE, so one high-variance city (LA) decides the result",
+    "severity": "blocker",
+    "evidence": "Code: evaluate.py:172-176 (_weights) gives each city equal weight by cell count but not by variance. evaluate.py:278-279 (the inner CV) averages per-city MSE, and evaluate.py:545-553 (paired) takes mean \u0394MSE and rel = mean/mean(MSE_A) over absolute MSE. The spread of dTa SD across cities is large: af 0.44 (Austin) to 3.50 (LA); am up to 2.99 (San Bernardino), 1.90 (Seattle), 1.88 (Sedona); pm up to 2.06 (LA), 1.82 (Virginia Beach). Evidence from the existing af smoke evaluation (scratchpad/smoke_eval, 7 cities, same city caches with identical built_utc): LA's \u0394MSE(B\u2212A) is \u22123.82 out of a summed \u22124.22, i.e. 90% of the reported mean of \u22120.603 and the \u221216% relative change. The other 6 cities average \u22120.067. Only 3 cities improve and 4 get worse, and the mean per-city relative \u0394MSE is +3.3%, so B is worse on average. LA also contaminates training: it holds about 71% of the equal-weighted squared loss (var 12.3 against 0.2-1.6). Refitting the selected ridge (\u03b1=300) with and without LA in training (qa_work/completeness/la_dom.py) gives: Asheville A r \u22120.21 \u2192 +0.54, MSE 1.685 \u2192 0.910, B\u2212A \u22120.353 \u2192 \u22120.074; Seattle A r \u22120.21 \u2192 +0.18, B\u2212A \u22120.489 \u2192 \u22120.178; Austin A MSE 0.436 \u2192 0.223. So much of the 'LST gain' in other cities is B undoing an LA-learned elevation artefact, since LA af has r(dTa, elev) +0.81 against \u22120.49 in Asheville. With variance-equalised weights (LA kept), mean B\u2212A falls from \u22120.603 to \u22120.199, and to \u22120.041 without LA. The inner CV picked \u03b1=300, the top of the grid, in 6 of 7 folds; its inner MSE of 3.3-9 \u00b0C\u00b2 is LA-sized.",
+    "recommended_check": "Rerun with (i) training weights 1/(n_city\u00b7var_city(dTa)), which uses training labels only, or a per-city standardised target. (ii) Run the paired test on a scale-free per-city statistic as well: \u0394MSE/MSE_A or \u0394MSE/var(dTa), plus a Wilcoxon test. (iii) Do a leave-one-group-out influence analysis of the verdict (drop LA, San Diego, San Bernardino, Seattle in turn). Report the verdict under absolute and relative weighting. Exclude or flag runs whose dTa SD is near sensor noise (Fort Lauderdale make-up runs: SD 0.11-0.25), so relative statistics are not dominated by noise. Extend ridge_alphas beyond 300."
+   },
+   {
+    "title": "No null model: A is worse than predicting zero in several held-out cities, so 'beats A' can mean 'is less wrong'",
+    "severity": "major",
+    "evidence": "Smoke af run (predictions.parquet; MSE of the zero prediction, i.e. the target variance, against A): Asheville 1.20 vs A 1.685 (r \u22120.21); Austin 0.196 vs 0.436 (r \u22120.07); LA 12.36 vs 20.01 (r \u22120.87); Seattle 1.65 vs 2.44 (r \u22120.21). In LA, B 'improves' by 3.8 \u00b0C\u00b2 while still anti-correlated (r \u22120.70); it only has a smaller spread (SD 0.68 vs 0.99). C \u2212 A wins 6 of 7 cities, partly through shrinkage: C's prediction SD is 0.23-0.51 against A's 0.24-0.99. In Austin, C (MSE 0.205) is worse than zero (0.196) yet counts as beating A by 0.23. The 5% relative-gain rule at evaluate.py:553/569 is measured against a baseline that is worse than no model. SplineTransformer(extrapolation=\"linear\") at evaluate.py:150 lets out-of-range anomalies extrapolate; LA's elevation_c SD is 140 m against 6-46 m elsewhere.",
+    "recommended_check": "Add a model N (predict 0 after centring) to evaluate_window. Report B \u2212 N and C \u2212 N with the same paired test, and require B and C to beat N before any claim. Report per window how many held-out cities have r(A, dTa) < 0. Add a scale-free comparison: paired difference in spatial r, or MSE after a training-derived amplitude calibration. Rerun A with extrapolation='constant' to see how much of A's deficit is extrapolation."
+   },
+   {
+    "title": "'Land cover' in A is WorldCover class fractions, so B \u2212 A measures LST beyond a crude categorical map",
+    "severity": "major",
+    "evidence": "features_open.py:7-8 and :242-244: canopy = WorldCover 2021 'tree' class fraction and impervious = 'built' class fraction. The classes are mutually exclusive per 10 m pixel, and the 2021 map is applied to 2019-2023 campaigns. On af driven cells, canopy is exactly 0 for 55-98% of cells in 17 of 31 cities: Houston 0.55, Boston 0.56, Providence 0.61 (median canopy 0, median impervious 91.7%), LA 0.72, New Orleans 0.80, San Diego 0.82, Albuquerque 0.92, Las Cruces 0.98. Among canopy = 0 cells, NDVI p90 is 0.40-0.50 in humid cities (New Orleans 0.50, Charleston 0.50, Houston 0.43, Asheville 0.86), so street trees and lawns inside 'built' pixels are invisible to canopy. LST picks up this sub-class shading and vegetation. A positive B \u2212 A would then mean 'beyond WorldCover', not 'beyond land cover'.",
+    "recommended_check": "Every city is in CONUS, so rebuild A's canopy and impervious from continuous 30 m NLCD (USFS tree canopy cover and NLCD percent impervious of the nearest year), keep NDVI and albedo, and rerun B \u2212 A. Report how much of B's gain survives. At minimum, report B \u2212 A for cities where canopy = 0 on fewer than 40% of cells against the others."
+   },
+   {
+    "title": "LST may earn B's gain as a proxy for coast-to-inland and terrain gradients on large grids, not as surface-air coupling",
+    "severity": "major",
+    "evidence": "The cities where B gains are those where dTa is driven by mesoscale gradients that land cover does not resolve. LA af: r(dTa, impervious) \u22120.006, r(dTa, elevation) +0.81, r(dTa, LST) +0.53, grid 42 x 49 km. Seattle af: r(dTa, impervious) \u22120.011 vs r(dTa, LST) +0.44, grid 56 x 68 km. San Diego af: \u22120.049 vs +0.38, grid 31 x 39 km. In the smoke run, the three B-better cities are LA, Seattle and Asheville; the four flatter, smaller-signal cities get worse. lst_c is the cell LST minus the run's median over the whole driven area (evaluate.py:128-131), so it carries regional gradients, e.g. the marine-layer-cooled coast at the 10:30 overpass. A's only regional terms are the within-run elevation anomaly and log water distance. These clear western scenes (clear fraction 0.98-1.0, small offsets) coincide with the high-variance runs, while humid eastern cities have cloudier, more offset scenes (Charleston 0.61, Lynchburg 0.52, Providence 0.55, Raleigh +16 d).",
+    "recommended_check": "Split LST into a regional part (Gaussian focal at about 3-5 km) and a local residual (lst \u2212 lst_f3000). Rerun B with only the residual, and also add regional non-satellite controls to A (distance to coast, 3-5 km focal elevation and impervious). Stratify B \u2212 A by grid extent (< 30 km vs larger) and by coastal vs inland."
+   },
+   {
+    "title": "Physics fits sit at the L bounds, LST fits switch off the land-cover source, and the per-parameter median transfer mixes incompatible fits",
+    "severity": "major",
+    "evidence": "Smoke af physics fits (smoke_eval/physics/*.json, physics_iter 30 vs default 60): L = 60 m, the floor of one 60 m cell from physics.py:415-418, for Atlanta, Raleigh and Seattle (both C and C0). L = 2000 m, the ceiling, for LA (C 2000, C0 1999). Only 3 of 7 lie inside the bounds (73-178 m). The transferred median L of about 100 m spreads the source over fewer than 2 cells, so C is close to a local fixed-form regression. In the LST fits, the land-cover gain collapses: a = 0.0093 vs 17.19 without LST (Austin), 0.0156 vs 1.52 (Seattle), 0.051 vs 13.8 (LA). Raleigh's g_lst is 3.5e-8 (c_lst at its floor). transfer_params (evaluate.py:428-437) takes separate medians of L, a_phys, g and e0-e3 over different cities, which gives a parameter set that no city fitted. Separately, physics.py:697 fills cells with no LST with the frame mean, so in cities with 30-46% LST NaN (Charleston, Lynchburg, Providence, Atlanta) the fit's LST term is attenuated in cloud gaps.",
+    "recommended_check": "Per window, report the number of fits with L within 5% of L_lo or L_hi. Rerun C and C0 with physics_iter 60, physics_cell_m 30 (floor 30 m) and L_max 5000 m, then compare C \u2212 A. As a sensitivity, transfer a coherent parameter vector: the full fit of the median-loss training city, or one pooled fit over the training cities. Exclude bound-pinned fits from the medians. Fit C only on LST-covered cells (y = NaN elsewhere) and check whether g_lst and C \u2212 C0 change."
+   },
+   {
+    "title": "A's land-cover anomalies are centred before the LST filter, while LST and the target are centred after it",
+    "severity": "minor",
+    "evidence": "design() runs on all of a window's cells (evaluate.py:627; centring at :126-131). Cells without LST are dropped afterwards (:650), and the target is re-centred on the remaining cells (:659). So in cloudy cities the land-cover anomalies of the scored cells are not median-zero, while lst_c is. Medians over all driven cells vs scored cells (af): Seattle impervious 53.3 \u2192 68.8, elevation 88 \u2192 75 m; Charleston impervious 25 \u2192 33, canopy 50 \u2192 33; Lynchburg canopy 25.7 \u2192 41.7; Salem impervious 33 \u2192 42. Prediction centring removes a constant only for a linear model; with splines and GBM, the offset moves along the learned curve, and only LST is centred on the scored cells.",
+    "recommended_check": "Apply the predictor filter before design(), so all anomalies use the scored cells, which uses positions only. Rerun B \u2212 A and check that per-city \u0394MSE for Seattle, Charleston, Lynchburg, Providence, Atlanta and Salem does not change materially."
+   },
+   {
+    "title": "The fixed physics regime per window does not match the forcing in several cities (am 'day' at SW \u2248 0; pm 'night' with sun up)",
+    "severity": "minor",
+    "evidence": "WINDOW_REGIME (evaluate.py:360) makes am a day window. Yet ERA5 am SW is 0.0-10 W/m\u00b2 in 10 cities (Atlanta 0.0, Fort Lauderdale 0.0, Austin 0.1, San Bernardino 0.2, Boise 0.4, Houston 1.4, Asheville 5.0, LA 5.1, Charleston 5.6, San Diego 10.0) against 197.5 in Sedona and 200.5 in Victorville. At SW \u2248 0 the shade, kc and albedo terms of Q* (physics.py:986-1000) have no influence, so their medians are effectively starting values, and these are transferred to the two SW-dominated cities. pm is a night window, but the sun is still up in the west: SW 209 in Salt Lake City, 179 in Boise, 144 in Seattle and Abingdon, 139 in Asheville, 130 in Salem.",
+    "recommended_check": "Report C \u2212 A and C \u2212 C0 for am without Sedona and Victorville, and for pm split by SW < 50 vs \u2265 50 W/m\u00b2. Alternatively, run both regimes for every window as a sensitivity, and report which parameters were identifiable (moved from their starting values) in each fit."
+   },
+   {
+    "title": "Per-window verdicts are tested separately at one-sided 0.025, with no primary window or correction",
+    "severity": "minor",
+    "evidence": "evaluate() (evaluate.py:781-786) runs af, am and pm (and ni where possible), and each window gets its own paired() verdict (B\u2212A, C\u2212A, C\u2212C0) at ALPHA 0.025. cli.py:169-177 prints each window's verdict, with no rule for combining them. Claiming when any of the three windows passes inflates the error rate to about 7% under the null, and the windows share cities, so they are not independent evidence.",
+    "recommended_check": "Name af as the primary window before running on the real data, or apply Holm across windows (and across B\u2212A and C\u2212A if both are claimed). Report the combined per-city statistic as a secondary result."
+   }
+  ]
+ }
+}

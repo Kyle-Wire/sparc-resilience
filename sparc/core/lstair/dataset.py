@@ -11,19 +11,27 @@ For every city (a CAPA catalog name, or a local folder given by the user):
    cell edges on multiples of 30 m, covering the traverses plus a margin (default 2 km: the 1 km focal means
    and the physics model's source domain).
 3. **Drift and vehicles.**  Within a run the air warms or cools and each vehicle's sensor has an offset.  As
-   :mod:`sparc.core.identify`'s levels design does, a time polynomial and vehicle offsets are fitted jointly,
-   here against **cell fixed effects** instead of land-cover terms, so no predictor enters the target:
+   :mod:`sparc.core.identify`'s levels design does, a time polynomial is fitted with a level per vehicle, here
+   against **cell fixed effects** instead of land-cover terms, so no predictor enters the target:
    ``T_visit = μ_cell + β·τ (+ β₂·τ²) + o_vehicle + ε`` (τ in hours from the run's median time).  Drift is
-   identified only from cells revisited at different times; vehicle offsets only between vehicles linked by
-   shared cells, so they are centred (visit-weighted mean 0) within each linked group.  Real Heat Watch routes
-   rarely give that: each vehicle drives its own route and comes back to a cell within minutes (Providence:
-   every repeat within 4 min).  So the fixed-effect drift is used only when at least 20 cells were revisited
-   15 min or more apart and its standard error is below 0.3 °C/h (:func:`adjust_visits`); otherwise the run
-   falls back to CAPA's protocol: a straight line through the hour fitted to all readings (vehicle offsets 0),
-   with the reason and both drift estimates in ``meta.json``.
+   identified only from cells revisited at different times.  Real Heat Watch routes rarely give that: each
+   vehicle drives its own route and comes back to a cell within minutes (Providence: every repeat within 4 min).
+   So the fixed-effect drift is used only when at least 20 cells were revisited 15 min or more apart, in at
+   least 10 blocks of 300 m and, with two or more vehicles, not more than 80% of them one vehicle's, and its
+   standard error (clustered by block) is below 0.3 °C/h (:func:`adjust_visits`); otherwise the run takes CAPA's
+   protocol line, a polynomial in time fitted within vehicles (a level each, so that routes ending early do not
+   pass for warming), with the reason and the drift estimates in ``meta.json``.  Vehicle offsets come only from
+   cells two vehicles visited within 10 min of each other (at least 5 such cells; :func:`co_visit_offsets`) and
+   are centred (visit-weighted mean 0) within each group so linked; a vehicle without such a link keeps 0.
+   Vehicles are sensors: one sensor's logger files of a run are one vehicle (:func:`sensor_name`).
 4. **Target.**  ``Ta`` (°C) is the cell mean of the adjusted visits of the run; ``dTa = Ta − background`` with the
-   background the run's median ``Ta`` over its cells.  ``ta_era5`` is ERA5's 2 m temperature over the run's
-   hours at the city centre (:func:`sparc.core.forcing.era5_site`), when available.
+   background the run's median ``Ta`` over its cells.  ``ta_era5`` is ERA5's 2 m temperature at the city centre,
+   time-weighted over the run's span (:func:`era5_run`, :func:`sparc.core.forcing.era5_site`), when available.
+   **QA** (the review of the 31 built cities, 2026-10-20): before the grid is laid, the readings of bicycle and
+   walking sensors and those the QA registry lists (:mod:`~sparc.core.lstair.exclusions`) are dropped; each run's
+   ``qa_exclude`` ("" when usable; a ``table.parquet`` column and ``meta["runs"]``) says why it is left out by
+   default: the registry, a walked traverse (median speed below 10 km/h) or a single vehicle with the protocol
+   line (:func:`build_run`).
 5. **Predictors** (rasters on the city grid, sampled at the cells): canopy and impervious (%), NDVI, albedo,
    elevation (m) and distance to water (m) from :mod:`sparc.core.features_open` (WorldCover, Sentinel-2,
    Copernicus DEM), with Gaussian focal means (σ = radius/2, as the core's focal features) at 100, 300 and
@@ -37,7 +45,9 @@ While a city builds, each source's result (features, LST, ERA5 per run) is kept 
 as it finishes, so a build cut off by a container restart resumes there.  Each city is cached in
 ``OUT/cities/<slug>/``: ``table.parquet``, ``rasters.npz`` (every raster on the full
 grid: the physics model needs features beyond the driven cells) and ``meta.json`` (provenance, runs, drift,
-scenes), written last, so a city with ``meta.json`` status ``ok`` is skipped on a rerun.  Hosts are probed
+scenes), written last, so a city with ``meta.json`` status ``ok`` is skipped on a rerun unless its settings, the
+QA rules (:data:`DATASET_VERSION`) or its QA-registry entries changed; a rebuild on the same grid reuses the
+previous build's feature rasters (:func:`reusable_features`).  Hosts are probed
 before anything is fetched (for Landsat: the STAC API, the SAS token and a signed listing of the COG container);
 a blocked host stops the build at once with its name (:class:`NetworkBlocked`).  A Landsat read that fails for
 another reason fails the city (retried on the next run): NaN LST in a finished city means only that every
@@ -431,7 +441,8 @@ def make_city_grid(lon: np.ndarray, lat: np.ndarray, crs: str | None = None, cel
 # Drift and vehicle offsets                                                    #
 # --------------------------------------------------------------------------- #
 def _components(cells: np.ndarray, vehicles: np.ndarray) -> np.ndarray:
-    """Group id of every vehicle: vehicles are linked when they visited a common cell."""
+    """Group id of every vehicle: vehicles are linked when they visited a common cell (the rank of the cell and
+    vehicle effects)."""
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
 
@@ -445,82 +456,213 @@ def _components(cells: np.ndarray, vehicles: np.ndarray) -> np.ndarray:
 
 MIN_REPEAT_SPAN_S = 900.0             # a repeat visit identifies drift only when it comes back this much later
 MAX_DRIFT_SE = 0.3                     # °C/h: a cell-fixed-effect drift less certain than this is not used
+#: ... nor one whose spread repeats fall in fewer blocks of REPEAT_BLOCK_M than this (Fort Lauderdale 2019-09-18
+#: midday: all 22 in 8 blocks of one route, fe −2.16 °C/h against +0.20 for the protocol line, a local cooling on
+#: CAPA80's western route that put a +1.3 to +2.9 °C/h ramp along every other route) ...
+MIN_REPEAT_BLOCKS = 10
+REPEAT_BLOCK_M = 300.0
+#: ... nor, with two or more vehicles, one whose spread repeats are more than this share one vehicle's (Fort
+#: Lauderdale: 22 of 22 CAPA80's; New Orleans 2020-08-18 midday: 34 of 35 CAPA1050's, fe −0.97 against −0.13 °C/h
+#: while every sensor's 10-minute medians stay flat)
+MAX_REPEAT_SHARE = 0.8
+#: °C/h: a fixed-effect drift that passes every guard but differs this much from the protocol line is kept, with a
+#: warning: the protocol line has faults of its own (route composition, :func:`_protocol_line`)
+DRIFT_GAP_WARN = 0.75
+#: Two vehicles are linked (their offsets estimated against each other) only by cells both visited within this
+#: many seconds of each other, at least MIN_CO_VISIT_CELLS such cells (:func:`co_visit_offsets`)
+CO_VISIT_S = 600.0
+MIN_CO_VISIT_CELLS = 5
 
 
-def _protocol_line(temp: np.ndarray, P: np.ndarray) -> tuple[np.ndarray, float]:
-    """CAPA's detrending: a polynomial in time through every reading; (coefficients, SE of the linear one)."""
-    X = np.column_stack([np.ones(P.shape[0]), P])
+def _protocol_line(temp: np.ndarray, P: np.ndarray, vi: np.ndarray | None = None) -> tuple[np.ndarray, float]:
+    """CAPA's detrending as a line within vehicles: ``temp ~ vehicle levels + P(t)``; (the coefficients of ``P``,
+    the SE of the linear one).  ``vi``: each visit's vehicle index (0 … k−1); None fits one level, the line through
+    every reading.
+
+    The vehicle levels keep route composition out of the time axis.  In Virginia Beach's afternoon run
+    (2021-07-15) four eastern, oceanfront routes stop at 15:27 and the warmest inland route starts at 15:18: the
+    line through every reading climbs +2.29 °C/h while the vehicles' own readings warm +1.06 °C/h, and removing
+    +2.29 damped the coast–inland contrast (r(dTa, lon) −0.33 against −0.41 within vehicles).  With one vehicle,
+    or vehicles that each drive the whole run, it is the line through every reading."""
+    n = temp.size
+    vi = np.zeros(n, dtype=np.int64) if vi is None else np.asarray(vi, dtype=np.int64)
+    k = int(vi.max()) + 1 if n else 1
+    D = np.zeros((n, k))
+    D[np.arange(n), vi] = 1.0
+    X = np.column_stack([D, P])
     b, *_ = np.linalg.lstsq(X, temp, rcond=None)
-    dof = temp.size - X.shape[1]
+    dof = n - int(np.linalg.matrix_rank(X))
     se = float("inf")
     if dof > 0:
         s2 = float(np.sum((temp - X @ b) ** 2)) / dof
         with np.errstate(all="ignore"):
             cov = s2 * np.linalg.pinv(X.T @ X)
-        se = float(np.sqrt(max(cov[1, 1], 0.0)))
-    return b, se
+        se = float(np.sqrt(max(cov[k, k], 0.0)))
+    return b[k:], se
+
+
+def co_visit_offsets(cells: np.ndarray, vi: np.ndarray, t: np.ndarray, resid: np.ndarray, weights: np.ndarray,
+                     max_dt_s: float = CO_VISIT_S, min_cells: int = MIN_CO_VISIT_CELLS
+                     ) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    """Vehicle offsets from co-located, near-simultaneous visits only.
+
+    Two vehicles are linked when at least ``min_cells`` cells were visited by both within ``max_dt_s`` (default
+    10 min) of each other; each such cell gives one difference of the two vehicles' drift-removed temperatures
+    (``resid``; the mean over the cell's visit pairs within ``max_dt_s``).  The offsets solve those differences by
+    least squares within each connected group of linked vehicles and are centred there (visit-weighted mean 0,
+    ``weights``: visits per vehicle index); a vehicle without such a link keeps 0.
+
+    Offsets fitted against cell fixed effects rest on whatever cells two vehicles share, however far apart in
+    time, so a link driven an hour apart reads the change of the air (or of the street) over that hour as a sensor
+    bias.  Los Angeles 2019-09-15 morning: CAPA34 +1.37 and CAPA39 −1.39 °C from 19 cells of one street 52 min
+    apart, which near-simultaneous visits to nearby cells contradict (the morning's offsets raised their mean
+    squared mismatch within 1.5 km and 30 min from 0.31 to 1.86 °C²); Richmond 2021-07-15 evening: 1102 −1.04 °C
+    from 7 cells 57 min apart.  Co-visits
+    minutes apart do show real biases: Fort Lauderdale 2019-09-18 midday, CAPA70 reads 1.2 °C above CAPA67 at 14
+    visit pairs within 10 min in the same cell.
+
+    Returns (offset per vehicle index, linked-group label per vehicle index, the links: the two vehicle indices,
+    the cells and the mean difference first − second)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+
+    k = int(weights.size)
+    off, lab = np.zeros(k), np.arange(k)
+    df = pd.DataFrame({"cell": cells, "v": vi, "t": t, "r": resid})
+    m = df[(df.groupby("cell")["v"].transform("nunique") >= 2).to_numpy()]
+    pr = m.merge(m, on="cell", suffixes=("_a", "_b"))
+    pr = pr[((pr["v_a"] < pr["v_b"]) & ((pr["t_a"] - pr["t_b"]).abs() <= max_dt_s)).to_numpy()]
+    per = pr.assign(d=pr["r_a"] - pr["r_b"]).groupby(["v_a", "v_b", "cell"], sort=True)["d"].mean().reset_index()
+    per = per[(per.groupby(["v_a", "v_b"])["d"].transform("size") >= min_cells).to_numpy()]
+    if not len(per):
+        return off, lab, []
+    a, b, d = (per[c].to_numpy() for c in ("v_a", "v_b", "d"))
+    _, lab = connected_components(coo_matrix((np.ones(a.size), (a, b)), shape=(k, k)), directed=False)
+    for g in np.unique(lab):
+        sel = np.flatnonzero(lab == g)
+        if sel.size < 2:
+            continue
+        rows = np.flatnonzero(np.isin(a, sel))
+        A = np.zeros((rows.size, sel.size))
+        A[np.arange(rows.size), np.searchsorted(sel, a[rows])] = 1.0
+        A[np.arange(rows.size), np.searchsorted(sel, b[rows])] = -1.0
+        o, *_ = np.linalg.lstsq(A, d[rows], rcond=None)
+        off[sel] = o - np.average(o, weights=weights[sel])
+    agg = per.groupby(["v_a", "v_b"])["d"].agg(["size", "mean"])
+    links = [{"vehicles": [int(x), int(y)], "n_cells": int(r["size"]), "diff_c": float(r["mean"])}
+             for (x, y), r in agg.iterrows()]
+    return off, lab, links
 
 
 def adjust_visits(v: pd.DataFrame, method: str = "fe", degree: int = 1, min_repeat_cells: int = 20,
-                  min_span_s: float = MIN_REPEAT_SPAN_S, max_drift_se: float = MAX_DRIFT_SE) -> tuple[np.ndarray, dict]:
+                  min_span_s: float = MIN_REPEAT_SPAN_S, max_drift_se: float = MAX_DRIFT_SE,
+                  min_repeat_blocks: int = MIN_REPEAT_BLOCKS, max_repeat_share: float = MAX_REPEAT_SHARE,
+                  co_visit_s: float = CO_VISIT_S, min_co_visit_cells: int = MIN_CO_VISIT_CELLS
+                  ) -> tuple[np.ndarray, dict]:
     """Visit temperatures with the run's drift and the vehicles' offsets removed.
 
-    ``v`` has ``cell, vehicle, t_s, temp`` (one row per visit).  ``method``: ``"fe"`` (time polynomial and
-    vehicle offsets fitted against cell fixed effects; module docstring), ``"protocol"`` (a polynomial in time
-    fitted to all readings, CAPA's detrending; no vehicle offsets) or ``"none"``.
+    ``v`` has ``cell, vehicle, t_s, temp`` (one row per visit) and, for the block guard and the clustered SE,
+    ``x, y`` (the cell centre, m).  ``method``:
+
+    * ``"fe"`` (default): the drift is a time polynomial fitted against cell fixed effects, with a level per
+      vehicle so that vehicles' levels never pass for drift (module docstring), used only when the repeat visits
+      identify it (below), else the protocol line; the vehicle offsets come from co-located, near-simultaneous
+      visits only (:func:`co_visit_offsets`), whichever drift is used.
+    * ``"protocol"``: CAPA's detrending, a polynomial in time fitted within vehicles (:func:`_protocol_line`); no
+      vehicle offsets.
+    * ``"none"``.
 
     Within cell fixed effects the drift is identified only by cells visited twice **at different times**: two
     passes a minute apart say almost nothing about the warming over an hour, and extrapolating from them puts
     an error along each route's time axis into the target (spatially structured, since time runs along the
-    route).  So ``"fe"`` is used only when at least ``min_repeat_cells`` cells were revisited ``min_span_s`` or
-    more apart (default 15 min) *and* the drift's standard error is below ``max_drift_se`` (default 0.3 °C/h);
-    otherwise it falls back to ``"protocol"`` with the reason in ``info["fallback"]``.  The SE is the OLS one
-    of the linear coefficient (Frisch–Waugh: σ̂²/‖M τ‖², with M the projection off the cell and vehicle effects
-    and the other time terms; σ̂² from the fit's residuals and its degrees of freedom).
+    route).  So the fixed-effect drift is used only when (1) at least ``min_repeat_cells`` cells were revisited
+    ``min_span_s`` or more apart (default 15 min), (2) those cells lie in at least ``min_repeat_blocks`` blocks of
+    300 m (when ``x, y`` are given), (3) with two or more vehicles, no vehicle holds more than
+    ``max_repeat_share`` of them (a cell shared among its vehicles by their visits there) and (4) the drift's
+    standard error is below ``max_drift_se`` (default 0.3 °C/h): a drift seen on a few streets, or on one route,
+    is that place's change, not the run's.  Otherwise the run takes the protocol line, with the reason in
+    ``info["fallback"]``.  A fixed-effect drift that passes but differs from the protocol line by more than
+    :data:`DRIFT_GAP_WARN` is kept with ``info["warning"]``.  The SE is the larger of the OLS one of the linear
+    coefficient (Frisch–Waugh: σ̂²/‖M τ‖², with M the projection off the cell and vehicle effects and the other time
+    terms; σ̂² from the fit's residuals and its degrees of freedom) and that one clustered by 300 m block (by
+    vehicle without ``x, y``), √(G/(G−1) · Σ_g s_g²) / ‖M τ‖² with s_g the block's sum of the visits' scores
+    (M τ)_i û_i: the repeats of one pass along one street are not independent, and each cell lies in one block
+    (the larger of the conventional and the robust SE: Angrist & Pischke 2009, *Mostly Harmless Econometrics*,
+    §8.1; Cameron & Miller 2015, *J. Hum. Resour.* 50(2), 317–372).
 
     Returns (adjusted temperatures, info) with ``info["method"]`` the method used, ``drift_per_h`` (the linear
-    coefficient, temperature units per hour at the run's median time), ``drift_se_per_h``, ``vehicle_offsets``,
-    ``n_repeat_cells`` and ``n_repeat_cells_spread`` (revisited at least ``min_span_s`` apart).  The adjustment
-    is zero at the run's median time (τ = 0), so levels are those of mid-run."""
+    coefficient, temperature units per hour at the run's median time), ``drift_se_per_h``, ``drift_coef``,
+    ``protocol_drift_per_h`` (the protocol line) and ``pooled_drift_per_h`` (the line through every reading),
+    ``fe_drift_per_h`` when the fixed effects were fitted, the guards' evidence (``n_repeat_cells``,
+    ``n_repeat_cells_spread``, ``n_repeat_blocks``, ``repeat_vehicle_share``, ``repeat_vehicle``),
+    ``vehicle_offsets`` (every vehicle; 0 without a co-visit link), ``vehicle_links`` and ``n_vehicle_groups``.
+    The adjustment is zero at the run's median time (τ = 0), so levels are those of mid-run."""
     temp = v["temp"].to_numpy(float)
     t = v["t_s"].to_numpy(float)
     tau = (t - np.median(t)) / 3600.0
     cells = v["cell"].to_numpy()
     veh = v["vehicle"].to_numpy()
+    uv, vi = np.unique(veh, return_inverse=True)
+    w = np.bincount(vi, minlength=uv.size).astype(float)
     counts = pd.Series(cells).value_counts()
     n_rep = int((counts >= 2).sum())
     gt = pd.Series(t).groupby(cells)
     span = gt.max() - gt.min()
-    n_spread = int((span >= float(min_span_s)).sum())
+    spread = span.index[(span >= float(min_span_s)).to_numpy()]
+    n_spread = int(spread.size)
+    blk = None
+    if "x" in v and "y" in v:
+        bx = np.floor(v["x"].to_numpy(float) / REPEAT_BLOCK_M).astype(np.int64)
+        by = np.floor(v["y"].to_numpy(float) / REPEAT_BLOCK_M).astype(np.int64)
+        blk = pd.factorize(pd.MultiIndex.from_arrays([bx, by]))[0] if len(v) else np.zeros(0, np.int64)
+    in_spread = np.isin(cells, spread)
+    n_blocks = None if blk is None else int(np.unique(blk[in_spread]).size)
+    share, top = 0.0, None
+    if n_spread:
+        nv_c = pd.DataFrame({"c": cells[in_spread], "v": vi[in_spread]}).groupby(["c", "v"]).size()
+        by_v = (nv_c / nv_c.groupby(level="c").transform("sum")).groupby(level="v").sum() / n_spread
+        share, top = float(by_v.max()), str(uv[int(by_v.idxmax())])
     info: dict = {"requested": method, "degree": int(degree), "n_visits": int(temp.size), "n_cells": int(counts.size),
-                  "n_repeat_cells": n_rep, "n_repeat_cells_spread": n_spread, "min_span_s": float(min_span_s),
-                  "max_drift_se": float(max_drift_se), "n_vehicles": int(np.unique(veh).size)}
+                  "n_repeat_cells": n_rep, "n_repeat_cells_spread": n_spread, "n_repeat_blocks": n_blocks,
+                  "repeat_vehicle_share": share, "repeat_vehicle": top, "min_span_s": float(min_span_s),
+                  "max_drift_se": float(max_drift_se), "n_vehicles": int(uv.size),
+                  "max_vehicle_visit_share": float(w.max() / w.sum()) if w.size else 0.0}
     if method == "none" or temp.size < 3:
         info.update(method="none", drift_per_h=0.0, vehicle_offsets={})
         return temp.copy(), info
     if method not in ("fe", "protocol"):
         raise ValueError(f"unknown drift method {method!r} (fe, protocol, none)")
     P = np.column_stack([tau ** k for k in range(1, degree + 1)])
+    line, line_se = _protocol_line(temp, P, vi)
+    info.update(protocol_drift_per_h=float(line[0]), protocol_drift_se_per_h=line_se,
+                pooled_drift_per_h=float(_protocol_line(temp, P)[0][0]))
 
-    def protocol(reason: str | None) -> tuple[np.ndarray, dict]:
-        b, se = _protocol_line(temp, P)
+    def finish(used: str, coef: np.ndarray, se: float, reason: str | None = None) -> tuple[np.ndarray, dict]:
         if reason:
             info["fallback"] = reason
-        info.update(method="protocol", drift_per_h=float(b[1]), drift_se_per_h=se, drift_coef=[float(x) for x in b[1:]],
+        adj = temp - P @ coef
+        info.update(method=used, drift_per_h=float(coef[0]), drift_se_per_h=se, drift_coef=[float(x) for x in coef],
                     vehicle_offsets={})
-        return temp - P @ b[1:], info
+        if method == "fe":
+            off, lab, links = co_visit_offsets(cells, vi, t, adj, w, co_visit_s, min_co_visit_cells)
+            adj = adj - off[vi]
+            info.update(vehicle_offsets={str(k): float(o) for k, o in zip(uv, off)},
+                        n_vehicle_groups=int(np.unique(lab).size), offsets=f"co-visits ≤ {co_visit_s / 60:.0f} min",
+                        vehicle_links=[{**ln, "vehicles": [str(uv[i]) for i in ln["vehicles"]]} for ln in links])
+        return adj, info
 
+    protocol = "the protocol line (CAPA's detrending, fitted within vehicles)"
     if method == "protocol":
-        return protocol(None)
+        return finish("protocol", line, line_se)
     if n_spread < min_repeat_cells:
-        return protocol(f"only {n_spread} cells revisited ≥ {min_span_s / 60:.0f} min apart (< {min_repeat_cells}; "
-                        f"{n_rep} revisited at all): repeat visits minutes apart do not identify the drift over the "
-                        "run, CAPA protocol detrending")
+        return finish("protocol", line, line_se,
+                      f"only {n_spread} cells revisited ≥ {min_span_s / 60:.0f} min apart (< {min_repeat_cells}; "
+                      f"{n_rep} revisited at all): repeat visits minutes apart do not identify the drift over the "
+                      f"run, {protocol}")
     from scipy.sparse import csr_matrix, hstack
     from scipy.sparse.linalg import lsqr
 
     uc, ci = np.unique(cells, return_inverse=True)
-    uv, vi = np.unique(veh, return_inverse=True)
     n = temp.size
     C = csr_matrix((np.ones(n), (np.arange(n), ci)), shape=(n, uc.size))
     V = csr_matrix((np.ones(n), (np.arange(n), vi)), shape=(n, uv.size))
@@ -529,30 +671,41 @@ def adjust_visits(v: pd.DataFrame, method: str = "fe", degree: int = 1, min_repe
     y0 = temp - temp.mean()
     sol = lsqr(X, y0, atol=1e-12, btol=1e-12, iter_lim=lim)[0]
     beta = sol[uc.size:uc.size + degree]
-    off = sol[uc.size + degree:].copy()
-    comp = _components(cells, veh)
-    n_groups = int(np.unique(comp).size)
-    # SE of the linear drift coefficient (Frisch–Waugh)
+    n_groups = int(np.unique(_components(cells, veh)).size)
+    # SE of the linear drift coefficient (Frisch–Waugh), and clustered by block (by vehicle without positions)
     dof = n - (uc.size + degree + uv.size - n_groups)
     Z = hstack([C, csr_matrix(P[:, 1:]), V]).tocsr() if degree > 1 else hstack([C, V]).tocsr()
     e = P[:, 0] - Z @ lsqr(Z, P[:, 0], atol=1e-12, btol=1e-12, iter_lim=20 * Z.shape[1] + 1000)[0]
     ee = float(e @ e)
-    se = float("inf")
+    se_ols = se_cl = float("inf")
     if dof > 0 and ee > 1e-12:
-        s2 = float(np.sum((y0 - X @ sol) ** 2)) / dof
-        se = math.sqrt(s2 / ee)
-    info["fe_drift_per_h"], info["fe_drift_se_per_h"] = float(beta[0]), se
+        u = y0 - X @ sol
+        se_ols = math.sqrt(float(np.sum(u ** 2)) / dof / ee)
+        s = e * u
+        g = blk if blk is not None else vi
+        S = np.bincount(g, weights=s)
+        G = int(np.count_nonzero(np.bincount(g, weights=np.abs(e)) > 1e-9))
+        se_cl = math.sqrt(G / (G - 1) * float(np.sum(S ** 2))) / ee if G >= 2 else float("nan")
+    se = max(se_ols, se_cl) if np.isfinite(se_cl) else se_ols
+    info.update(fe_drift_per_h=float(beta[0]), fe_drift_se_per_h=se, fe_drift_se_ols_per_h=se_ols,
+                fe_drift_se_cluster_per_h=se_cl, se_clusters="300 m blocks" if blk is not None else "vehicles")
+    fe = f"cell-fixed-effect drift {beta[0]:+.2f} ± {se:.2f} °C/h"
+    if n_blocks is not None and n_blocks < min_repeat_blocks:
+        return finish("protocol", line, line_se,
+                      f"{fe} rests on {n_spread} cells revisited ≥ {min_span_s / 60:.0f} min apart in only {n_blocks} "
+                      f"blocks of {REPEAT_BLOCK_M:.0f} m (< {min_repeat_blocks}): a change on a few streets, not "
+                      f"the run's drift; {protocol}")
+    if uv.size >= 2 and share > max_repeat_share:
+        return finish("protocol", line, line_se,
+                      f"{fe} rests on vehicle {top}'s repeats ({share:.0%} of the {n_spread} cells revisited ≥ "
+                      f"{min_span_s / 60:.0f} min apart, > {max_repeat_share:.0%}): one route's change, not the "
+                      f"run's drift; {protocol}")
     if not se <= max_drift_se:
-        return protocol(f"cell-fixed-effect drift {beta[0]:+.2f} ± {se:.2f} °C/h (SE above {max_drift_se} °C/h): "
-                        "CAPA protocol detrending")
-    w = np.bincount(vi, minlength=uv.size).astype(float)
-    for g in np.unique(comp):
-        sel = comp == g
-        off[sel] -= np.average(off[sel], weights=w[sel])
-    adj = temp - P @ beta - off[vi]
-    info.update(method="fe", drift_per_h=float(beta[0]), drift_se_per_h=se, drift_coef=[float(x) for x in beta],
-                vehicle_offsets={str(k): float(o) for k, o in zip(uv, off)}, n_vehicle_groups=n_groups)
-    return adj, info
+        return finish("protocol", line, line_se, f"{fe} (SE above {max_drift_se} °C/h): {protocol}")
+    if abs(beta[0] - line[0]) > DRIFT_GAP_WARN:
+        info["warning"] = (f"{fe} differs from the protocol line ({line[0]:+.2f} °C/h) by more than "
+                           f"{DRIFT_GAP_WARN} °C/h; kept, since its repeat visits pass every guard")
+    return finish("fe", beta, se)
 
 
 # --------------------------------------------------------------------------- #
@@ -664,23 +817,66 @@ def check_lst_result(res: dict) -> None:
         _raise_lst_failure(res.get("io_errors") or [{"kind": "io", "error": "unknown read failure"}])
 
 
+def span_weights(n_hours: int, a: float, b: float) -> tuple[np.ndarray, np.ndarray]:
+    """Weights of a time-weighted mean over [``a``, ``b``] (hours after the first of ``n_hours + 1`` whole hours):
+    (for the ``n_hours + 1`` instantaneous values at the hours, interpolated linearly between them; for the
+    ``n_hours`` hourly means, by each hour's overlap).  Each sums to 1; a span of zero length weighs the value
+    at ``a`` (and the hour holding it)."""
+    a, b = float(min(a, b)), float(max(a, b))
+    wa, wh = np.zeros(n_hours + 1), np.zeros(n_hours)
+    if b - a <= 1e-12:
+        i = min(max(int(math.floor(a)), 0), n_hours - 1)
+        u = min(max(a - i, 0.0), 1.0)
+        wa[i], wa[i + 1], wh[i] = 1.0 - u, u, 1.0
+        return wa, wh
+    for i in range(n_hours):
+        lo, hi = max(a, i), min(b, i + 1)
+        if hi <= lo:
+            continue
+        ulo, uhi = lo - i, hi - i                  # the trapezoid of the line between hours i and i + 1
+        wa[i] += (hi - lo) * ((1 - ulo) + (1 - uhi)) / 2
+        wa[i + 1] += (hi - lo) * (ulo + uhi) / 2
+        wh[i] += hi - lo
+    return wa / (b - a), wh / (b - a)
+
+
+#: How :func:`era5_run` averages (part of the ERA5 partial-cache key: a result of the earlier hourly mean is not
+#: reused)
+ERA5_AVERAGING = ("time-weighted over the run's span: analyses (t2m, skt) interpolated linearly between the hours, "
+                  "hourly accumulations (ssrd, strd) by their overlap with the run")
+
+
 def era5_run(lon: float, lat: float, tz: str, start: pd.Timestamp, end: pd.Timestamp) -> dict:
-    """ERA5 at the city centre over the run's whole local hours: 2 m temperature (°C) and the physics forcing
-    (SW↓ and LW net, W m⁻²; :func:`sparc.core.forcing.era5_site`)."""
+    """ERA5 at the city centre over the run: 2 m temperature (°C) and the physics forcing (SW↓ and LW net,
+    W m⁻²; :func:`sparc.core.forcing.era5_site`), each the time-weighted mean over the run's span from ``start``
+    to ``end`` (local clock of ``tz``).
+
+    The whole hours bracketing the run are requested (floor(start) … ceil(end)); the analyses (t2m, skt) are
+    instantaneous at the hours and interpolated linearly between them, the accumulations (ssrd, strd) are hourly
+    means weighted by their overlap with the run (:func:`span_weights`).  The plain mean of the bracketing hours
+    put Sedona's evening run (19:00–19:27 MST) at the mean of 19 h (25.96 °C) and 20 h (20.78 °C), so
+    its background ran +5.4 °C above ERA5 against +2.7 in the afternoon."""
+    from zoneinfo import ZoneInfo
+
     from sparc.core import forcing as F
 
-    h0 = int(start.hour)
-    h1 = int(end.hour) + (1 if (end.minute or end.second) else 0)
-    h1 = max(h1, h0 + 1)
-    if h1 > 23:
-        h0, h1 = 22, 23
-    times = F.window_utc(start.date().isoformat(), (h0, h1), tz)
+    s, e = sorted((pd.Timestamp(start), pd.Timestamp(end)))
+    h0 = s.floor("h")
+    h1 = max(e.ceil("h"), h0 + pd.Timedelta(hours=1))
+    hours = list(pd.date_range(h0, h1, freq="h"))
+    z = ZoneInfo(tz)
+    times = [dt.datetime(h.year, h.month, h.day, h.hour, tzinfo=z).astimezone(dt.timezone.utc) for h in hours]
+    wa, wh = span_weights(len(hours) - 1, (s - h0) / pd.Timedelta(hours=1), (e - h0) / pd.Timedelta(hours=1))
     out = F.era5_site(lat, lon, times, analyses={k: F.ANALYSES[k] for k in ("t2m", "skt")},
                       accumulations={k: F.ACCUMULATIONS[k] for k in ("ssrd", "strd")})
-    v = out["values"]
-    lw_up = F.EMISSIVITY * F.SIGMA * v["skt"] ** 4
-    return {"ta_era5": float(v["t2m"] - 273.15), "sw_down": float(v["ssrd"]), "lw_net": float(v["strd"] - lw_up),
-            "hours_local": [h0, h1], "times_utc": out["times_utc"], "source": "ERA5 (NSF NCAR mirror), city centre"}
+    ser = out["series"]
+    t2m, skt = (float(np.dot(wa, ser[k])) for k in ("t2m", "skt"))
+    ssrd, strd = (float(np.dot(wh, ser[k])) for k in ("ssrd", "strd"))
+    lw_up = F.EMISSIVITY * F.SIGMA * skt ** 4
+    return {"ta_era5": t2m - 273.15, "sw_down": ssrd, "lw_net": strd - lw_up, "hours_local": [h0.hour, h1.hour],
+            "span_local": [str(s), str(e)], "times_utc": out["times_utc"], "weights_hours": [float(x) for x in wa],
+            "weights_hourly_means": [float(x) for x in wh], "averaging": ERA5_AVERAGING,
+            "source": "ERA5 (NSF NCAR mirror), city centre"}
 
 
 # --------------------------------------------------------------------------- #
@@ -739,10 +935,18 @@ class _Partial:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
+#: The dataset's QA version, part of every city's settings fingerprint, so a cache built under earlier rules is
+#: reported stale and rebuilt.  1: the first build of the 31 cities; 2: the rules of their review (2026-10-20):
+#: protocol line within vehicles, vehicle offsets from co-visits only, the drift guards, the single-vehicle,
+#: platform, non-vehicle-sensor and QA-registry checks, ERA5 averaged over the run's span.
+DATASET_VERSION = 2
+
 #: build_city settings that change a city's table (the fingerprint a cached city is compared with).
+#: ``qa_registry``: a key of the city's entries in the QA registry (:mod:`~sparc.core.lstair.exclusions`), so
+#: adding or changing one rebuilds that city only.
 SETTING_DEFAULTS = {"cell_m": CELL_M, "margin_m": MARGIN_M, "drift": "fe", "drift_degree": 1, "utc_to": None,
                     "lst_window_days": 16, "lst_min_clear": 0.5, "lst_prefer_clear": 0.8, "skip_files": list(SKIP_FILES),
-                    "campaign_date": None, "lst": True, "era5": True}
+                    "campaign_date": None, "lst": True, "era5": True, "qa_registry": None}
 
 
 def build_settings(**kw) -> dict:
@@ -759,6 +963,7 @@ def build_settings(**kw) -> dict:
     out["lst_prefer_clear"] = float(out["lst_prefer_clear"])
     out["lst_method"] = dict(CAMPAIGN_LST_METHOD) if out["lst"] else None   # mosaic, buffer: not in the arguments
     out["schema"] = SCHEMA
+    out["dataset_version"] = DATASET_VERSION
     return out
 
 
@@ -766,6 +971,14 @@ def settings_key(settings: dict) -> str:
     import hashlib
 
     return hashlib.sha256(json.dumps(settings, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def registry_key(slug: str, registry: list[dict] | None = None) -> str | None:
+    """A key of ``slug``'s QA-registry entries (None without any), for :data:`SETTING_DEFAULTS`."""
+    from sparc.core.lstair import exclusions
+
+    mine = exclusions.entries(slug, registry)
+    return _Partial.key(mine)[:12] if mine else None
 
 
 def _provider_id(fn, default: str) -> str:
@@ -782,12 +995,256 @@ def city_status(city_dir: Path) -> str | None:
         return None
 
 
+def _features_provider(meta: dict) -> str | None:
+    """The feature provider of a finished build: as recorded, or, for builds before it was recorded, the open-data
+    provider when the provenance names its sources (WorldCover and Sentinel-2)."""
+    if meta.get("features_provider"):
+        return meta["features_provider"]
+    prov = meta.get("features")
+    return "open_features" if isinstance(prov, dict) and {"worldcover", "sentinel2"} <= set(prov) else None
+
+
+def reusable_features(city_dir: str | Path, ctx: CityGrid, campaign: dt.date, provider: str
+                      ) -> tuple[dict, dict, str] | None:
+    """The feature rasters of the city's previous finished build, when it has the same grid (crs, x0, y0, dx, nx,
+    ny), campaign date and feature provider: (the :data:`FEATURES` rasters from its ``rasters.npz``, float32 as
+    stored, its feature provenance, its ``built_utc``), else None.  Read before the rebuild overwrites them; the
+    Sentinel-2 composite alone takes 5–25 min per city, and none of these inputs depends on the traverse QA."""
+    d = Path(city_dir)
+    try:
+        meta = json.loads((d / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    g, want = meta.get("grid") or {}, ctx.as_dict()
+    try:
+        same = (g.get("crs") == want["crs"] and all(int(g[k]) == want[k] for k in ("nx", "ny"))
+                and all(abs(float(g[k]) - want[k]) < 1e-6 for k in ("x0", "y0", "dx")))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (meta.get("status") != "ok" or not same or meta.get("campaign_date") != campaign.isoformat()
+            or _features_provider(meta) != provider):
+        return None
+    try:
+        with np.load(d / "rasters.npz", allow_pickle=False) as z:
+            if not all(k in z.files for k in FEATURES):
+                return None
+            feats = {k: z[k].astype(np.float64) for k in FEATURES}
+    except (OSError, ValueError):
+        return None
+    if any(r.shape != ctx.shape for r in feats.values()):
+        return None
+    return feats, meta.get("features") or {}, str(meta.get("built_utc"))
+
+
+# --------------------------------------------------------------------------- #
+# Run QA: platform, merged loggers, a single vehicle                           #
+# --------------------------------------------------------------------------- #
+PEDESTRIAN_KMH = 10.0                  # a run whose readings move slower than this (median) was walked, not driven
+SINGLE_VEHICLE_SHARE = 0.9             # one sensor with this share of a run's visits drives it alone
+SINGLE_VEHICLE = "single-vehicle run: drift not identifiable"
+#: One vehicle key holds several loggers when this share of its readings share their second with a reading of the
+#: key more than MERGED_KEY_M away (Boston 2019: about ten cars per run file, no sensor id)
+MERGED_KEY_SHARE = 0.5
+MERGED_KEY_M = 2000.0
+
+
+def _haversine_m(lat1, lon1, lat2, lon2) -> np.ndarray:
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    h = np.sin((p2 - p1) / 2) ** 2 + np.cos(p1) * np.cos(p2) * np.sin(np.radians(np.asarray(lon2) - lon1) / 2) ** 2
+    return 2 * 6_371_008.8 * np.arcsin(np.sqrt(np.clip(h, 0.0, 1.0)))
+
+
+def platform_speed(points: pd.DataFrame, max_dt_s: float = 30.0) -> dict:
+    """The speed of a run's raw readings: the median over every step between a vehicle's consecutive readings at
+    most ``max_dt_s`` apart (haversine distance over the time step, km/h), per sensor and for the run, and the
+    run's ``platform``: ``"pedestrian"`` below :data:`PEDESTRIAN_KMH`, else ``"vehicle"`` (also when no step
+    can be measured).
+
+    Consecutive is the order the loggers wrote them (as read): Boston 2019's run files hold about ten cars one
+    after another without a sensor id, which in time order interleave (a 6 km 'step' per second).  Cars drive at
+    ≥ ~30 km/h (Lynchburg 2021-07-15: 32–37 km/h, 9–10 m steps at 1 Hz); Farmville's runs move at 4.7–5.7 km/h
+    and Abingdon's at 4.9–5.0 (1.3–1.6 m steps): walked campaigns, whose sensor height and aspiration are not the
+    car-mounted protocol's."""
+    from sparc.core.identify.traverses import sensor_ids
+
+    out: dict = {"median_speed_kmh": None, "platform": "vehicle", "n_steps": 0, "speed_kmh_by_sensor": {}}
+    if len(points) < 2:
+        return out
+    key = points["vehicle_key"].astype(str).to_numpy()
+    t = pd.to_datetime(points["time"], errors="coerce")
+    ts = (t - t.min()).dt.total_seconds().to_numpy(float)
+    lat, lon = points["lat"].to_numpy(float), points["lon"].to_numpy(float)
+    step_t = np.diff(ts)
+    d = _haversine_m(lat[:-1], lon[:-1], lat[1:], lon[1:])
+    ok = (key[1:] == key[:-1]) & (step_t > 0) & (step_t <= max_dt_s) & np.isfinite(d)
+    if not ok.any():
+        return out
+    kmh = d[ok] / step_t[ok] * 3.6
+    by = pd.Series(kmh).groupby(sensor_ids(points).map(sensor_name).to_numpy()[1:][ok]).median()
+    med = float(np.median(kmh))
+    out.update(median_speed_kmh=med, median_step_m=float(np.median(d[ok])), n_steps=int(ok.sum()),
+               platform="pedestrian" if med < PEDESTRIAN_KMH else "vehicle",
+               speed_kmh_by_sensor={str(k): round(float(x), 1) for k, x in by.items()})
+    return out
+
+
+def merged_logger_share(points: pd.DataFrame) -> float:
+    """Share of a run's readings that share their vehicle key and timestamp with a reading of that key more than
+    :data:`MERGED_KEY_M` away: several loggers read as one vehicle.  Boston 2019 (one key per run file: about ten
+    cars one after another, 4–6 readings per second, 'case' constant) is the case; a car's own readings, or a clock
+    cut to the minute (readings of one minute within about a kilometre), are not."""
+    if not len(points):
+        return 0.0
+    df = pd.DataFrame({"k": points["vehicle_key"].astype(str).to_numpy(),
+                       "t": pd.to_datetime(points["time"], errors="coerce").to_numpy(),
+                       "la": points["lat"].to_numpy(float), "lo": points["lon"].to_numpy(float)})
+    g = df.groupby(["k", "t"])
+    n = g["la"].transform("size").to_numpy(float)
+    dla = (g["la"].transform("max") - g["la"].transform("min")).to_numpy(float) * 111_320.0
+    dlo = ((g["lo"].transform("max") - g["lo"].transform("min")).to_numpy(float) * 111_320.0
+           * np.cos(np.radians(df["la"].to_numpy(float))))
+    return float(np.mean((n >= 2) & (np.hypot(dla, dlo) > MERGED_KEY_M)))
+
+
+#: A CAPA logger file name, "<sensor>_<DDMMYY>_<HHMMSS[.sss]>_<n>.csv", whose sensor the reader does not split off
+#: when it has no letters (the 2021 campaigns: 1057_150721_095302.305_0.csv, 1013B_150721_185303.000_0.csv, and
+#: names cut short in the tables, 1072_1_095722.000_0.csv, 1085_150721_1849_0.csv)
+_LOGGER_FILE = re.compile(r"^([A-Za-z]*\d+[A-Za-z]?)_\d")
+
+
+def sensor_name(sid) -> str:
+    """The sensor of a parsed sensor id (:func:`~sparc.core.identify.traverses.sensor_ids`): the id without a
+    logger file's date and time, so that one sensor's files of a run (a logger restarted) are one vehicle."""
+    m = _LOGGER_FILE.match(str(sid))
+    return m.group(1) if m else str(sid)
+
+
+def _vehicle_labels(sub: pd.DataFrame, n: int) -> list[str]:
+    """The sensor of each of :func:`~sparc.core.identify.traverses.to_campaign`'s vehicle indices (its vehicle
+    keys in sorted order; :func:`sensor_name`): the vehicles of :func:`adjust_visits`, so one sensor's keys in
+    several files (Los Angeles 2019: CAPA34 in the north and the south route files) are one vehicle; the indices
+    themselves when the keys do not match."""
+    from sparc.core.identify.traverses import sensor_ids
+
+    pts = sub.dropna(subset=["time", "lat", "lon", "temp_f"]).drop_duplicates("vehicle_key")
+    sid = dict(zip(pts["vehicle_key"].astype(str), sensor_ids(pts).astype(str)))
+    keys = sorted(sid)
+    return [sensor_name(sid[k]) for k in keys] if len(keys) == n else [str(i) for i in range(n)]
+
+
+def build_run(sub: pd.DataFrame, info: dict, ctx: CityGrid, drift: str = "fe", drift_degree: int = 1,
+              registry_reason: str | None = None) -> tuple[dict, pd.DataFrame | None, list[str]]:
+    """One run of a city: its visits (:func:`~sparc.core.identify.traverses.to_campaign`), drift and vehicle
+    offsets (:func:`adjust_visits`), cell means and QA; (the run's ``meta["runs"]`` record, its cells or None
+    when it cannot be placed on the grid, warnings).
+
+    The record's ``qa_exclude`` is "" for a usable run, else why it is excluded by default (reasons joined with
+    "; "; :mod:`~sparc.core.lstair.evaluate` drops such runs unless asked to include flagged ones):
+
+    * ``registry_reason``: the QA registry's (:func:`~sparc.core.lstair.exclusions.run_exclusions`), as
+      "qa registry: " + reason;
+    * "pedestrian platform (median X km/h)" when the readings move below :data:`PEDESTRIAN_KMH`
+      (:func:`platform_speed`; ``platform`` and ``qa["median_speed_kmh"]`` record it);
+    * :data:`SINGLE_VEHICLE` when one sensor holds :data:`SINGLE_VEHICLE_SHARE` of the visits and the drift is the
+      protocol line: time and route position are then one axis, so the line is the route's gradient (Lynchburg
+      2021-07-15 morning and midday: car 1057 with 971 of 1,076 and 938 of 948 visits, protocol −0.63 / +1.43
+      °C/h, against −0.31 / +1.36 for 1057 alone and +0.09 / +0.53 in ERA5; re-detrending moved r(dTa, LST) from
+      0.57 to 0.44).  Sensors are counted by their id; a key holding several loggers (:func:`merged_logger_share`)
+      is not one vehicle and gets a warning instead."""
+    from sparc.core.identify.traverses import to_campaign
+    from sparc.core.lstair.exclusions import PREFIX
+
+    run_id = info["run"]
+    rec = {"run_id": run_id, "run": _run_code(info["window"]), "window": info["window"], "start": info["start"],
+           "end": info["end"], "n_readings": int(info["n"]), "vehicles": info["vehicles"]}
+    warnings: list[str] = []
+    try:
+        df, qa = to_campaign(sub, ctx.identify_cfg(), ctx.identify_layout(), window=None)
+    except ValueError as exc:
+        rec.update(error=str(exc), qa_exclude=f"not built: {exc}")
+        return rec, None, warnings
+    df = df.assign(temp=(df["temp"].to_numpy(float) - 32.0) * 5.0 / 9.0)        # °F → °C
+    sensor = np.asarray(_vehicle_labels(sub, int(df["vehicle"].max()) + 1), dtype=object)[df["vehicle"].to_numpy()]
+    x, y = ctx.cell_xy(df["cell"].to_numpy())
+    adj, dinfo = adjust_visits(df.assign(vehicle=sensor, x=x, y=y), drift, drift_degree)
+    g = pd.DataFrame({"cell": df["cell"].to_numpy(), "Ta": adj, "n_raw": df["n_raw"].to_numpy()}).groupby("cell")
+    cells = pd.DataFrame({"cell": g.size().index.to_numpy(), "Ta": g["Ta"].mean().to_numpy(),
+                          "n_readings": g["n_raw"].sum().to_numpy(), "n_visits": g.size().to_numpy()})
+    bg = float(np.median(cells["Ta"]))
+    cells["dTa"] = cells["Ta"] - bg
+    cells["ta_background"] = bg
+    by_sensor = pd.Series(sensor).value_counts()
+    top, top_share = str(by_sensor.index[0]), float(by_sensor.iloc[0] / by_sensor.sum())
+    speed = platform_speed(sub)
+    merged = merged_logger_share(sub)
+    qa.update(median_speed_kmh=speed["median_speed_kmh"], platform=speed["platform"], speed_n_steps=speed["n_steps"],
+              speed_kmh_by_sensor=speed["speed_kmh_by_sensor"], n_sensors=int(by_sensor.size), top_sensor=top,
+              top_sensor_visit_share=top_share, merged_logger_share=merged)
+    reasons = [PREFIX + registry_reason] if registry_reason else []
+    if speed["platform"] == "pedestrian":
+        reasons.append(f"pedestrian platform (median {speed['median_speed_kmh']:.1f} km/h)")
+        warnings.append(f"{run_id}: the readings move at a median {speed['median_speed_kmh']:.1f} km/h (below "
+                        f"{PEDESTRIAN_KMH:.0f}): a walked traverse, platform 'pedestrian', excluded by default")
+    if merged >= MERGED_KEY_SHARE:
+        warnings.append(f"{run_id}: {merged:.0%} of the readings share their vehicle key and second with one over "
+                        f"{MERGED_KEY_M / 1000:.0f} km away: several loggers under one key without a sensor id, so "
+                        "their offsets cannot be estimated and it is not a single-vehicle run")
+    elif top_share >= SINGLE_VEHICLE_SHARE and dinfo.get("method") == "protocol":
+        reasons.append(SINGLE_VEHICLE)
+        warnings.append(f"{run_id}: {top} holds {top_share:.0%} of the visits and the drift is the protocol line: "
+                        "a single-vehicle run, excluded by default")
+    if dinfo.get("warning"):
+        warnings.append(f"{run_id}: {dinfo['warning']}")
+    rec.update(qa=qa, drift={k: v for k, v in dinfo.items() if k != "vehicle_offsets"},
+               vehicle_offsets_c=dinfo.get("vehicle_offsets", {}), background_c=bg,
+               n_cells=int(len(cells)), run_date=str(pd.Timestamp(info["start"]).date()), platform=speed["platform"],
+               qa_exclude="; ".join(reasons))
+    cells["run"], cells["run_id"], cells["run_date"] = rec["run"], rec["run_id"], rec["run_date"]
+    cells["qa_exclude"] = rec["qa_exclude"]
+    return rec, cells, warnings
+
+
+def _drop_non_vehicles(points: pd.DataFrame) -> tuple[pd.DataFrame, dict, str | None]:
+    """The points without the readings of bicycle or walking sensors
+    (:func:`~sparc.core.identify.traverses.non_vehicle_sensors`); (points, {sensor id: readings dropped}, a
+    warning naming them).  Sacramento 2019's Bicycle_CAPA56 rides the American River Parkway inside the car files:
+    680–760 cells per run that the cars almost never share, and 98% of the evening cells with |dTa| > 5 °C."""
+    from sparc.core.identify.traverses import non_vehicle_sensors, sensor_ids
+
+    bad = non_vehicle_sensors(points)
+    if not bad.any():
+        return points, {}, None
+    counts = {str(k): int(v) for k, v in sensor_ids(points[bad]).value_counts().sort_index().items()}
+    note = (f"{int(bad.sum()):,} readings of non-vehicle sensors dropped: "
+            + ", ".join(f"{k} ({v:,})" for k, v in counts.items()))
+    return points[~bad].reset_index(drop=True), counts, note
+
+
+def _apply_registry(points: pd.DataFrame, slug: str, registry: list[dict] | None
+                    ) -> tuple[pd.DataFrame, list[dict], list[str]]:
+    """The points without the readings the QA registry drops for this city
+    (:func:`~sparc.core.lstair.exclusions.reading_mask`); (points, its records, warnings with the counts: an entry
+    that matches no reading says so)."""
+    from sparc.core.lstair import exclusions
+
+    keep, records = exclusions.reading_mask(points, slug, registry)
+    notes = []
+    for r in records:
+        what = f"qa registry: {r['sensor']} in {r['run_id']}" + (
+            f" from {r['from_local']}" if r.get("from_local") else "") + (
+            f" until {r['until_local']}" if r.get("until_local") else "")
+        notes.append(f"{what}: {r['n_readings']:,} readings dropped ({r['reason']})" if r["n_readings"] else
+                     f"{what} matches no reading (is the sensor id parsed as {r['sensor']!r}?)")
+    return (points[keep].reset_index(drop=True) if not keep.all() else points), records, notes
+
+
 def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, features: Callable | None = None,
                lst: Callable | None = None, era5: Callable | None = None, cell_m: float = CELL_M,
                margin_m: float = MARGIN_M, drift: str = "fe", drift_degree: int = 1, utc_to: str | None = None,
                lst_window_days: int = 16, lst_min_clear: float = 0.5, cache_dir: Path | None = None,
                skip_files: tuple[str, ...] = SKIP_FILES, campaign_date: str | None = None,
-               lst_prefer_clear: float = 0.8) -> dict:
+               lst_prefer_clear: float = 0.8, registry: list[dict] | None = None,
+               reuse_features: bool = True) -> dict:
     """Build one city's table and rasters from a local traverse folder; returns its meta (also written).
 
     ``features(ctx, campaign_date) → (rasters, provenance)``, ``lst(ctx, campaign_date, study) → {"lst_c",
@@ -800,14 +1257,24 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     Timestamps are read as the local clock of ``spec.tz`` (tz-aware ones converted to it).  Tables whose only clock
     is the 2019 NIHHIS ``time_n`` (UTC ``HHMMSS``, no date; tdsy7's Boise and Boston) are dated with
     ``campaign_date`` (local ISO date; default the catalog's ``campaign_date``); without one the build stops
-    and says so."""
-    from sparc.core.identify.traverses import runs_summary, scan_traverses, to_campaign
+    and says so.
+
+    Before the grid is laid, the readings of bicycle and walking sensors are dropped
+    (``meta["non_vehicle_sensors"]``) and so are those the QA ``registry`` lists for the city (default: the
+    shipped one, :mod:`~sparc.core.lstair.exclusions`; ``meta["qa_registry"]``); each run is built by
+    :func:`build_run`, and its ``qa_exclude`` (also a ``table.parquet`` column) says why it is excluded by default
+    ("" when usable).  With ``reuse_features`` the feature rasters of the city's previous finished build are reused
+    when its grid, campaign date and feature provider are the same (:func:`reusable_features`;
+    ``meta["features_reused_from"]`` names that build); LST and ERA5 are always recomputed."""
+    from sparc.core.identify.traverses import runs_summary, scan_traverses
+    from sparc.core.lstair import exclusions
 
     t0 = time.perf_counter()
     settings = build_settings(cell_m=cell_m, margin_m=margin_m, drift=drift, drift_degree=drift_degree, utc_to=utc_to,
                               lst_window_days=lst_window_days, lst_min_clear=lst_min_clear,
                               lst_prefer_clear=lst_prefer_clear, skip_files=skip_files,
-                              campaign_date=campaign_date, lst=lst, era5=era5)
+                              campaign_date=campaign_date, lst=lst, era5=era5,
+                              qa_registry=registry_key(spec.slug, registry))
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     warnings: list[str] = []
@@ -822,41 +1289,31 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
         skipped = "; ".join(f"{r['file']}: {r.get('reason')}" for r in report[:6])
         raise ValueError(f"no traverse points under {traverses}" + (f" (skipped {skipped})" if skipped else ""))
     points = points.dropna(subset=["lat", "lon", "temp_f"])
+    points, clock_note = check_clock(points, spec.tz, utc_given=bool(utc_to))
+    if clock_note:
+        warnings.append(clock_note)
+    points, non_vehicle, note = _drop_non_vehicles(points)
+    if note:
+        warnings.append(note)
+    points, qa_records, notes = _apply_registry(points, spec.slug, registry)
+    warnings += notes
+    run_excl = exclusions.run_exclusions(spec.slug, registry)
     ctx = make_city_grid(points["lon"].to_numpy(float), points["lat"].to_numpy(float), spec.crs, cell_m, margin_m)
     if ctx.nx * ctx.ny > WARN_CELLS:
         warnings.append(f"large grid: {ctx.nx * ctx.dx / 1000:.0f} × {ctx.ny * ctx.dx / 1000:.0f} km "
                         f"({ctx.nx * ctx.ny:,} cells); the open features take long (several readings far apart?)")
-    cfg, layout = ctx.identify_cfg(), ctx.identify_layout()
     partial = _Partial(out)
-    points, clock_note = check_clock(points, spec.tz, utc_given=bool(utc_to))
-    if clock_note:
-        warnings.append(clock_note)
 
     runs, frames = [], []
     for info in runs_summary(points):
-        sub = points[points["run"] == info["run"]]
-        rec = {"run_id": info["run"], "run": _run_code(info["window"]), "window": info["window"],
-               "start": info["start"], "end": info["end"], "n_readings": int(info["n"]), "vehicles": info["vehicles"]}
-        try:
-            df, qa = to_campaign(sub, cfg, layout, window=None)
-        except ValueError as exc:
-            rec["error"] = str(exc)
-            runs.append(rec)
-            continue
-        df = df.assign(temp=(df["temp"].to_numpy(float) - 32.0) * 5.0 / 9.0)        # °F → °C
-        adj, dinfo = adjust_visits(df, drift, drift_degree)
-        g = pd.DataFrame({"cell": df["cell"].to_numpy(), "Ta": adj, "n_raw": df["n_raw"].to_numpy()}).groupby("cell")
-        cells = pd.DataFrame({"cell": g.size().index.to_numpy(), "Ta": g["Ta"].mean().to_numpy(),
-                              "n_readings": g["n_raw"].sum().to_numpy(), "n_visits": g.size().to_numpy()})
-        bg = float(np.median(cells["Ta"]))
-        cells["dTa"] = cells["Ta"] - bg
-        cells["ta_background"] = bg
-        rec.update(qa=qa, drift={k: v for k, v in dinfo.items() if k != "vehicle_offsets"},
-                   vehicle_offsets_c=dinfo.get("vehicle_offsets", {}), background_c=bg, n_cells=int(len(cells)),
-                   run_date=str(pd.Timestamp(info["start"]).date()))
-        cells["run"], cells["run_id"], cells["run_date"] = rec["run"], rec["run_id"], rec["run_date"]
+        rec, cells, notes = build_run(points[points["run"] == info["run"]], info, ctx, drift, drift_degree,
+                                      run_excl.get(info["run"]))
         runs.append(rec)
-        frames.append(cells)
+        warnings += notes
+        if cells is not None:
+            frames.append(cells)
+    for rid in sorted(set(run_excl) - {r["run_id"] for r in runs}):
+        warnings.append(f"qa registry: run {rid} is not among the city's runs (nothing excluded)")
     if not frames:
         raise ValueError(_no_run_reason(runs, report, spec))
     table = pd.concat(frames, ignore_index=True)
@@ -871,18 +1328,26 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
         warnings.append(f"catalog campaign date {spec.catalog_date} ({spec.catalog_date_source}) differs from the "
                         f"traverse timestamps ({campaign.isoformat()}); the timestamps are used")
 
-    # rasters: features, focal means, LST
+    # rasters: features (reused from the previous build when nothing they depend on changed), focal means, LST
     driven = np.zeros(ctx.nx * ctx.ny, dtype=bool)
     driven[table["cell"].to_numpy()] = True
     from scipy import ndimage
 
     study = ndimage.distance_transform_edt(~driven.reshape(ctx.shape)) * ctx.dx <= STUDY_BUFFER_M
-    fkey = partial.key("features", ctx.as_dict(), campaign.isoformat(), _provider_id(features, "open_features"))
+    provider = _provider_id(features, "open_features")
+    fkey = partial.key("features", ctx.as_dict(), campaign.isoformat(), provider)
     got = partial.load("features", fkey)
+    reused_from = None
     if got is not None:
         feats, fprov = {k: np.asarray(v, dtype=np.float64) for k, v in got[0].items()}, got[1]
+        reused_from = (partial.load("features_reuse", fkey) or ({}, None))[1]
     else:
-        feats, fprov = (features or open_features)(ctx, campaign)
+        old = reusable_features(out, ctx, campaign, provider) if reuse_features else None
+        if old is not None:
+            feats, fprov, reused_from = old
+            partial.save("features_reuse", fkey, None, reused_from)
+        else:
+            feats, fprov = (features or open_features)(ctx, campaign)
         partial.save("features", fkey, {k: feats[k] for k in FEATURES if k in feats}, fprov)
     lst_res = None
     if lst is not False:
@@ -934,7 +1399,7 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
             continue
         try:
             ekey = partial.key("era5", float(clon), float(clat), spec.tz, rec["start"], rec["end"],
-                               _provider_id(era5, "era5_run"))
+                               _provider_id(era5, "era5_run"), ERA5_AVERAGING)
             got = partial.load(f"era5_{_Partial.key(rec['run_id'])}", ekey)
             if got is not None:
                 e = got[1]
@@ -951,7 +1416,7 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     table.insert(0, "city", spec.name)
     table.insert(1, "slug", spec.slug)
     table.insert(2, "campaign_date", campaign.isoformat())
-    lead = ["city", "slug", "campaign_date", "run", "run_id", "run_date", "cell", "x", "y", "lat", "lon",
+    lead = ["city", "slug", "campaign_date", "run", "run_id", "run_date", "qa_exclude", "cell", "x", "y", "lat", "lon",
             "n_readings", "n_visits", "Ta", "dTa", "ta_background", "ta_era5"]
     table = table[lead + [c for c in table.columns if c not in lead]]
     buf = io.BytesIO()
@@ -961,13 +1426,16 @@ def build_city(spec: CitySpec, traverses: str | Path, out_dir: str | Path, *, fe
     np.savez_compressed(buf, **{k: v.astype(np.float32) for k, v in rasters.items()},
                         driven=driven.reshape(ctx.shape))
     _write_atomic(out / "rasters.npz", buf.getvalue())
-    meta = {"schema": SCHEMA, "status": "ok", "city": spec.name, "slug": spec.slug, "traverses": str(traverses),
-            "campaign_date": campaign.isoformat(), "campaign_date_source": date_source,
+    meta = {"schema": SCHEMA, "dataset_version": DATASET_VERSION, "status": "ok", "city": spec.name,
+            "slug": spec.slug, "traverses": str(traverses), "campaign_date": campaign.isoformat(),
+            "campaign_date_source": date_source,
             "catalog": {"node": spec.node, "folder_hint": spec.folder_hint, "campaign_date": spec.catalog_date,
                         "campaign_date_source": spec.catalog_date_source, "availability": spec.availability},
             "grid": ctx.as_dict(), "tz": spec.tz, "drift_method": drift, "settings": settings,
             "settings_key": settings_key(settings), "runs": runs,
-            "files": report, "skip_files": list(skip_files or ()), "n_duplicate_readings": n_dup, "features": fprov,
+            "files": report, "skip_files": list(skip_files or ()), "n_duplicate_readings": n_dup,
+            "non_vehicle_sensors": non_vehicle, "qa_registry": {"readings": qa_records, "runs": run_excl},
+            "features": fprov, "features_provider": provider, "features_reused_from": reused_from,
             "lst": None if lst_res is None else {k: v for k, v in lst_res.items() if k != "lst_c"},
             "n_rows": int(len(table)), "rasters": sorted(rasters), "warnings": warnings,
             "seconds": round(time.perf_counter() - t0, 1),
@@ -1092,7 +1560,9 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
                   **kw) -> dict:
     """Build (or resume) the dataset for ``cities``; returns the summary also written to ``OUT/dataset.json``.
 
-    Cities with a finished cache are skipped unless ``force``.  Before anything is fetched, every host the
+    Cities with a finished cache are skipped unless ``force`` or the cache is stale (built with other settings,
+    under an earlier :data:`DATASET_VERSION`, or before a change of the city's QA-registry entries; ``registry``
+    in ``kw`` replaces the shipped registry, as in :func:`build_city`).  Before anything is fetched, every host the
     remaining cities need is probed (:func:`check_hosts`): a blocked host raises :class:`NetworkBlocked` at once.
     A city that fails for another reason is recorded with its error and the build moves on.  ``campaign_dates``
     maps a city (name as given, catalog name or slug) to its local campaign date, for traverse tables without
@@ -1104,6 +1574,7 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
     single = len(specs) == 1
     wanted = {s.slug: settings_key(build_settings(**{**kw, "lst": lst, "era5": era5,
                                                      "campaign_date": _lookup(campaign_dates, s),
+                                                     "qa_registry": registry_key(s.slug, kw.get("registry")),
                                                      **({"utc_to": s.tz} if utc else {})})) for s in specs}
     stale = {s.slug: _stale(out / "cities" / s.slug, wanted[s.slug]) for s in specs}
     todo = [s for s in specs if force or city_status(out / "cities" / s.slug) != "ok" or stale[s.slug]]
@@ -1143,6 +1614,8 @@ def build_dataset(cities: list[str], out_dir: str | Path, *, traverses_dir: str 
                               campaign_date=_lookup(campaign_dates, s), **ckw)
             summary["cities"][s.name] = {"slug": s.slug, "status": "ok", "rows": meta["n_rows"],
                                          "runs": [r["run"] for r in meta["runs"] if "error" not in r],
+                                         "excluded_runs": {r["run_id"]: r["qa_exclude"] for r in meta["runs"]
+                                                           if r.get("qa_exclude")},
                                          "warnings": meta["warnings"]}
             log.info("lstair: %s — %d rows (%s)", s.name, meta["n_rows"], ", ".join(summary["cities"][s.name]["runs"]))
         except NetworkBlocked:
@@ -1180,6 +1653,10 @@ def _stale(city_dir: Path, key: str) -> str | None:
         return None
     if "settings_key" not in meta:
         return "built before settings were recorded"
+    version = (meta.get("settings") or {}).get("dataset_version") or 1
+    if version < DATASET_VERSION:
+        return (f"built under dataset version {version}, before the QA rules of version {DATASET_VERSION} "
+                "(see DATASET_VERSION)")
     return f"built with other settings ({meta.get('settings')})"
 
 
@@ -1263,6 +1740,8 @@ def load_dataset(data_dir: str | Path, rasters: bool = True) -> list[CityData]:
 
 
 __all__ = ["NetworkBlocked", "HOSTS", "probe", "check_hosts", "hosts_needed", "required_host_names", "CitySpec",
-           "city_spec", "CityGrid", "make_city_grid", "adjust_visits", "focal_mean", "derived_rasters",
-           "open_features", "landsat_lst", "era5_run", "build_city", "build_dataset", "load_city", "load_dataset",
-           "CityData", "FEATURES", "FOCAL_RADII", "LST_RADII", "TARGET_COLUMNS"]
+           "city_spec", "CityGrid", "make_city_grid", "adjust_visits", "co_visit_offsets", "focal_mean",
+           "derived_rasters", "open_features", "landsat_lst", "era5_run", "span_weights", "build_run", "build_city",
+           "build_dataset", "load_city", "load_dataset", "reusable_features", "platform_speed", "merged_logger_share",
+           "sensor_name", "CityData", "FEATURES", "FOCAL_RADII", "LST_RADII", "TARGET_COLUMNS", "DATASET_VERSION",
+           "SINGLE_VEHICLE"]

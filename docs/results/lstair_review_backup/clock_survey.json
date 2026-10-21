@@ -1,0 +1,938 @@
+{
+ "Abingdon, VA": {
+  "n": 58924,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 26,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Albuquerque, NM": {
+  "n": 70412,
+  "timed": 1.0,
+  "windows": [
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-09"
+  ],
+  "vehicles": 28,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp"
+  ]
+ },
+ "Arlington, VA": {
+  "n": 32200,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 15,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Asheville, NC": {
+  "n": 57401,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2023-07-24"
+  ],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Atlanta, GA": {
+  "n": 74880,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-09-04"
+  ],
+  "vehicles": 42,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Austin, TX": {
+  "n": 81556,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2020-08-07"
+  ],
+  "vehicles": 35,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Boise, ID": {
+  "n": 72110,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2019-08-14"
+  ],
+  "vehicles": 6,
+  "clocks": [
+   "time_n (UTC HHMMSS) on the local date 2019-08-14 in America/Boise"
+  ],
+  "files": [
+   "AM_TraversePoints_Boise.shp",
+   "AM_TraversePoints_Nampa.shp",
+   "Eve_TraversePoints_Boise.shp",
+   "Eve_TraversePoints_Nampa.shp",
+   "PM_TraversePoints_Boise.shp",
+   "PM_TraversePoints_Nampa.shp"
+  ]
+ },
+ "Boston, MA": {
+  "n": 57338,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2019-07-29"
+  ],
+  "vehicles": 3,
+  "clocks": [
+   "time_n (UTC HHMMSS) on the local date 2019-07-29 in America/New_York"
+  ],
+  "files": [
+   "Boston_am.shp",
+   "Boston_ev.shp",
+   "Boston_pm_revised.shp",
+   "Boston_am.shp",
+   "Boston_ev.shp",
+   "Boston_pm_revised.shp"
+  ]
+ },
+ "Boulder, CO": {
+  "n": 27127,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Brockton, MA": {
+  "n": 28183,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Brooklyn, NY": {
+  "n": 41091,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Burlington, VT": {
+  "n": 51910,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2020-08-10"
+  ],
+  "vehicles": 19,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Charleston, SC": {
+  "n": 57948,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-31"
+  ],
+  "vehicles": 33,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Charlotte, NC": {
+  "n": 70903,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "charlotte-north-carolina_af_trav.shp",
+   "charlotte-north-carolina_am_trav.shp",
+   "charlotte-north-carolina_pm_trav.shp"
+  ]
+ },
+ "Chicago, IL": {
+  "n": 139433,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Columbia, MO": {
+  "n": 33411,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Columbia, SC": {
+  "n": 71872,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Farmville, VA": {
+  "n": 53416,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 25,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Fort Lauderdale, FL": {
+  "n": 54443,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2019-09-18",
+   "2019-09-21",
+   "2019-09-23"
+  ],
+  "vehicles": 22,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp",
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Houston, TX": {
+  "n": 232717,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2020-08-07"
+  ],
+  "vehicles": 151,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav_humidity.shp",
+   "af_trav_temp.shp",
+   "am_trav_humidity.shp",
+   "am_trav_temp.shp",
+   "pm_trav_humidity.shp",
+   "pm_trav_temp.shp"
+  ]
+ },
+ "Jacksonville, FL": {
+  "n": 136863,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Kansas City, KS": {
+  "n": 209899,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Las Cruces, NM": {
+  "n": 38807,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2020-07-10"
+  ],
+  "vehicles": 15,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Las Vegas, NV": {
+  "n": 135551,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Longmont, CO": {
+  "n": 32531,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2023-07-23"
+  ],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Los Angeles, CA": {
+  "n": 102997,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2019-09-15"
+  ],
+  "vehicles": 47,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "ev_trav.shp",
+   "af_trav.shp",
+   "am_trav.shp",
+   "ev_trav.shp"
+  ]
+ },
+ "Lynchburg, VA": {
+  "n": 16245,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 9,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Milwaukee, WI": {
+  "n": 59016,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "New Orleans, LA": {
+  "n": 75251,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2020-08-08",
+   "2020-08-18"
+  ],
+  "vehicles": 34,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "am_trav.shp",
+   "af_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Oklahoma City, OK": {
+  "n": 223852,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Omaha, NE": {
+  "n": 43714,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Petersburg, VA": {
+  "n": 22372,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 9,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Philadelphia, PA": {
+  "n": 38572,
+  "timed": 0.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Providence, RI": {
+  "n": 62084,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning",
+   "night"
+  ],
+  "dates": [
+   "2020-07-29",
+   "2020-07-30"
+  ],
+  "vehicles": 24,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "mi_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Raleigh, NC": {
+  "n": 99275,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-23"
+  ],
+  "vehicles": 49,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Richmond, VA": {
+  "n": 87963,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 35,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Sacramento, CA": {
+  "n": 65928,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2019-08-14"
+  ],
+  "vehicles": 25,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "Afternoon_TraversePoints_Sacramento.shp",
+   "Evening_TraversePoints_Sacramento.shp",
+   "Morning_TraversePoints_Sacramento.shp"
+  ]
+ },
+ "Salem, VA": {
+  "n": 23135,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 9,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Salt Lake City, UT": {
+  "n": 58707,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2023-07-15"
+  ],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "San Bernardino, CA": {
+  "n": 34276,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2019-10-12"
+  ],
+  "vehicles": 21,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "Afternoon_TraversePoints_SanBernardino.shp",
+   "Evening_TraversePoints_SanBernardino.shp",
+   "Morning_TraversePoints_SanBernardino.shp"
+  ]
+ },
+ "San Diego, CA": {
+  "n": 92849,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-09-13"
+  ],
+  "vehicles": 49,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Seattle, WA": {
+  "n": 110107,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2020-07-27"
+  ],
+  "vehicles": 45,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Sedona, AZ": {
+  "n": 17487,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2023-06-24"
+  ],
+  "vehicles": 3,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ },
+ "Victorville, CA": {
+  "n": 28963,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2019-08-24"
+  ],
+  "vehicles": 13,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "Afternoon_TraversePoints_Victorville.shp",
+   "Evening_TraversePoints_Victorville.shp",
+   "Morning_TraversePoints_Victorville.shp"
+  ]
+ },
+ "Virginia Beach, VA": {
+  "n": 65039,
+  "timed": 1.0,
+  "windows": [
+   "evening",
+   "midday",
+   "morning"
+  ],
+  "dates": [
+   "2021-07-15"
+  ],
+  "vehicles": 30,
+  "clocks": [
+   "None"
+  ],
+  "files": [
+   "af_trav.shp",
+   "am_trav.shp",
+   "pm_trav.shp"
+  ]
+ }
+}
