@@ -17,9 +17,10 @@ predictors explained little of the daily maximum air temperature measured by cit
 * :mod:`~sparc.core.lstair.dataset` builds one long table of traverse cells (city × run × 30 m cell) with the
   run's cell-mean air temperature, its anomaly from the run's city background, land-cover predictors with
   focal means, and campaign-matched Landsat LST; one cache per city, so reruns skip finished cities.
-* :mod:`~sparc.core.lstair.evaluate` scores three models leave-one-campaign-out: (A) land cover + focal
-  features, (B) A + LST, (C) SPARC's physics model with LST entering the heat source as surface–air coupling,
-  and turns the city-paired MSE differences into a verdict.
+* :mod:`~sparc.core.lstair.evaluate` scores the models leave-one-campaign-out: (N) no anomaly, (A) land cover +
+  focal features, (B) A + LST, (C) SPARC's physics model with LST entering the heat source as surface–air
+  coupling, and turns the unit-paired skill differences (SS = 1 − MSE/MSE_N) into the pre-registered verdict
+  (``docs/results/lst_air_pilot.md``), with its sensitivities.
 * :mod:`~sparc.core.lstair.landcover_us` adds continuous US land cover (NLCD tree canopy and percent
   impervious, with focal means) to built cities post hoc, for the sensitivity that swaps them in for WorldCover's
   class fractions.
@@ -27,7 +28,7 @@ predictors explained little of the daily maximum air temperature measured by cit
   or measured at the wrong hour) to check that the harness says what it should before real data arrive.
 
 Like :mod:`sparc.core.identify`, the package sits below ``sparc/core`` and is not part of the resume
-fingerprint.  Run it with ``sparc core lstair dataset|add-landcover|evaluate|validate``.
+fingerprint.  Run it with ``sparc core lstair dataset|add-landcover|evaluate|sensitivity|validate``.
 """
 
 from __future__ import annotations
