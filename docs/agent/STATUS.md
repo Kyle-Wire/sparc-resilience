@@ -127,7 +127,7 @@ next step.
   - **Tests:** 307 passed, 9 deselected (8 min 53 s, CPU idle). One earlier run that overlapped a lab failed
     the 15-second timing test `test_progress_pipeline::test_no_info_level_gap_exceeds_15_s` (16.0 s): a CPU
     contention artefact. It passes with the CPU idle.
-  - **Commits:** `5285305`, `bc3cd34`, `26a206a`, COMMIT_ABQ.
+  - **Commits:** `5285305`, `bc3cd34`, `26a206a`, `88d6d3b`.
 - **2026-10-23 (run 1, session 2, after the owner's go-ahead):** Phase 2 code and the P1 real-route lab.
   - **Phase 2 code** (`ff9931a`):
     - the output-dir default;
