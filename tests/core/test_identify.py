@@ -4,6 +4,7 @@ real-traverse path (projection, passes, CLI)."""
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -359,6 +360,7 @@ def test_estimate_compares_runs_and_reads_the_kilometre_scale(providence, tmp_pa
     res = estimate(cfg, tmp_path, layout=lay, winds={"morning": (290, 2.0), "midday": (170, 7.7)}, fetch_winds=False)
     assert res["window"] == "midday" and len(res["runs"]) == 2
     assert all(r["street"]["street_100"] for r in res["runs"])
+    assert all(r["street"][n]["se"] > 0 for r in res["runs"] for n in ("street_100", "street_300"))   # pooling needs it
     km = res["kilometre"]
     assert km["status"] == "estimated" and km["result"]["n_rotations"] == 35 and km["result"]["spread_deg"] == 120.0
     assert "floor" in res["headline"]
@@ -427,3 +429,108 @@ def test_estimate_markdown_explains_an_underpowered_kilometre_verdict():
     assert "underpowered" in STATUS_NOTE
     assert STATUS_NOTE["underpowered"].capitalize() in md
     assert "wind. ." not in md
+
+
+def test_default_output_folder_is_the_configs_own_and_uses_the_full_name(tmp_path):
+    """``new_orleans_uhi`` used to land in ``output/core/new/identify``; a city with its own ``output.dir`` gets
+    ``<output.dir>/identify``, one on the shared default gets a folder named after it in full."""
+    import argparse
+
+    from sparc.core.config import core_config_from_dict
+    from sparc.core.identify.__main__ import _out
+
+    raw = {"name": "new_orleans_uhi", "data": {"path": "x.csv", "target": "t"}, "predictors": ["a"]}
+    args = argparse.Namespace(out=None)
+    shared = core_config_from_dict(raw, base_dir=tmp_path)
+    assert _out(args, shared) == tmp_path / "output" / "core" / "new_orleans_uhi" / "identify"
+    own = core_config_from_dict({**raw, "output": {"dir": "../output/core/new_orleans"}}, base_dir=tmp_path / "configs")
+    assert _out(args, own) == (tmp_path / "output" / "core" / "new_orleans" / "identify").resolve()
+    assert _out(argparse.Namespace(out="elsewhere"), own) == Path("elsewhere")
+
+
+def test_truth_cache_is_kept_per_layout(layout, monkeypatch):
+    """Two cities in one process must not share a world's truth: the cache is keyed by layout as well."""
+    import copy
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(V, "_TRUTH", {})
+    monkeypatch.setattr(V, "reach_profile", lambda gen, lay, cells: {"city": lay.cfg.name})
+    other = copy.copy(layout)
+    other.cfg = copy.copy(layout.cfg)
+    other.cfg.raw = {**layout.cfg.raw, "name": "second_city"}
+    gen = SimpleNamespace(C0=np.zeros(layout.grid.iy.size))
+    a = V.truth_for("additive", gen, layout)
+    b = V.truth_for("additive", gen, other)
+    assert a["street"]["city"] == layout.cfg.name and b["street"]["city"] == "second_city"
+    assert V.truth_for("additive", gen, layout) is a and len(V._TRUTH) == 2
+
+
+def test_headline_keeps_each_reading_s_standard_error():
+    """Pooling cities (Phase 3) weights every run's reading by its SE, so the per-run summary must carry it."""
+    from sparc.core.identify.traverses import headline
+
+    rows = [{"estimator": n, "estimate": -0.1, "se": se, "lo": -0.1 - 1.96 * se, "hi": -0.1 + 1.96 * se}
+            for n, se in (("street_100", 0.03), ("street_300", 0.05))]
+    h = headline(rows)
+    assert h["street_100"]["se"] == 0.03 and h["street_300"]["se"] == 0.05
+
+
+def test_fetch_capa_raw_downloads_the_traverse_files_scan_traverses_reads(tmp_path, monkeypatch):
+    """A mocked OSF node in the layouts CAPA publishes: an "All Data" bundle at the root and a folder with
+    ``am_trav`` shapefile sidecars, rasters and a report.  The traverse set is fetched (the bundle is not:
+    it would duplicate it), and ``scan_traverses`` reads what landed."""
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import Point
+
+    from sparc.core.identify.traverses import scan_traverses
+    from sparc.data.collect import capa
+
+    n = 8
+    loc = pd.date_range("2020-07-29 06:00:00", periods=n, freq="1s")
+    shp = tmp_path / "src"
+    shp.mkdir()
+    gpd.GeoDataFrame({"t_f": 71.0 + 0.1 * np.arange(n), "file": "CAPA1061_290720_095119.093_0.csv",
+                      "dttm_lc": loc.strftime("%Y-%m-%d %H:%M:%S")},
+                     geometry=[Point(-71.41 + 1e-4 * i, 41.82) for i in range(n)], crs="EPSG:4326"
+                     ).to_file(shp / "am_trav.shp")
+    blobs = {f"id_{p.name}": p.read_bytes() for p in shp.iterdir()}
+    blobs["id_bundle"] = b"PK-not-needed"
+    root = [{"id": "id_bundle", "name": "All Data_Heat Watch RI_100620.zip", "kind": "file"},
+            {"id": "id_report", "name": "Summary Report_Heat Watch.pdf", "kind": "file"},
+            {"id": "fold", "name": "Traverses", "kind": "folder"}]
+    folder = [{"id": f"id_{p.name}", "name": p.name, "kind": "file"} for p in shp.iterdir()] + [
+        {"id": "id_ras", "name": "rasters_chw_ri_100620.zip", "kind": "file"}]
+    got = []
+
+    def listing(items):
+        return json.dumps({"data": [{"id": i["id"], "attributes": {"name": i["name"], "kind": i["kind"]}}
+                                    for i in items], "links": {"next": None}}).encode()
+
+    def fake_get(url):
+        got.append(url)
+        if "api.osf.io" in url:
+            return listing(folder if url.rstrip("/").endswith("fold") else root)
+        return blobs[url.rsplit("/", 1)[-1]]
+
+    monkeypatch.setattr(capa, "_http_get", fake_get)
+    paths = capa.fetch_capa_raw("wu9v7", tmp_path / "raw")
+    assert sorted(p.name for p in paths) == sorted(p.name for p in shp.iterdir())
+    assert not any(u.endswith(("id_bundle", "id_report", "id_ras")) for u in got)
+    assert all("files.osf.io/v1/resources/wu9v7/providers/osfstorage/" in u for u in got if "api.osf.io" not in u)
+    pts, report = scan_traverses(tmp_path / "raw")
+    assert [r["status"] for r in report] == ["read"] and len(pts) == n and set(pts["window"]) == {"morning"}
+    # a second call keeps what is already there; a node with only the bundle fetches the bundle
+    got.clear()
+    capa.fetch_capa_raw("wu9v7", tmp_path / "raw")
+    assert all("api.osf.io" in u for u in got)
+    root[:] = root[:2]
+    assert [p.name for p in capa.fetch_capa_raw("wu9v7", tmp_path / "bundle")] == ["All Data_Heat Watch RI_100620.zip"]
+    root[:] = root[1:]
+    with pytest.raises(FileNotFoundError):
+        capa.fetch_capa_raw("wu9v7", tmp_path / "none")
+
+
+def test_catalog_points_providence_at_its_2020_traverses():
+    from sparc.data.collect.capa_catalog import CAPA_CATALOG
+
+    assert CAPA_CATALOG["Providence, RI"]["traverse_node"] == "wu9v7"

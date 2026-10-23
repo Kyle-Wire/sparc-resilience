@@ -507,7 +507,7 @@ def _sample_rasters_to_fishnet(fishnet_gdf: object, raster_data: dict) -> object
 # Raw traverse points (UNVERIFIED against real OSF files)
 # ---------------------------------------------------------------------------
 
-_TRAVERSE_EXTS = (".zip", ".csv", ".shp", ".geojson")
+_RAW_TRAVERSE_EXTS = (".zip", ".csv", ".geojson", ".gpkg", ".shp", ".dbf", ".shx", ".prj", ".cpg")
 TRAVERSE_COLUMNS = ["time", "lat", "lon", "temp_f", "window"]
 
 # Normalised column-name candidates, in priority order.
@@ -526,25 +526,6 @@ _TEMP_GENERIC = ("temperature", "temp", "air_temperature", "air_temp")
 
 def _norm_col(name: object) -> str:
     return re.sub(r"_+", "_", re.sub(r"[^0-9a-z]+", "_", str(name).lower())).strip("_")
-
-
-def find_traverse_sources(files: list) -> list:
-    """Select raw-traverse files from an OSF listing.
-
-    *files* may be dicts with a ``"name"`` key (as returned by the OSF scan)
-    or plain filename strings.  A file matches when its basename matches
-    ``traverse*`` or ``*_traverses*`` (case-insensitive) and it ends in
-    ``.zip``, ``.csv``, ``.shp`` or ``.geojson``.  Input order is kept.
-    """
-    out = []
-    for f in files or []:
-        name = f.get("name", "") if isinstance(f, dict) else str(f)
-        base = name.replace("\\", "/").rsplit("/", 1)[-1].lower()
-        if not base.endswith(_TRAVERSE_EXTS):
-            continue
-        if base.startswith("traverse") or "_traverses" in base:
-            out.append(f)
-    return out
 
 
 def _window_from_hour(hour: object) -> object:
@@ -690,108 +671,43 @@ def _window_hint_from_name(name: str) -> Optional[str]:
     return None
 
 
-def parse_traverse_bytes(
-    name: str,
-    data: bytes,
-    timezone: Optional[str] = None,
-) -> object:
-    """Parse a downloaded traverse file (``.csv`` / ``.geojson`` / ``.shp``
-    or a ``.zip`` of those, nested zips included) into the table of
-    :func:`parse_traverse_table`, with a ``source_file`` column.
+def _raw_traverse_files(files: list) -> list:
+    """The listing's raw traverse files: traverse zips, tables and shapefile sets (``traverses_chw_*.zip``,
+    ``af_trav.zip``, ``am_trav.shp`` with its sidecars); failing those, the "All Data" bundles that hold
+    them (taking both would read every point twice)."""
+    def base(f):
+        return f["name"].replace("\\", "/").rsplit("/", 1)[-1].lower()
 
-    UNVERIFIED against real OSF traverse archives.
+    trav = [f for f in files if "trav" in base(f).split(".", 1)[0] and base(f).endswith(_RAW_TRAVERSE_EXTS)]
+    return trav or [f for f in files if base(f).startswith(("all data", "all_data")) and base(f).endswith(".zip")]
+
+
+def fetch_capa_raw(node_id: str, dest, folder_hint: Optional[str] = None) -> list:
+    """Download a CAPA project's raw traverse files into ``dest`` and return their paths.
+
+    Lists the OSF node (:func:`_scan_storage`; ``folder_hint`` keeps one city's top-level folder of a
+    multi-city node) and fetches its traverse zips, tables and shapefile sets (``.shp`` with its ``.dbf`` /
+    ``.shx`` / ``.prj`` / ``.cpg``), or failing those its "All Data" bundles, through Waterbutler.  Files already in
+    ``dest`` are kept.  :func:`sparc.core.identify.traverses.scan_traverses` reads ``dest`` as it is (nested
+    zips, sidecars, rasters skipped).  Raises ``FileNotFoundError`` when the node holds no traverse files.
     """
-    import pandas as pd
     import pathlib
 
-    lname = name.lower()
-    frames = []
-
-    def _parse(df, src: str):
-        try:
-            parsed = parse_traverse_table(df, timezone=timezone,
-                                          window_hint=_window_hint_from_name(src))
-        except ValueError as exc:
-            log.warning("capa traverse: skipping %s (%s)", src, exc)
-            return
-        parsed["source_file"] = src
-        frames.append(parsed)
-
-    if lname.endswith(".csv"):
-        _parse(pd.read_csv(io.BytesIO(data)), name)
-    elif lname.endswith(".geojson"):
-        import geopandas as gpd
-        _parse(gpd.read_file(io.BytesIO(data)), name)
-    elif lname.endswith(".zip"):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = pathlib.Path(tmp)
-            with zipfile.ZipFile(io.BytesIO(data)) as z:
-                z.extractall(root)
-            for nested in list(root.rglob("*.zip")):
-                try:
-                    with zipfile.ZipFile(nested) as nz:
-                        nz.extractall(nested.parent)
-                except Exception:
-                    pass
-            for path in sorted(root.rglob("*")):
-                pl = path.name.lower()
-                if path.name.startswith(".") or "__macosx" in str(path).lower():
-                    continue
-                if pl.endswith(".csv"):
-                    _parse(pd.read_csv(path), path.name)
-                elif pl.endswith((".shp", ".geojson")):
-                    import geopandas as gpd
-                    _parse(gpd.read_file(path), path.name)
-    elif lname.endswith(".shp"):
-        log.warning("capa traverse: bare .shp %s needs its sidecar files; "
-                    "download the containing .zip instead", name)
-    if not frames:
-        return pd.DataFrame(columns=TRAVERSE_COLUMNS + ["source_file"])
-    return pd.concat(frames, ignore_index=True)
-
-
-def download_capa_traverses(
-    node_id: str,
-    *,
-    folder_hint: Optional[str] = None,
-    timezone: Optional[str] = None,
-) -> object:
-    """Download and parse raw CAPA traverse points for one OSF node.
-
-    Discovers ``traverse*`` / ``*_traverses*`` files
-    (:func:`find_traverse_sources`), downloads them via Waterbutler and
-    parses them (:func:`parse_traverse_bytes`).  Returns a DataFrame with
-    ``time, lat, lon, temp_f, window, source_file`` (empty on failure —
-    never raises).  The traverse timestamps date the campaign independently
-    of ERA5 (``configs/multicity_pilot.yml`` → ``campaign_date_source``).
-
-    UNVERIFIED: OSF (api.osf.io) is blocked in the development environment,
-    so discovery patterns and column detection have only been exercised on
-    synthetic files.
-    """
-    import pandas as pd
-
-    empty = pd.DataFrame(columns=TRAVERSE_COLUMNS + ["source_file"])
-    try:
-        files = _scan_storage(node_id, top_level_filter=folder_hint)
-    except Exception as exc:
-        log.warning("capa traverse: OSF scan failed for node %s (%s)", node_id, exc)
-        return empty
-    sources = find_traverse_sources(files)
-    if not sources:
-        log.warning("capa traverse: no traverse files found in node %s", node_id)
-        return empty
-    frames = []
-    for src in sources:
-        try:
-            url = OSF_WATERBUTLER.format(node_id=node_id, file_id=src["id"])
-            frames.append(parse_traverse_bytes(src["name"], _http_get(url), timezone=timezone))
-        except Exception as exc:
-            log.warning("capa traverse: failed to load %s (%s)", src.get("name"), exc)
-    frames = [f for f in frames if len(f)]
-    if not frames:
-        return empty
-    return pd.concat(frames, ignore_index=True)
+    dest = pathlib.Path(dest)
+    files = _raw_traverse_files(_scan_storage(node_id, top_level_filter=folder_hint))
+    if not files:
+        raise FileNotFoundError(f"no traverse files in OSF node '{node_id}' (https://osf.io/{node_id}/files/)")
+    dest.mkdir(parents=True, exist_ok=True)
+    out = []
+    for f in files:
+        path = dest / f["name"]
+        if not (path.is_file() and path.stat().st_size > 0):
+            log.info("capa: downloading %s", f["name"])
+            part = path.with_name(path.name + ".part")
+            part.write_bytes(_http_get(OSF_WATERBUTLER.format(node_id=node_id, file_id=f["id"])))
+            part.replace(path)
+        out.append(path)
+    return out
 
 
 # ---------------------------------------------------------------------------

@@ -6,17 +6,16 @@ every test (api.osf.io and Open-Meteo must never be contacted).
 A24 — ERA5 boundary windows are requested in LOCAL time (IANA timezone or
       "auto"), follow the CAPA traverse protocol, and add ssrd / blh / u10 / v10.
 A23 — every pilot city carries ``timezone`` and ``campaign_date_source``.
-A22 — raw CAPA traverse discovery + parsing.
+A22 — raw CAPA traverse parsing (discovery and download: ``capa.fetch_capa_raw``,
+      tested in tests/core/test_identify.py).
 """
 from __future__ import annotations
 
-import io
 import json
 import math
 import urllib.error
 import urllib.parse
 import urllib.request
-import zipfile
 from datetime import date
 from pathlib import Path
 
@@ -273,22 +272,6 @@ class TestPilotConfigMetadata:
 # ---------------------------------------------------------------------------
 
 
-class TestTraverseDiscovery:
-    def test_find_traverse_sources(self):
-        files = [
-            {"name": "traverses_chw_philadelphia_072522.zip", "id": "a"},
-            {"name": "rasters_chw_philadelphia_072522.zip", "id": "b"},
-            {"name": "Philly_traverses_am.csv", "id": "c"},
-            {"name": "Traverse_points.geojson", "id": "d"},
-            {"name": "traverses_report.pdf", "id": "e"},
-            {"name": "am_trav.shp", "id": "f"},
-            "folder/traverse_pm.shp",
-        ]
-        got = capa.find_traverse_sources(files)
-        assert [g["id"] if isinstance(g, dict) else g for g in got] == [
-            "a", "c", "d", "folder/traverse_pm.shp"]
-
-
 def _df(**cols):
     return pd.DataFrame(cols)
 
@@ -342,57 +325,3 @@ class TestParseTraverseTable:
         with pytest.raises(ValueError):   # projected coordinates are not lat/lon
             capa.parse_traverse_table(_df(datetime=["2022-07-25 06:00"], y=[4.4e6],
                                           x=[4.9e5], t_f=[80.0]))
-
-
-def _traverse_zip() -> bytes:
-    am = _df(DateTime=["2022-07-25 06:10:00", "2022-07-25 06:40:00"],
-             Latitude=[39.95, 39.96], Longitude=[-75.16, -75.17], T_F=[75.0, 76.0])
-    pm = _df(timestamp=["2022-07-25 19:10:00"], lat=[39.97], lon=[-75.18], temp_c=[30.0])
-    inner = io.BytesIO()
-    with zipfile.ZipFile(inner, "w") as z:
-        z.writestr("pm_traverse.csv", pm.to_csv(index=False))
-    outer = io.BytesIO()
-    with zipfile.ZipFile(outer, "w") as z:
-        z.writestr("traverses/am_traverse.csv", am.to_csv(index=False))
-        z.writestr("traverses/nested_pm.zip", inner.getvalue())
-        z.writestr("README.txt", "not a table")
-    return outer.getvalue()
-
-
-class TestTraverseZip:
-    def test_in_memory_zip_with_nested_zip(self):
-        out = capa.parse_traverse_bytes("traverses_chw_philadelphia_072522.zip", _traverse_zip())
-        assert len(out) == 3
-        assert sorted(out["window"]) == ["evening", "morning", "morning"]
-        ev = out[out["window"] == "evening"].iloc[0]
-        assert ev["temp_f"] == pytest.approx(86.0)
-        assert set(out["source_file"]) == {"am_traverse.csv", "pm_traverse.csv"}
-
-    def test_download_capa_traverses_with_mocked_osf(self, monkeypatch):
-        listing = {"data": [
-            {"id": "f1", "attributes": {"kind": "file",
-                                        "name": "traverses_chw_philadelphia_072522.zip"}},
-            {"id": "f2", "attributes": {"kind": "file",
-                                        "name": "rasters_chw_philadelphia_072522.zip"}},
-        ], "links": {"next": None}}
-        payload = _traverse_zip()
-        requested = []
-
-        def fake(req, timeout=None):
-            url = _url(req)
-            requested.append(url)
-            if "api.osf.io" in url:
-                return _FakeResponse(listing)
-            if url.endswith("/f1"):
-                return _FakeResponse(payload)
-            raise AssertionError(f"unexpected download {url}")
-
-        monkeypatch.setattr(urllib.request, "urlopen", fake)
-        out = capa.download_capa_traverses("abc12", timezone="America/New_York")
-        assert len(out) == 3
-        assert not any(u.endswith("/f2") for u in requested)
-
-    def test_download_capa_traverses_never_raises(self):
-        out = capa.download_capa_traverses("abc12")      # network blocked by fixture
-        assert len(out) == 0
-        assert list(out.columns) == capa.TRAVERSE_COLUMNS + ["source_file"]

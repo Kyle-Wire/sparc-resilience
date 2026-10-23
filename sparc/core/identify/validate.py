@@ -76,19 +76,25 @@ def reach_profile(gen, layout, cells: np.ndarray, reaches=REACHES, dose: float =
 _TRUTH: dict = {}
 
 
+def _layout_key(layout) -> tuple:
+    g = layout.grid
+    return (str(getattr(layout.cfg, "name", "")), g.shape, int(g.iy.size), float(g.x0), float(g.y0), float(g.dx))
+
+
 def truth_for(kind: str, gen, layout, n_cells: int = 80) -> dict:
     """Reach profiles at street points (paved cells, where vehicles drive) and anywhere in the city.  The
-    canopy part of every generator is deterministic, so this is computed once per generator."""
+    canopy part of every generator is deterministic, so this is computed once per generator and layout."""
     if kind == "null":
         z = {f"within_{r}": 0.0 for r in REACHES} | {"total": 0.0}
         return {"street": dict(z), "city": dict(z)}
-    if kind not in _TRUTH:
+    key = (kind, _layout_key(layout))
+    if key not in _TRUTH:
         rng = np.random.default_rng(20201)
         paved = np.flatnonzero(layout.col("impervious") > 40.0)
         street = rng.choice(paved, min(n_cells, paved.size), replace=False)
         city = rng.choice(gen.C0.size, min(n_cells, gen.C0.size), replace=False)
-        _TRUTH[kind] = {"street": reach_profile(gen, layout, street), "city": reach_profile(gen, layout, city)}
-    return _TRUTH[kind]
+        _TRUTH[key] = {"street": reach_profile(gen, layout, street), "city": reach_profile(gen, layout, city)}
+    return _TRUTH[key]
 
 
 def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, which=ESTIMATORS) -> list[dict]:

@@ -579,7 +579,7 @@ def headline(rows: list[dict]) -> dict:
     for name in ("street_100", "street_300", "reach_1000"):
         r = by.get(name)
         if r:
-            out[name] = {"estimate": r["estimate"], "lo": r["lo"], "hi": r["hi"], "status": r.get("lab_status"),
+            out[name] = {"estimate": r["estimate"], "se": r["se"], "lo": r["lo"], "hi": r["hi"], "status": r.get("lab_status"),
                          "excludes_zero": bool(r["hi"] < 0 or r["lo"] > 0),
                          "city_estimate": r.get("city_estimate"), "city_se": r.get("city_se")}
     trusted = [n for n in ("reach_1000", "street_300", "street_100") if out.get(n, {}).get("status") == "trustworthy"]

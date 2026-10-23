@@ -10,6 +10,8 @@ Each entry:
                 the root-level subfolder.  None for dedicated per-city nodes.
   utm_epsg    — Recommended projected CRS for spatial operations.
   year        — Campaign year (omitted if unknown).
+  traverse_node — OSF project holding the raw traverse points the canopy identification reads
+                (``capa.fetch_capa_raw``), when it is not ``osf_node`` (e.g. a later campaign).
   state       — US state abbreviation.
 
 Multi-city nodes:
@@ -52,6 +54,7 @@ CAPA_CATALOG: dict[str, dict] = {
     "Providence, RI": {
         "osf_node": "tdsy7", "folder_hint": "Providence",
         "utm_epsg": "EPSG:32619", "year": 2019, "state": "RI",
+        "traverse_node": "wu9v7",        # Rhode Island Heat Watch 2020-07-29 (the traverses SPARC analyses)
     },
 
     # ── MID-ATLANTIC ───────────────────────────────────────────────────────

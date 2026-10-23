@@ -17,10 +17,15 @@ from pathlib import Path
 
 
 def _out(args, cfg) -> Path:
+    """``--out``, else ``identify/`` in the config's own output folder (next to its core run).  A config
+    that keeps the shared default folder gets one named after it in full, so two cities never share."""
     if args.out:
         return Path(args.out)
-    city = str(cfg.name).split("_")[0] or "project"
-    return Path("output") / "core" / city / "identify"
+    from sparc.core.config import DEFAULTS
+
+    if cfg.raw["output"]["dir"] == DEFAULTS["output"]["dir"]:
+        return cfg.output_dir / cfg.name / "identify"
+    return cfg.output_dir / "identify"
 
 
 def _load_lab(path: str | None, out: Path, name: str = "identify_lab.json") -> dict | None:
@@ -198,7 +203,7 @@ def main(argv=None) -> int:
 
     def common(p):
         p.add_argument("--project", "-p", required=True, help="core config (e.g. configs/core_providence.yml)")
-        p.add_argument("--out", default=None, help="output folder (default output/core/<city>/identify)")
+        p.add_argument("--out", default=None, help="output folder (default <output.dir>/identify)")
 
     p = sub.add_parser("inspect", help="list what a downloaded campaign folder holds before estimating")
     p.add_argument("--traverses", required=True, help="traverse file, archive or folder (e.g. the OSF download)")
