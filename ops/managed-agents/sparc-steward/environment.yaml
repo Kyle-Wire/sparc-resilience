@@ -1,0 +1,26 @@
+name: sparc-steward-env
+config:
+  type: cloud
+  networking:
+    type: limited
+    allow_package_managers: true   # pip install -r requirements-core.txt
+    allow_mcp_servers: false
+    allowed_hosts:
+      # CAPA Heat Watch traverses (OSF API, Waterbutler downloads, OSF's storage backend)
+      - osf.io
+      - api.osf.io
+      - files.osf.io
+      - storage.googleapis.com
+      - heat.gov
+      # Weather and campaign forcing (sparc/core/forcing.py, station lookups)
+      - mesonet.agron.iastate.edu
+      - archive-api.open-meteo.com
+      - nsf-ncar-era5.s3.amazonaws.com
+      - noaa-global-hourly-pds.s3.amazonaws.com
+      - noaa-isd-pds.s3.amazonaws.com
+      # Open land cover, imagery, elevation, population (sparc/core/opendata.py, features_open.py)
+      - esa-worldcover.s3.amazonaws.com
+      - copernicus-dem-30m.s3.amazonaws.com
+      - sentinel-cogs.s3.us-west-2.amazonaws.com
+      - dataforgood-fb-data.s3.amazonaws.com
+      - overpass-api.de

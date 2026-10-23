@@ -1,0 +1,6 @@
+name: sparc-steward-notes
+description: >-
+  Working notes of the SPARC steward across runs: what was tried, what failed
+  and why, data and file-format quirks, run timings in the sandbox, and
+  decisions with their reasons. The committed docs/agent/STATUS.md is the
+  status board; these notes are the detail behind it. Never holds credentials.
