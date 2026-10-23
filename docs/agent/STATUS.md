@@ -100,7 +100,7 @@ next step.
   - **Second city:** OSF listings checked read-only; Albuquerque chosen.
   - **Tests:** `pytest tests/core/test_identify.py tests/core -m "not slow"` gave 297 passed, 9 deselected
     (about 9.2 min). `tests/test_fix_era5_capa.py` gave 21 passed.
-  - **Commits:** `ff9931a`, `4903bd5`, COMMIT_DOCS.
+  - **Commits:** `ff9931a`, `4903bd5`, `c012045`.
   - **Next:** `scripts/setup_core_city.py`.
 - **2026-10-23 (run 1):** Phase 1, steps 1–7, done; gate met.
   - **Steps:** downloaded `wu9v7` via the Waterbutler folder zip; `inspect` (reader unchanged); `lab` (3 min);
