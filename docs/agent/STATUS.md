@@ -85,6 +85,6 @@ next step.
     ("…wind. ."). The regression test is `test_estimate_markdown_explains_an_underpowered_kilometre_verdict`.
   - **Tests:** `pytest tests/core/test_identify.py tests/core -m "not slow"` gave 291 passed, 9 deselected
     (baseline before the fix: 290 passed, 9 deselected), about 9.5 min.
-  - **Commits:** `7693584` (steps 1–2 status), then COMMIT_MAIN (results, fix, test, status).
+  - **Commits:** `7693584` (steps 1–2 status), then `ad78f41` (results, fix, test, status).
   - **Next:** Phase 2, the output-dir default.
 - 2026-10-23: roadmap and agent config added on branch `sparc-steward` (set up by hand, no agent run yet).
