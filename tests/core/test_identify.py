@@ -409,3 +409,21 @@ def test_capa_heat_watch_tables_use_the_local_clock_and_the_sensor(tmp_path):
     (tmp_path / "am_trav.dbf").rename(lone / "am_trav.dbf")
     pts2, report2 = scan_traverses(lone)
     assert len(pts2) == 0 and report2[0]["status"] == "skipped" and ".shp" in report2[0]["reason"]
+
+
+def test_estimate_markdown_explains_an_underpowered_kilometre_verdict():
+    """The kilometre lab's verdict under Providence's real winds is "underpowered" (no false alarms, no power);
+    the write-up must say so instead of leaving an empty sentence."""
+    from sparc.core.identify.traverses import STATUS_NOTE, estimate_markdown
+
+    qa = {"n_samples": 2154, "n_passes": 29, "n_vehicles": 3, "duration_min": 60.0, "n_cells": 2124,
+          "share_of_city": 0.04}
+    km = {"winds": {"2020-07-29 midday": {"from_deg": 170.0, "speed": 7.7, "source": "given"}},
+          "status": "estimated", "lab_status": "underpowered", "lab_reasons": [],
+          "result": {"estimate": 0.08, "lo": -0.01, "hi": 0.17, "p_rotation": 0.56, "p_cooling": 0.75,
+                     "n_cells": 2480, "runs": ["a", "b", "c", "d"], "spread_deg": 70.0}}
+    md = estimate_markdown({"source": "x", "window": "all", "run": "all runs", "qa": qa, "headline": {},
+                            "designs": [], "runs": [], "kilometre": km})
+    assert "underpowered" in STATUS_NOTE
+    assert STATUS_NOTE["underpowered"].capitalize() in md
+    assert "wind. ." not in md

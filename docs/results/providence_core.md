@@ -161,7 +161,7 @@ City-wide mean cooling by neighbourhood dose (°F):
 - The specification range scales each multiverse variant's change to this run as a ratio to the multiverse baseline (the multiverse runs on 60 m cells).
 - The envelope is the union of the components: a plausible range for reading, not a confidence interval.
 - **Impervious and the package are the robust findings.** Their envelopes exclude zero, and every analysis variant agrees on the sign.
-- **Canopy is not established by this campaign.** The estimate is the same size as the spurious change the pipeline reports when the simulation plants no canopy effect (see [Validation](#validation-studies)). Where it can be isolated, and how, is in [Isolating the causal effect of canopy](canopy_identification.md): a street-difference design on the raw traverse readings recovers the block-scale effect (canopy within 100 m) in every simulated world, while the same design on the map reports an effect in 58% of worlds with none.
+- **Canopy is not established by this campaign.** The estimate is the same size as the spurious change the pipeline reports when the simulation plants no canopy effect (see [Validation](#validation-studies)). Where it can be isolated, and how, is in [Isolating the causal effect of canopy](canopy_identification.md): a street-difference design on the raw traverse readings recovers the block-scale effect (canopy within 100 m) in every simulated world, while the same design on the map reports an effect in 58% of worlds with none. **On the real traverses** (2020-07-29, four runs) it finds no block-scale effect: −0.03 °F per +10 pp within 100 m (95% CI −0.07 to +0.02; afternoon run alone +0.02, −0.13 to +0.17). The validated city-wide floor is 0.05 °F of cooling, well below the model's −0.19 °F, which the traverses neither confirm nor rule out ([Real traverses](canopy_identification.md#real-traverses-providence-2020-07-29)).
 
 ## Climate futures (CMIP6, delta method)
 
@@ -400,7 +400,7 @@ The in-browser emulator matches the Python reference to within 1e-4 °F.
 - **Uneven accuracy.** It varies strongly by area (fold R² 0.26–0.73).
 - **One afternoon only.** There is no night-time model.
 - **Albedo scale.** The layer is not broadband, so albedo effects are relative to it.
-- **Canopy effects are not established.** The estimate matches the spurious change a land-cover-interpolated target produces with no canopy effect at all (null simulation). A test needs raw traverse points, not the gridded product.
+- **Canopy effects are not established.** The estimate matches the spurious change a land-cover-interpolated target produces with no canopy effect at all (null simulation). The raw traverse points have now been tested: no block-scale effect is detected (−0.03 °F per +10 pp within 100 m, 95% CI −0.07 to +0.02, all four runs; the lab rates the design trustworthy), and a city-wide +10 pp cools street air by at least 0.05 °F (one-sided 95% floor). The city-wide size stays unidentified from one campaign ([Real traverses](canopy_identification.md#real-traverses-providence-2020-07-29)).
 - **Priority maps are a modelling choice.** Their top-decile cells change with reasonable analysis choices (multiverse); city-wide effects and signs do not.
 
 ## Regenerating

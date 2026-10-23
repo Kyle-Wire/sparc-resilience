@@ -611,6 +611,8 @@ STATUS_NOTE = {
     "direction only": "the lab finds the sign reliable but the size dependent on how far cooling spreads",
     "conservative": "the lab finds it a lower bound on the cooling",
     "partial": "the lab finds it right in all but one simulated world",
+    "underpowered": "the lab finds it raises no false alarms on this layout but rarely detects a real effect "
+                    "with this campaign's runs and winds",
     "not trustworthy": "the lab does not trust this reading on this layout",
     "not validated": "run the identification lab to validate it on this layout",
 }
