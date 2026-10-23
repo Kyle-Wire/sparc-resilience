@@ -607,6 +607,7 @@ def parse_traverse_table(
     if t_col is None:
         raise ValueError(f"parse_traverse_table: no temperature column in {list(df.columns)}")
     temp = pd.to_numeric(df[t_col], errors="coerce").astype(float)
+    temp = temp.where(temp > -999.0)                 # CAPA's no-data value is -9999 (1,423 Albuquerque readings)
     if to_f:
         temp = temp * 9.0 / 5.0 + 32.0
 

@@ -475,6 +475,10 @@ def run_winds(cfg, points: pd.DataFrame, overrides: dict | None = None, cache_di
                 t0, t1 = t0.tz_localize(ZoneInfo(tz)), t1.tz_localize(ZoneInfo(tz))
             obs = station_obs(station, t0.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc),
                               t1.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc), cache_dir=cache_dir)
+            if not np.isfinite(obs["wind_from_deg"]):
+                out[run] = {"error": f"station {station}: wind variable in every report "
+                                     f"({obs['wind_speed']:.1f} m/s, no direction); give it with --wind"}
+                continue
             out[run] = {"from_deg": float(obs["wind_from_deg"]), "speed": float(obs["wind_speed"]),
                         "source": f"station {station} ({obs['n_reports']} reports)"}
         except Exception as exc:  # noqa: BLE001 - a missing wind only disables the kilometre design

@@ -590,3 +590,31 @@ def test_albuquerque_layout_reads_the_cut_datetime_and_numeric_sensor_ids(tmp_pa
     assert pts["time"].iloc[0] == pd.Timestamp("2021-07-09 15:00:00")
     assert set(pts["run"]) == {"2021-07-09 midday"}
     assert sorted(pts["vehicle_key"].str.split(":").str[-1].unique()) == ["1023B", "1036", "CAPA1021"]
+
+
+def test_run_winds_reports_a_variable_station_wind_instead_of_a_nan_direction(providence, monkeypatch):
+    """Albuquerque's afternoon run: KABQ reports the wind as variable in every report, so the run has no wind
+    direction; it must say so (and the kilometre design wait for --wind), not carry NaN into the rotation."""
+    from sparc.core import forcing as F
+    from sparc.core.identify.traverses import run_winds
+
+    cfg, _ = providence
+    monkeypatch.setattr(F, "station_obs", lambda *a, **k: {"wind_from_deg": float("nan"), "wind_speed": 2.1})
+    pts = pd.DataFrame({"time": pd.to_datetime(["2020-07-29 15:00", "2020-07-29 15:30"]), "run": "2020-07-29 midday",
+                        "window": "midday"})
+    w = run_winds(cfg, pts, fetch=True)
+    assert "error" in w["2020-07-29 midday"] and "variable" in w["2020-07-29 midday"]["error"]
+    assert run_winds(cfg, pts, {"midday": (240.0, 0.5)})["2020-07-29 midday"]["from_deg"] == 240.0
+
+
+def test_capa_no_data_temperatures_are_dropped():
+    """Albuquerque's layers carry -9999 for a missing temperature (1,423 readings); one such value in a pass
+    put the block-scale estimate at -45 °F per +10 pp.  They are missing, not readings."""
+    from sparc.data.collect.capa import parse_traverse_table
+
+    df = pd.DataFrame({"datetime": ["2021-07-09 15:00:00", "2021-07-09 15:00:01", "2021-07-09 15:00:02"],
+                       "lat": 35.1, "lon": -106.6, "t_f": [100.1, -9999.0, 100.3]})
+    out = parse_traverse_table(df)
+    assert out["temp_f"].tolist() == [100.1, 100.3]
+    c = parse_traverse_table(df.rename(columns={"t_f": "t_c"}).assign(t_c=[30.0, -9999.0, 31.0]))
+    assert c["temp_f"].tolist() == pytest.approx([86.0, 87.8])
