@@ -170,8 +170,8 @@ core:
   climate:
     enabled: false
     site:
-    - 35.1142
-    - -106.6394
+    - 35.1149
+    - -106.6391
     thresholds:
     - 90
     - 95
