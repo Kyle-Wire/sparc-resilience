@@ -76,17 +76,32 @@ def cmd_lab(args) -> int:
     out = _out(args, cfg)
     out.mkdir(parents=True, exist_ok=True)
     gens = tuple(args.generators) if args.generators else GENERATORS
+    routes, name, head = None, "identify_lab", ""
+    if args.routes:
+        from sparc.core.identify.traverses import scan_traverses, to_campaign
+        from sparc.core.simcheck import load_layout
+
+        pts, _ = scan_traverses(args.routes, timezone=args.timezone)
+        routes, qa = to_campaign(pts, cfg, load_layout(cfg), window=args.window)
+        name = f"identify_lab_routes_{args.window.replace(' ', '_')}"
+        head = (f"Real routes: the {args.window} run of `{args.routes}`: {qa['n_samples']:,} cell visits on "
+                f"{qa['n_passes']} passes by {qa['n_vehicles']} vehicles over {qa['duration_min']:.0f} min, with the "
+                "run's own along-pass noise (circularly shifted within each pass).\n\n")
     if not args.append:
-        (out / "identify_lab.jsonl").unlink(missing_ok=True)
-    run_lab(cfg, generators=gens, reps=args.reps, seed=args.seed, out_dir=out, workers=args.workers)
-    rows = [json.loads(line) for line in (out / "identify_lab.jsonl").read_text(encoding="utf-8").splitlines() if line]
+        (out / f"{name}.jsonl").unlink(missing_ok=True)
+    run_lab(cfg, generators=gens, reps=args.reps, seed=args.seed, out_dir=out, workers=args.workers, routes=routes,
+            name=name)
+    rows = [json.loads(line) for line in (out / f"{name}.jsonl").read_text(encoding="utf-8").splitlines() if line]
     summ = summarize(rows)
     summ["config"] = str(args.project)
-    (out / "identify_lab.json").write_text(json.dumps(summ, indent=2), encoding="utf-8")
+    if args.routes:
+        summ["routes"] = {"source": str(args.routes), "window": args.window, "qa": qa}
+    (out / f"{name}.json").write_text(json.dumps(summ, indent=2), encoding="utf-8")
     md = lab_markdown(summ)
-    (out / "identify_lab.md").write_text(md, encoding="utf-8")
+    md = md.replace("\n\n", "\n\n" + head, 1) if head else md
+    (out / f"{name}.md").write_text(md, encoding="utf-8")
     print(md)
-    print(f"\nwrote {out / 'identify_lab.json'} and identify_lab.md")
+    print(f"\nwrote {out / (name + '.json')} and {name}.md")
     return 0
 
 
@@ -220,6 +235,12 @@ def main(argv=None) -> int:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--generators", nargs="*", choices=GENERATORS, help="worlds to simulate (default all)")
     p.add_argument("--append", action="store_true", help="add to an existing identify_lab.jsonl")
+    p.add_argument("--routes", default=None,
+                   help="traverse file, archive or folder: drive one real run's passes with its own noise instead of "
+                        "the simulated street grid (writes identify_lab_routes_<window>.*)")
+    p.add_argument("--window", default="midday", help="with --routes: the run to replay (morning, midday, evening, "
+                                                      "night or a run name; default midday)")
+    p.add_argument("--timezone", default=None, help="with --routes: local time zone of tz-aware timestamps")
     p.set_defaults(func=cmd_lab)
 
     p = sub.add_parser("kmlab", help="false alarms and power of the kilometre (wind-shift) design")

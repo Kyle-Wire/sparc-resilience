@@ -97,13 +97,16 @@ def truth_for(kind: str, gen, layout, n_cells: int = 80) -> dict:
     return _TRUTH[key]
 
 
-def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, which=ESTIMATORS) -> list[dict]:
+def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, which=ESTIMATORS,
+              routes=None) -> list[dict]:
+    """One simulated campaign in world ``kind``, every design run on it.  ``routes``: drive a real run's
+    passes with its own along-pass noise (:func:`~sparc.core.identify.campaign.simulate`)."""
     from sparc.core.identify.campaign import simulate
 
     rng = np.random.default_rng([seed, rep, GENERATORS.index(kind) if kind in GENERATORS else 99])
     t0 = time.time()
     T, gen = plant(kind, layout, real, rng)
-    camp = simulate(layout, T, rng, features)
+    camp = simulate(layout, T, rng, features, routes=routes)
     truth = truth_for(kind, gen, layout)
     rows = []
     for r in run_all(camp.samples, camp.product, L, layout.grid, which):
@@ -124,7 +127,7 @@ def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, whi
 _STATE: dict = {}
 
 
-def _init_worker(raw: dict, base_dir: str, threads: int = 1) -> None:
+def _init_worker(raw: dict, base_dir: str, threads: int = 1, routes=None) -> None:
     for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
         os.environ[var] = str(threads)
     try:                                   # a forked worker inherits BLAS pools sized for the whole machine
@@ -136,18 +139,20 @@ def _init_worker(raw: dict, base_dir: str, threads: int = 1) -> None:
     from sparc.core.config import CoreConfig
 
     _STATE["ctx"] = prepare(CoreConfig(raw=raw, base_dir=Path(base_dir)))
+    _STATE["routes"] = routes
 
 
 def _work(args) -> list[dict]:
     kind, rep, seed, which = args
     layout, L, features, real = _STATE["ctx"]
-    return replicate(kind, rep, layout, L, features, real, seed, which)
+    return replicate(kind, rep, layout, L, features, real, seed, which, _STATE.get("routes"))
 
 
 def run_lab(cfg, generators=GENERATORS, reps: int = 8, seed: int = 0, which=ESTIMATORS, out_dir=None,
-            workers: int = 1, log=print) -> list[dict]:
-    """Every generator × replicate; rows are appended to ``out_dir/identify_lab.jsonl`` as they finish.
-    ``workers`` > 1 runs replicates in parallel processes."""
+            workers: int = 1, log=print, routes=None, name: str = "identify_lab") -> list[dict]:
+    """Every generator × replicate; rows are appended to ``out_dir/<name>.jsonl`` as they finish.
+    ``workers`` > 1 runs replicates in parallel processes.  ``routes``: a real run's samples to drive
+    (:func:`replicate`)."""
     from sparc.core import progress
 
     jobs = [(k, r, seed, tuple(which)) for k in generators for r in range(reps)]
@@ -159,7 +164,7 @@ def run_lab(cfg, generators=GENERATORS, reps: int = 8, seed: int = 0, which=ESTI
     def done(rr: list[dict], k: int) -> None:
         rows.extend(rr)
         if out:
-            with open(out / "identify_lab.jsonl", "a", encoding="utf-8") as f:
+            with open(out / f"{name}.jsonl", "a", encoding="utf-8") as f:
                 for r in rr:
                     f.write(json.dumps(r) + "\n")
         if log and rr:
@@ -171,7 +176,7 @@ def run_lab(cfg, generators=GENERATORS, reps: int = 8, seed: int = 0, which=ESTI
             from concurrent.futures import ProcessPoolExecutor, as_completed
 
             with ProcessPoolExecutor(min(workers, len(jobs)), initializer=_init_worker,
-                                     initargs=(cfg.raw, str(cfg.base_dir))) as ex:
+                                     initargs=(cfg.raw, str(cfg.base_dir), 1, routes)) as ex:
                 futs = [ex.submit(_work, j) for j in jobs]
                 for k, fut in enumerate(as_completed(futs), 1):
                     with progress.task("replicates", n=len(jobs), k=k, unit="replicates"):
@@ -180,7 +185,7 @@ def run_lab(cfg, generators=GENERATORS, reps: int = 8, seed: int = 0, which=ESTI
             layout, L, features, real = prepare(cfg)
             for k, (kind, rep, s, w) in enumerate(jobs, 1):
                 with progress.task(f"{kind} #{rep + 1}", n=len(jobs), k=k, unit="replicates"):
-                    done(replicate(kind, rep, layout, L, features, real, s, w), k)
+                    done(replicate(kind, rep, layout, L, features, real, s, w, routes), k)
     return rows
 
 

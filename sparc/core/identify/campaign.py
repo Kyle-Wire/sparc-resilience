@@ -81,19 +81,46 @@ def drive(segs: list[np.ndarray], rng, n_vehicles: int = 10, step_s: float = 3.0
     return pd.concat(rows, ignore_index=True)
 
 
+def pass_deviations(samples: pd.DataFrame) -> np.ndarray:
+    """Each sample's temperature minus its pass mean: a real run's along-pass variation (turbulence, sensor
+    noise and whatever the streets themselves do), the noise :func:`shifted_noise` replays."""
+    return (samples["temp"] - samples.groupby("seg")["temp"].transform("mean")).to_numpy(float)
+
+
+def shifted_noise(samples: pd.DataFrame, dev: np.ndarray, rng) -> np.ndarray:
+    """``dev`` circularly shifted by a random lag within every pass: the real run's along-pass noise, its
+    roughness and autocorrelation kept, its alignment with the streets (and their canopy) broken."""
+    out = np.empty(len(samples))
+    for idx in samples.groupby("seg", sort=False).indices.values():
+        idx = idx[np.argsort(samples["order"].to_numpy()[idx], kind="stable")]
+        out[idx] = np.roll(dev[idx], int(rng.integers(idx.size)))
+    return out
+
+
 def simulate(layout, T: np.ndarray, rng, features: np.ndarray, street_m: float = 300.0, n_vehicles: int = 10,
              drift_f_per_h: tuple[float, float] = (0.5, 1.5), vehicle_sd: float = 0.2, sensor_sd: float = 0.3,
-             step_s: float = 3.0, product: bool = True) -> Campaign:
-    """A campaign over the planted temperature field ``T`` (one value per cell)."""
+             step_s: float = 3.0, product: bool = True, routes: pd.DataFrame | None = None) -> Campaign:
+    """A campaign over the planted temperature field ``T`` (one value per cell).
+
+    ``routes``: a real run's samples (``cell, seg, vehicle, order, t_s, temp``, as
+    :func:`~sparc.core.identify.traverses.to_campaign` returns them) to drive instead of the street grid:
+    the same cells, passes, vehicles and times, with the run's own along-pass noise
+    (:func:`shifted_noise`) in place of white sensor noise."""
     from sklearn.ensemble import RandomForestRegressor
 
-    segs = route_segments(layout, street_m, rng=rng)
-    df = drive(segs, rng, n_vehicles, step_s)
+    if routes is None:
+        df = drive(route_segments(layout, street_m, rng=rng), rng, n_vehicles, step_s)
+    else:
+        df = routes[["cell", "seg", "vehicle", "order", "t_s"]].reset_index(drop=True)
+        n_vehicles = int(df["vehicle"].max()) + 1
     slope = float(rng.uniform(*drift_f_per_h))
     off = rng.normal(0.0, vehicle_sd, n_vehicles)
+    if routes is None:
+        noise = sensor_sd * rng.standard_normal(len(df))
+    else:
+        noise = shifted_noise(df, pass_deviations(routes.reset_index(drop=True)), rng)
     df["truth"] = T[df["cell"].to_numpy()]
-    df["temp"] = (df["truth"] + slope * df["t_s"] / HOUR_S + off[df["vehicle"].to_numpy()]
-                  + sensor_sd * rng.standard_normal(len(df)))
+    df["temp"] = df["truth"] + slope * df["t_s"] / HOUR_S + off[df["vehicle"].to_numpy()] + noise
     prod = np.full(T.size, np.nan)
     if product:
         # the campaign protocol: detrend in time, then fill every cell with a forest on land cover

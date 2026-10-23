@@ -534,3 +534,36 @@ def test_catalog_points_providence_at_its_2020_traverses():
     from sparc.data.collect.capa_catalog import CAPA_CATALOG
 
     assert CAPA_CATALOG["Providence, RI"]["traverse_node"] == "wu9v7"
+
+
+def test_real_route_campaign_replays_the_run_and_its_own_noise(layout, L):
+    """``simulate(routes=...)`` drives a real run: its cells, passes, vehicles and times, with the run's own
+    along-pass deviations (circularly shifted within each pass) as the noise; the lab runs on it."""
+    from sparc.core.identify.campaign import pass_deviations, simulate
+
+    rng = np.random.default_rng(3)
+    n_cells = layout.grid.iy.size
+    rows = []
+    for seg in range(4):
+        cells = rng.choice(n_cells, 40, replace=False)
+        rows.append(pd.DataFrame({"cell": cells, "seg": seg, "vehicle": seg % 2, "order": np.arange(40),
+                                  "t_s": 900.0 * seg + 3.0 * np.arange(40),
+                                  "temp": 85.0 + seg + np.cumsum(rng.normal(0, 0.2, 40))}))
+    routes = pd.concat(rows, ignore_index=True)
+    dev = pass_deviations(routes)
+    camp = simulate(layout, np.zeros(n_cells), np.random.default_rng(0), np.zeros((n_cells, 1)), product=False,
+                    drift_f_per_h=(0.0, 0.0), vehicle_sd=0.0, routes=routes)
+    s = camp.samples
+    pd.testing.assert_frame_equal(s[["cell", "seg", "vehicle", "order", "t_s"]], routes[["cell", "seg", "vehicle", "order", "t_s"]])
+    shifted = 0
+    for seg, part in s.groupby("seg"):
+        mine = dev[routes["seg"].to_numpy() == seg]
+        assert np.allclose(np.sort(part["temp"].to_numpy()), np.sort(mine))          # the run's own deviations
+        k = int(np.argmax([np.allclose(np.roll(mine, j), part["temp"].to_numpy()) for j in range(40)]))
+        assert np.allclose(np.roll(mine, k), part["temp"].to_numpy())                # ... circularly shifted
+        shifted += k > 0
+    assert shifted >= 3
+    feats = S._product_features(layout)
+    real = {"mean": 88.0, "sd": 1.5, "residual_range_m": 400.0}
+    out = V.replicate("own_only", 0, layout, L, feats, real, which=("street_100",), routes=routes)
+    assert out[0]["n_samples"] == len(routes) and np.isfinite(out[0]["estimate"])
