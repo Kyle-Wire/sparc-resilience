@@ -40,6 +40,20 @@ ant apply ops/managed-agents/sparc-steward/agent.md ops/managed-agents/sparc-ste
 read -rs GITHUB_TOKEN && export GITHUB_TOKEN
 ```
 
+On Windows (PowerShell), steps 1 and 3 are:
+
+```powershell
+$v = "2.2.0"; $dir = "$env:LOCALAPPDATA\Programs\ant"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Invoke-WebRequest "https://github.com/anthropics/anthropic-cli/releases/download/v$v/ant_${v}_windows_amd64.zip" -OutFile "$env:TEMP\ant.zip"
+Expand-Archive "$env:TEMP\ant.zip" -DestinationPath $dir -Force
+[Environment]::SetEnvironmentVariable("Path", [Environment]::GetEnvironmentVariable("Path", "User") + ";$dir", "User")
+$env:Path += ";$dir"
+ant --version
+ant auth login
+$env:GITHUB_TOKEN = Read-Host "GitHub token" -MaskInput
+```
+
 Also protect `main` (and `pi-jepa-dev` if you like) under the repo's
 Settings → Branches, so the token can only land work on `sparc-steward`.
 
