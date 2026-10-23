@@ -567,3 +567,26 @@ def test_real_route_campaign_replays_the_run_and_its_own_noise(layout, L):
     real = {"mean": 88.0, "sd": 1.5, "residual_range_m": 400.0}
     out = V.replicate("own_only", 0, layout, L, feats, real, which=("street_100",), routes=routes)
     assert out[0]["n_samples"] == len(routes) and np.isfinite(out[0]["estimate"])
+
+
+def test_albuquerque_layout_reads_the_cut_datetime_and_numeric_sensor_ids(tmp_path):
+    """Albuquerque's CAPA layers (np4q9, 2021): the local time sits in a shapefile field cut to ``datetim`` and
+    most logger files start with a bare number (``1023B_090721_…``, ``1036_090721_…``) beside ``CAPA1021_…``."""
+    gpd = pytest.importorskip("geopandas")
+    from shapely.geometry import Point
+
+    from sparc.core.identify.traverses import scan_traverses
+
+    files = ["1023B_090721_204535.000_0.csv", "1036_090721_204535.000_0.csv", "CAPA1021_090721_204600.000_0.csv"]
+    n = 12
+    t = pd.date_range("2021-07-09 15:00:00", periods=n, freq="1s")
+    df = pd.DataFrame({"datetim": t.strftime("%Y-%m-%d %H:%M:%S"), "t_f": 100.0 + 0.01 * np.arange(n),
+                       "ht_ndx_": 97.0, "rh": 15.5, "file": [files[i % 3] for i in range(n)], "spdKmhr": 20.0,
+                       "trav_id": "af"})
+    gpd.GeoDataFrame(df, geometry=[Point(-106.73 + 1e-4 * i, 35.17) for i in range(n)], crs="EPSG:4326"
+                     ).to_file(tmp_path / "af_trav.shp")
+    pts, report = scan_traverses(tmp_path)
+    assert [r["status"] for r in report] == ["read"]
+    assert pts["time"].iloc[0] == pd.Timestamp("2021-07-09 15:00:00")
+    assert set(pts["run"]) == {"2021-07-09 midday"}
+    assert sorted(pts["vehicle_key"].str.split(":").str[-1].unique()) == ["1023B", "1036", "CAPA1021"]

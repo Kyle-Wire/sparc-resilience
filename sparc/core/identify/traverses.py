@@ -85,13 +85,15 @@ def _standardise(df: pd.DataFrame) -> pd.DataFrame:
         for n in ("datetime", "date_time", "timestamp", "time_stamp", "time", "date"):
             if n in norm and norm[n] != local:
                 ren[norm[n]] = f"gps_{n}"                 # the UTC GPS clock: kept, not used as the time
+    elif "datetim" in norm and "datetime" not in norm:
+        ren[norm["datetim"]] = "datetime"                 # a shapefile field cut short (Albuquerque, 2021)
     elif not any(n in norm for n in ("datetime", "date_time", "timestamp", "time_stamp", "local_time", "time_local")):
         utc = next((norm[n] for n in _UTC_TIME if n in norm), None)
         if utc is not None:
             ren[utc] = "datetime"
     if "file" in norm and not any(n in norm for n in ID_COLUMNS):
-        # one logger file per sensor and run: the sensor id (e.g. CAPA1061) is the vehicle
-        sensor = df[norm["file"]].astype(str).str.extract(r"^([A-Za-z]+\d+)", expand=False)
+        # one logger file per sensor and run: the sensor id (CAPA1061, or a bare 1023B / 1036) is the vehicle
+        sensor = df[norm["file"]].astype(str).str.extract(r"^([A-Za-z]*\d+[A-Za-z]?)(?![0-9A-Za-z])", expand=False)
         df = df.assign(sensor=sensor.fillna(df[norm["file"]].astype(str)))
     out = df.rename(columns=ren)
     geom = getattr(out, "geometry", None) if "geometry" in out.columns else None
