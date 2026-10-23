@@ -17,7 +17,7 @@
 #                    (no override, or "~N months before upload").  Independent of ERA5
 #                    but may be wrong by days to months.
 # Target: replace both with the traverse timestamps in the CAPA metadata / raw
-# traverse points (capa_metadata; see sparc.data.collect.capa.download_capa_traverses),
+# traverse points (capa_metadata; see sparc.data.collect.capa.fetch_capa_raw),
 # which date the campaign independently of ERA5.
 
 multicity:

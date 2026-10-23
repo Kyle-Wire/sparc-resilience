@@ -395,7 +395,7 @@ The core is a lean, self-contained package (numpy, scipy, pandas, scikit-learn, 
 | A18 | Fixed | Configured α bounds reach `ProcessRateNet`; diagnostics script UTF-8 safe |
 | A19, A20 | Frozen | ADR-0002 |
 | A21 | Fixed | Few-shot split drops test pixels within a buffer of training pixels; `block` sampler added |
-| A22 | Needs data | `download_capa_traverses()` + parser, tested on a synthetic ZIP (OSF blocked here) |
+| A22 | Fixed | `fetch_capa_raw()` downloads a node's traverse files (or its "All Data" bundle) and `sparc.core.identify.traverses.scan_traverses` reads them; verified on Providence `wu9v7` (2026-10-23). It replaced the unverified `download_capa_traverses()` |
 | A23 | Needs data | Per-city `campaign_date_source` provenance + warning; real dates need traverse timestamps |
 | A24 | Needs data | ERA5 requested in local time (`timezone=`), CAPA-protocol windows, SW↓/BLH/u10/v10 added; mock-tested (Open-Meteo blocked here) |
 | A25 | Fixed | √ taper only when a threshold is explicitly configured; skipped when a condition curve exists |

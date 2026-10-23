@@ -291,14 +291,17 @@ in `tests/core/test_identify.py`.
 
 The designs have now run on CAPA's published traverses (OSF `wu9v7`, `All Data_Heat Watch RI_100620.zip`,
 md5 `4a0d015a…eccfd6`). Run by the `sparc-steward` agent on 2026-10-23. Outputs (not committed):
-`output/core/providence/identify/identify_{lab,kmlab,estimate,estimate_midday}.{json,md}`.
+`output/core/providence/identify/identify_{lab,kmlab,estimate,estimate_midday}.{json,md}` and
+`identify_lab_routes_{morning,midday,evening,night}.{json,md}`.
 
-**In short.** At block scale (canopy within 100 m of a street point), no canopy effect is detected. The
-afternoon run is too noisy to say much: −0.13 to +0.17 °F per +10 pp. Pooled over the day's four runs the
-interval is −0.07 to +0.02 °F. The evening run is the one run whose interval excludes zero (−0.08 °F). Wider
-readings are negative in three of four runs. They give a validated city-wide floor of 0.05 °F of cooling per
-+10 pp. Under the day's real winds the kilometre test has no power. All of these are findings: the
-block-scale null is measured, not missing.
+**In short.** Averaged over the day, no block-scale canopy effect is detected (canopy within 100 m of a
+street point): −0.07 to +0.02 °F per +10 pp, pooled over the four runs. The afternoon run is too noisy to say
+much (−0.13 to +0.17 °F), and on its own routes the lab trusts only its direction. **The evening run measures
+cooling:** −0.08 °F within 100 m (−0.11 to −0.04) and −0.17 °F within 300 m (−0.26 to −0.07). The lab replayed
+the evening's real routes and noise, and rates both readings Trustworthy there. Wider readings are negative in
+three of four runs. They give a validated city-wide floor of 0.05 °F of cooling per +10 pp. Under the day's
+real winds the kilometre test has no power. All of these are findings: the afternoon and day-averaged nulls
+are measured, not missing.
 
 ### QA: what was read
 
@@ -349,6 +352,54 @@ campaigns in every world). The gate condition "street_100 trustworthy" is met.
 - **The 1 km reading** (−0.26 °F, −0.47 to −0.04, pooled) is **Not trustworthy**: with a canopy-tracking
   2 km factor the lab recovers only 12% of the truth. It is reported, not used.
 
+### The lab on the real routes
+
+**Why.** The idealised lab drives 10 vehicles on a regular street grid with white sensor noise. The real
+campaign is different on three counts:
+
+- only 3 vehicles drive on the grid, on irregular routes;
+- the afternoon noise is larger;
+- real along-street variation is autocorrelated. The variance of temperature differences along a pass grows
+  roughly linearly with lag: at 30 m it is 0.006 °F² at night and 0.06 °F² in the afternoon; at 300 m, 0.06
+  and 0.82 °F².
+
+**How.** `lab --routes <raw> --window <run>` replays one real run: its own cells, passes, vehicles and times.
+It plants the same six worlds and replaces white noise with the run's own along-pass deviations from each
+pass mean. Each pass's deviations are circularly shifted by a random lag. That keeps their roughness and
+autocorrelation but breaks their alignment with the streets and their canopy.
+
+The test is conservative on noise. The deviations still carry the real streets' own temperature pattern,
+and the planted world adds its own on top. The lab's standard errors therefore run above the real run's:
+0.104 against 0.077 °F in the afternoon, 0.059 against 0.019 °F in the evening.
+
+**Replicates.** I first ran 12 replicates per world, as the idealised lab does. On the afternoon routes,
+street_100 then flagged an effect in 2 of 12 no-effect campaigns (17%), which rated it **Not trustworthy**.
+Two in twelve is too few to judge, so every run was repeated with 36 replicates. The verdict rules were not
+changed. The verdicts below are from 36 replicates per world (216 campaigns per run, about 3 minutes on 4 cores).
+
+| Run (real routes) | Within 100 m | Within 300 m | Floor (from 300 m) | Null: 100 m mean, false positives, sd / mean SE |
+|---|---|---|---|---|
+| Morning | **Trustworthy** | Direction only | valid | +0.010 °F, 3%, 0.067 / 0.073 |
+| Afternoon | Direction only (misses `physics` −0.035 and `coarse_scale` +0.035, just past the 0.03 °F tolerance) | Conservative | valid | −0.010 °F, 11%, 0.105 / 0.104 |
+| Evening | **Trustworthy** | **Trustworthy** | valid | −0.004 °F, 3%, 0.058 / 0.059 |
+| Night | **Trustworthy** | Conservative | valid | +0.008 °F, 3%, 0.042 / 0.049 |
+
+- **The block-scale design holds up on the campaign as driven,** except the afternoon run. That run is
+  clean with no effect, but too noisy to size the effect in the two kilometre-scale worlds. The afternoon
+  reading (+0.02 °F) stays a null, rated Direction only.
+- **The standard errors are calibrated.** With no effect, the spread of estimates matches the mean reported
+  SE in every run (ratio 0.86–1.01). Clustering on 1 km blocks is enough even with autocorrelated real noise.
+- **The evening's 300 m reading is sized,** not only signed: −0.17 °F (−0.26 to −0.07), Trustworthy on the
+  evening routes.
+- **The evening's 1 km reading** (−0.57 °F, −0.96 to −0.17) rates **Conservative** on the evening routes.
+  It understates the cooling in the `confounded` world (27% of it) and recovers it in the other four. That
+  is weaker evidence than for 100 m and 300 m. It rests on the confounder shapes the lab simulates.
+- **The floors** (from 300 m) are valid on every run's routes. The pooled `--window all` estimate mixes runs
+  and is not replayed by this lab.
+- **What the evening result means.** At 19–20 h, a street with 10 pp more canopy within 100 m is about
+  0.08 °F cooler, and 0.17 °F with 10 pp more within 300 m. The afternoon cannot confirm or rule out a
+  similar effect: its interval runs from −0.13 to +0.17 °F.
+
 ### City-wide floor
 
 From the validated 300 m reading (estimate + 1.645 SE, assuming canopy never warms the air at a distance), a
@@ -374,15 +425,14 @@ lab this bound held in ≥ 92% of campaigns in every world. It is tight only whe
 - **The map's canopy effect is not confirmed at block scale.** The model's −0.19 ± 0.14 °F for +10 pp
   (city-wide, from the map) is not contradicted by the floor (0.05 °F). The traverses show no block-scale
   effect to support it.
-- **Planners can lean on two things:**
+- **Planners can lean on three things:**
   - the sign of the 300 m reading;
-  - the 0.05 °F city-wide floor.
+  - the 0.05 °F city-wide floor;
+  - the evening's sized block-scale cooling: 0.08 °F per +10 pp within 100 m, 0.17 °F within 300 m.
 - **Still unidentified:** the city-wide size. It needs pooled campaigns (Phase 3).
-- **A caveat on the verdicts.** The lab simulates an idealised afternoon campaign: 10 vehicles on a
-  300 m street grid, white sensor noise of sd 0.3 °F. The real campaign has 3 vehicles on the grid, irregular
-  routes, and afternoon noise that is visibly larger. The verdicts above rest on that idealised campaign. A
-  lab that replays the real routes, times and residual noise would check them on the campaign as driven.
-  This is proposed in `docs/agent/STATUS.md`.
+- **Verdicts on the campaign as driven.** The idealised lab's verdicts were checked on each run's real
+  routes and noise ([above](#the-lab-on-the-real-routes)). They hold, except that the afternoon block-scale
+  reading drops to Direction only.
 
 Reproduce (data from `https://files.osf.io/v1/resources/wu9v7/providers/osfstorage/?zip=`, which streams
 the project's files as one zip; take `All Data_Heat Watch RI_100620.zip` out of it):
@@ -393,7 +443,10 @@ python -m sparc.core.identify lab      -p configs/core_providence.yml --workers 
 python -m sparc.core.identify kmlab    -p configs/core_providence.yml --workers 4 --winds 240:0.8 170:7.7 190:5.0 200:2.1
 python -m sparc.core.identify estimate -p configs/core_providence.yml --traverses <raw> --window all
 python -m sparc.core.identify estimate -p configs/core_providence.yml --traverses <raw> --name identify_estimate_midday
+python -m sparc.core.identify lab      -p configs/core_providence.yml --workers 4 --reps 36 --routes <raw> --window evening   # and morning, midday, night
 ```
+
+`<raw>` can also be fetched directly: `python -c "from sparc.data.collect.capa import fetch_capa_raw; fetch_capa_raw('wu9v7', '<raw>')"`.
 
 ## Limits
 
@@ -402,7 +455,8 @@ python -m sparc.core.identify estimate -p configs/core_providence.yml --traverse
   without a kilometre-scale confounder), and only the within-100 m design passes all of them.
 - **Simulated campaigns are idealised.** Routes are a regular street grid and drift is linear in time.
   Real campaigns have irregular routes, traffic stops and possibly non-linear drift. Short-lag
-  differences are insensitive to the last of these.
+  differences are insensitive to the last of these. `lab --routes` replays a real run's routes and noise
+  instead.
 - **The estimand is the effect at street points.** City-wide extrapolation from streets is an
   assumption: streets have less canopy than the rest of the city.
 - **Time of day.** Canopy's effect differs between morning, afternoon and evening. The estimate
