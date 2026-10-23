@@ -423,15 +423,19 @@ def campaign_forcing(site_lat: float, site_lon: float, date: str, hours: tuple[i
                 log.warning("station %s unavailable: %s", station, exc)
                 progress.warn("forcing.station_unavailable", f"station {station} unavailable: {exc}",
                               station=station, error=repr(exc)[:300])
-    src = wind_source if wind_source != "auto" else ("station" if st else "era5")
-    if src == "station" and not st:
-        raise ValueError("wind_source=station but no station observations")
+    # light winds are often reported as variable (no direction): such a station gives no wind vector
+    st_wind = bool(st) and math.isfinite(st["u"]) and math.isfinite(st["v"])
+    src = wind_source if wind_source != "auto" else ("station" if st_wind else "era5")
+    if src == "station" and not st_wind:
+        raise ValueError("wind_source=station but the station reports no wind direction in the window")
     wind = [st["u"], st["v"]] if src == "station" else [e["u10"], e["v10"]]
     checks = []
     if st:
         dT = c_to_f(st["t_C"]) - era_out["t2m_F"]
         checks.append(f"station − ERA5 2 m temperature: {dT:+.1f} °F (ERA5 cells are 0.25°, partly rural/water)")
-        if st["wind_speed"] > 1.0 and era_out["wind_speed"] > 1.0:
+        if not st_wind:
+            checks.append(f"station wind variable in every report ({st['wind_speed']:.1f} m/s): ERA5 wind used")
+        elif st["wind_speed"] > 1.0 and era_out["wind_speed"] > 1.0:
             dd = abs((st["wind_from_deg"] - era_out["wind_from_deg"] + 180.0) % 360.0 - 180.0)
             checks.append(f"station vs ERA5 wind direction differ by {dd:.0f}°"
                           + (" — local flow (e.g. a sea breeze) not resolved by ERA5" if dd > 45 else ""))

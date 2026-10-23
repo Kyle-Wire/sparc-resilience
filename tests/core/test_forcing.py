@@ -155,7 +155,7 @@ def test_meteorology_helpers():
     assert [t.hour for t in jan] == [20, 21]                             # EST = UTC − 5
 
 
-def test_campaign_forcing_and_config_round_trip(tmp_path):
+def _era5_objects() -> dict:
     values = {"128_167_2t": ("VAR_2T", 303.15), "128_168_2d": ("VAR_2D", 293.15), "128_165_10u": ("VAR_10U", 3.0),
               "128_166_10v": ("VAR_10V", 4.0), "128_159_blh": ("BLH", 1200.0), "128_164_tcc": ("TCC", 0.1),
               "128_235_skt": ("SKT", 305.0)}
@@ -164,7 +164,11 @@ def test_campaign_forcing_and_config_round_trip(tmp_path):
         objs[AN.format(c=code)] = _analysis_file(var, lambda t, v=v: v)
     for code, var, w in (("128_169_ssrd", "SSRD", 700.0), ("228_129_ssrdc", "SSRDC", 760.0), ("128_175_strd", "STRD", 400.0)):
         objs[ACC.format(c=code)] = _accum_file(var, w / 1.20)                # 20Z hour → exactly w
-    fetch, fetch_range = _fake_bucket(objs)
+    return objs
+
+
+def test_campaign_forcing_and_config_round_trip(tmp_path):
+    fetch, fetch_range = _fake_bucket(_era5_objects())
     res = F.campaign_forcing(41.826, -71.403, "2020-07-18", (15, 16), "America/New_York",
                              fetch=fetch, fetch_range=fetch_range)
     e = res["era5"]
@@ -187,3 +191,20 @@ def test_campaign_forcing_and_config_round_trip(tmp_path):
     assert ph["sw_down"] == pytest.approx(700.0, abs=0.1) and ph["wind"] == [3.0, 4.0]
     assert ph["forcing_info"]["file"] == "forcing.json" and ph["forcing_info"]["date"] == "2020-07-18"
     assert math.isclose(ph["lw_net"], round(e["lw_net"], 1))
+
+
+def test_variable_station_wind_falls_back_to_era5():
+    """Albuquerque, 2021-07-09 15–16 MDT: every KABQ report gives the wind as variable (``999,9,V,0021``), so the
+    station has a speed but no direction; the forcing must take ERA5's vector, not write NaN."""
+    csv = "\n".join(["STATION,DATE,LATITUDE,LONGITUDE,NAME,REPORT_TYPE,TMP,DEW,WND"] + [
+        f'72365023050,2020-07-18T{h}:52:00,35.04,-106.62,"ALBUQUERQUE, NM US",FM-15,"+0361,5","+0072,5","999,9,V,0021,5"'
+        for h in ("19", "20")])
+    fetch, fetch_range = _fake_bucket(_era5_objects(), csv)
+    res = F.campaign_forcing(41.826, -71.403, "2020-07-18", (15, 16), "America/New_York", station="72365023050",
+                             fetch=fetch, fetch_range=fetch_range)
+    assert res["station"]["wind_speed"] == pytest.approx(2.1) and math.isnan(res["station"]["u"])
+    assert res["wind_source"] == "era5" and res["physics"]["wind"] == [3.0, 4.0]
+    assert any("variable" in c for c in res["checks"])
+    with pytest.raises(ValueError):
+        F.campaign_forcing(41.826, -71.403, "2020-07-18", (15, 16), "America/New_York", station="72365023050",
+                           wind_source="station", fetch=fetch, fetch_range=fetch_range)

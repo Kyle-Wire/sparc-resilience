@@ -39,3 +39,16 @@ def test_compare_features_and_data_join(tmp_path, synthetic_city):
     assert "open_canopy" in data.frame and np.isfinite(data.frame["open_canopy"]).all()
     cmp = FO.compare_features(pd.DataFrame({"canopy": data.frame["open_canopy"]}), data, {"canopy": "canopy"})
     assert cmp[0]["pearson_r"] > 0.8 and cmp[0]["role"] == "canopy"
+
+
+def test_gdal_env_hands_the_ca_bundle_to_gdal_3_10(monkeypatch):
+    """Behind a TLS-inspecting proxy GDAL must trust the system bundle; the GDAL 3.10 in rasterio 1.4 wheels reads
+    GDAL_CURL_CA_BUNDLE and ignores CURL_CA_BUNDLE (the steward sandbox: 'self-signed certificate in chain')."""
+    pytest.importorskip("rasterio")
+    from sparc.core.opendata import gdal_env
+
+    for v in ("CURL_CA_BUNDLE", "REQUESTS_CA_BUNDLE"):
+        monkeypatch.delenv(v, raising=False)
+    monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
+    opts = gdal_env().options
+    assert opts["GDAL_CURL_CA_BUNDLE"] == opts["CURL_CA_BUNDLE"] == "/etc/ssl/certs/ca-certificates.crt"

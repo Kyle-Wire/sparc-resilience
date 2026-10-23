@@ -43,7 +43,8 @@ def gdal_env():
     opts = {"GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR", "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.vrt",
             "GDAL_HTTP_MAX_RETRY": "4", "GDAL_HTTP_RETRY_DELAY": "2", "VSI_CACHE": "TRUE"}
     if ca:
-        opts["CURL_CA_BUNDLE"] = ca
+        # GDAL 3.10 (rasterio 1.4 wheels) reads GDAL_CURL_CA_BUNDLE; older builds read CURL_CA_BUNDLE
+        opts["CURL_CA_BUNDLE"] = opts["GDAL_CURL_CA_BUNDLE"] = ca
     return rasterio.Env(**opts)
 
 
