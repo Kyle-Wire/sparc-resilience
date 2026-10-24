@@ -68,6 +68,9 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A6 outcome: confirmed.** Burlington's evening real-route lab (36 replicates) was re-run with
+  the traverse designs only. All 314 numbers match the full lab to within 4e-16, and every verdict is the
+  same. A replicate's cost drops from about 21 s to about 3 s (Atlanta's evening routes, profiled).
 - **2026-10-24, A6 (decision 13: a cheaper lab): skip the forest-made map in campaigns whose designs do not
   use it.** The driver's real-route labs request only the traverse designs.
   - **What.** The idealised lab, which reports the map designs, is unchanged.
