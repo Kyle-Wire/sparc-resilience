@@ -100,3 +100,14 @@ def test_rows_carry_the_street_300_verdict_and_its_pool_flag(drv):
     rows = drv.run_rows("x", _estimate(), {"morning": lab})
     assert rows[0]["pooled"] is False and rows[0]["pooled_300"] is True and rows[0]["route_verdict_300"] == "trustworthy"
     assert rows[1]["pooled_300"] is False and rows[1]["route_verdict_300"] == "not run"
+
+
+def test_pool_doc_rewrites_only_its_generated_blocks():
+    spec = importlib.util.spec_from_file_location("pool_doc", REPO / "scripts" / "pool_doc.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    text = "intro\n<!-- generated:pool:start -->\nold\n<!-- generated:pool:end -->\nafter\n"
+    new = mod.replace_block(text, "pool", "| a |")
+    assert new == "intro\n<!-- generated:pool:start -->\n| a |\n<!-- generated:pool:end -->\nafter\n"
+    with pytest.raises(SystemExit):
+        mod.replace_block(text, "status", "x")
