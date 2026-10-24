@@ -163,7 +163,7 @@ next step.
   - **Phase 3:** batch driver, pool status.
   - **Tests:** `pytest tests/core/test_identify.py tests/core -m "not slow"` gave 310 passed, 9 deselected
     (10 min 48 s).
-  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, COMMIT_S3.
+  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`.
 
 - **2026-10-23 (run 1, session 2, continued):** setup script and Albuquerque.
   - **Setup:** `bc3cd34` adds `scripts/setup_core_city.py` and its tests, the forcing fallback to ERA5 on
