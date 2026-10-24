@@ -43,6 +43,26 @@ edit any line; the agent treats owner edits as instructions.
 11. **Budget:** runs are scheduled daily until the month's $100 is spent. Spend it on the highest-value next
     step; there's no need to stop early to save money.
 
+**Owner decisions (2026-10-24, third set):**
+12. **Leave-one-city-out sensitivity for every pooled result.** Report each pooled estimate (both pools, every
+    window) with each city left out in turn, next to the full estimate. Start with the evening street_100
+    pool: Burlington's idealised no-effect world comes out at −0.066 °F, the same size as the pooled effect,
+    so show whether the effect holds on Providence and Seattle alone. Keep this table current as cities are
+    added.
+13. **As many cities as possible.** Growing the pool is the top priority. That includes:
+    - every catalog city with timestamped traverses through `run_canopy_cities.py`;
+    - the roadmap's multi-tile support (mosaicking WorldCover and DEM tiles), which unlocks the 19 blocked
+      pilot cities;
+    - CAPA/Heat Watch campaigns not yet in the catalog (other years, other cities) where their OSF projects
+      are public;
+    - making the per-city lab cheaper where that does not change what it measures (decide under decision 10,
+      with a before/after check on a city already done).
+
+    Ask the owner only if a city needs a new data host.
+14. **Beyond canopy: every physical variable, then new ones.** The ROI planner compares interventions, so it
+    needs measured effects for each lever, not only trees. This is a Phase 3 track that runs alongside the
+    city work and uses the same campaigns. The roadmap section "Phase 3b" sets out the method and its rules.
+
 ## Agent decisions
 
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it

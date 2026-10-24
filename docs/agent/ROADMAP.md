@@ -90,6 +90,40 @@ Code changes:
 
 ---
 
+## Phase 3b: every lever, not only canopy (owner decision 14, 2026-10-24)
+
+The planner compares interventions: trees, cool roofs and pavements, green space, water. Each needs an effect
+measured the way canopy's is.
+
+**Variables, in this order:**
+1. The model's own roles (`physics.roles`): `impervious`, `albedo`, `ndvi`, `water_distance` (and `elevation`,
+   as a control rather than a lever).
+2. New variables from open data the sandbox can reach, or from new hosts the owner adds:
+   - building density or height;
+   - sky-view factor;
+   - road width or traffic;
+   - surface type.
+
+**Method:**
+- Extend the street-difference designs and the lab (`layers.py`, `validate.py`; `windshift.py` already lists
+  `impervious` and `near_water`) so each variable has planted worlds with a known effect and a verdict.
+- No variable's estimate is reported as an effect until its design passes the lab on the city's real routes
+  at 36 replicates, the same rule as canopy.
+
+**Rules that guard against false findings:**
+- **Joint estimation.** Land-cover variables move together (canopy against impervious, NDVI against
+  canopy). Estimate them jointly in one design (mutually adjusted), and score that joint design in the lab
+  on worlds where several variables have effects and are correlated as in the real city. A one-variable
+  estimate that ignores its correlates is not reported as an effect.
+- **The list is fixed in advance.** Write the variable list and the primary scale and window for each under
+  "Agent decisions" before running any of them on real data.
+- **Many tests.** With variables × scales × windows × cities, some intervals will exclude zero by chance.
+  Report every one that was run, primary and secondary alike, and adjust the primary set for multiplicity
+  (Holm or a false-discovery-rate method). A secondary or new-variable finding is exploratory until it
+  replicates in cities that were not used to find it.
+- **Pooling.** Each variable is pooled like canopy (same entry rule, same leave-one-city-out sensitivity).
+  The Phase 3 gate applies per variable.
+
 ## Phase 4: Into the ROI planner (scoped after Phase 3)
 
 Canopy effects in scenarios, the emulator and the S7 budget come from the pooled model instead of the map. Candidate routes: a prior on the physics shading parameter `s` (`sparc/core/physics.py`), or calibrating the scenario canopy response so the city-wide edit matches the predicted effect and floor. Pick once Phase 3 shows the size and spread of the effect; write a short plan in `docs/agent/` first.
