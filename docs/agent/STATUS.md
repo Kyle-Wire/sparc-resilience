@@ -170,7 +170,21 @@ was wrong.
 | 6 | `rasterio>=1.4.4` and `mgrs>=1.6.0` added to `requirements-core.txt` (`e767165`). |
 | 5 | Proposal P2 is written and was not built. A trial version was reverted before commit when decision 5 was read. |
 
-**Phase 3 progress**
+**Phase 3 progress (session 4, 2026-10-24, after owner decisions 7–11)**
+- **P2 is built** (`26f41f6`). The labs now score street designs at the streets campaigns drive. `lab
+  --rescore` re-scores stored replicates, which is exactly equal to a re-run (A2, checked).
+- **Pool after P2:** Providence 3/4 runs, Burlington 2/3 (afternoon, evening), Seattle 1/3 (evening),
+  Albuquerque 0/2. Before and after tables are in `docs/results/canopy_pooled.md`.
+- **First cross-city pooled estimate:** evening, 3 cities: **−0.066 °F per +10 pp within 100 m (−0.098 to
+  −0.035)**, τ = 0. Phase 3 gate: not met (it needs 4 or more cities in a window).
+- **Burlington's remaining idealised gap (decision 8):** per-cell noise is ruled out. A knots fix was found
+  but rejected on held-out Seattle (A3). The gap stays open.
+- **Next cities (decision 9):** Atlanta and Raleigh are set up; their labs are queued. Houston is set up
+  (641,785 cells: slow).
+- **Still to do for decision 7:** the idealised labs at 36 replicates under P2. Providence and Burlington
+  first, then Seattle and Albuquerque after the new cities.
+
+**Phase 3 progress (earlier)**
 - **Batch driver:** `scripts/run_canopy_cities.py` (`116569f`). It runs setup → lab → estimate → 36-replicate
   real-route labs → kmlab → estimate. It writes one status row per city and per run and never aborts.
   Tests: `tests/core/test_run_canopy_cities.py`.
