@@ -88,10 +88,20 @@ def cmd_lab(args) -> int:
         head = (f"Real routes: the {args.window} run of `{args.routes}`: {qa['n_samples']:,} cell visits on "
                 f"{qa['n_passes']} passes by {qa['n_vehicles']} vehicles over {qa['duration_min']:.0f} min, with the "
                 "run's own along-pass noise (circularly shifted within each pass).\n\n")
-    if not args.append:
-        (out / f"{name}.jsonl").unlink(missing_ok=True)
-    run_lab(cfg, generators=gens, reps=args.reps, seed=args.seed, out_dir=out, workers=args.workers, routes=routes,
-            name=name)
+    if args.rescore:
+        from sparc.core.identify.validate import prepare, rescore
+
+        layout, _, _, real = prepare(cfg)
+        rows = [json.loads(line) for line in (out / f"{name}.jsonl").read_text(encoding="utf-8").splitlines() if line]
+        if (out / f"{name}.json").is_file():
+            (out / f"{name}.json").replace(out / f"{name}_before_rescore.json")
+        rows = rescore(rows, layout, real, routes)
+        (out / f"{name}.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    else:
+        if not args.append:
+            (out / f"{name}.jsonl").unlink(missing_ok=True)
+        run_lab(cfg, generators=gens, reps=args.reps, seed=args.seed, out_dir=out, workers=args.workers,
+                routes=routes, name=name)
     rows = [json.loads(line) for line in (out / f"{name}.jsonl").read_text(encoding="utf-8").splitlines() if line]
     summ = summarize(rows)
     summ["config"] = str(args.project)
@@ -259,6 +269,9 @@ def main(argv=None) -> int:
     p.add_argument("--window", default="midday", help="with --routes: the run to replay (morning, midday, evening, "
                                                       "night or a run name; default midday)")
     p.add_argument("--timezone", default=None, help="with --routes: local time zone of tz-aware timestamps")
+    p.add_argument("--rescore", action="store_true",
+                   help="re-score the stored replicates against truths at the current street population, without "
+                        "re-simulating (the previous summary is kept as <name>_before_rescore.json)")
     p.set_defaults(func=cmd_lab)
 
     p = sub.add_parser("kmlab", help="false alarms and power of the kilometre (wind-shift) design")

@@ -637,3 +637,44 @@ def test_capa_no_data_temperatures_are_dropped():
     assert out["temp_f"].tolist() == [100.1, 100.3]
     c = parse_traverse_table(df.rename(columns={"t_f": "t_c"}).assign(t_c=[30.0, -9999.0, 31.0]))
     assert c["temp_f"].tolist() == pytest.approx([86.0, 87.8])
+
+
+def test_lab_scores_street_designs_at_the_streets_campaigns_drive(layout, monkeypatch):
+    """The street designs measure the effect where vehicles drive; the lab's truth must be computed there too
+    (a real run's cells, or the simulated street grid), not at random paved cells, which in a fragmented
+    paved network (Burlington) are a different, leafier population."""
+    from types import SimpleNamespace
+
+    seen = []
+    monkeypatch.setattr(V, "_TRUTH", {})
+    monkeypatch.setattr(V, "reach_profile", lambda gen, lay, cells, **k: (seen.append(np.asarray(cells)), {"total": 0.0})[1])
+    gen = SimpleNamespace(C0=np.zeros(layout.grid.iy.size))
+    pool = np.array([3, 5, 7, 11])
+    V.truth_for("additive", gen, layout, street_pool=pool)
+    assert set(seen[0].tolist()) == set(pool.tolist())                      # street truth: from the pool only
+    grid = V.street_population(layout)
+    assert grid.size and (layout.col("impervious")[grid] > 40.0).all()
+    assert V.street_population(layout, pd.DataFrame({"cell": [5, 5, 9]})).tolist() == [5, 9]
+    V.truth_for("additive", gen, layout, street_pool=grid)
+    assert len(V._TRUTH) == 2                                               # one truth per street population
+
+
+def test_rescoring_stored_rows_equals_a_rerun(layout, L, monkeypatch):
+    """A replicate's estimates do not depend on its truth, so re-scoring stored rows against a new street
+    population must give exactly the rows a re-run would (agent decision A2)."""
+    feats = S._product_features(layout)
+    real = {"mean": 88.0, "sd": 1.5, "residual_range_m": 400.0}
+    which = ("street_100", "street_300")
+    monkeypatch.setattr(V, "_TRUTH", {})
+    pool = V.street_population(layout)
+    old = []
+    for kind in ("null", "additive"):
+        rows = V.replicate(kind, 0, layout, L, feats, real, which=which)
+        old += [dict(r, truth=(r["truth"] or 0.0) + 1.0) for r in rows]          # stale truths
+    monkeypatch.setattr(V, "_TRUTH", {})
+    new = V.rescore(old, layout, real)
+    rerun = [r for kind in ("null", "additive") for r in V.replicate(kind, 0, layout, L, feats, real, which=which)]
+    for a, b in zip(new, rerun):
+        assert a["estimate"] == b["estimate"] and a["truth"] == pytest.approx(b["truth"], abs=1e-12)
+        assert a["truth_street_total"] == pytest.approx(b["truth_street_total"], abs=1e-12)
+    assert pool.size and any(r["truth"] != 0.0 for r in new if r["generator"] == "additive")

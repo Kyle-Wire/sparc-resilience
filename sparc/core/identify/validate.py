@@ -81,18 +81,34 @@ def _layout_key(layout) -> tuple:
     return (str(getattr(layout.cfg, "name", "")), g.shape, int(g.iy.size), float(g.x0), float(g.y0), float(g.dx))
 
 
-def truth_for(kind: str, gen, layout, n_cells: int = 80) -> dict:
-    """Reach profiles at street points (paved cells, where vehicles drive) and anywhere in the city.  The
-    canopy part of every generator is deterministic, so this is computed once per generator and layout."""
+def street_population(layout, routes=None) -> np.ndarray:
+    """The street points a campaign drives: a real run's cells (``routes``), else the cells of the simulated
+    street grid (:func:`~sparc.core.identify.campaign.route_segments`).  Where the paved network is
+    fragmented (Burlington: 2,190 route cells of 19,210 paved ones, with less canopy), random paved cells are
+    a different population, and a design would be scored against an effect it does not measure."""
+    if routes is not None:
+        return np.unique(np.asarray(routes["cell"], dtype=np.int64))
+    from sparc.core.identify.campaign import route_segments
+
+    return np.unique(np.concatenate(route_segments(layout, rng=np.random.default_rng(20201))))
+
+
+def truth_for(kind: str, gen, layout, n_cells: int = 80, street_pool: np.ndarray | None = None) -> dict:
+    """Reach profiles at street points (``n_cells`` drawn from ``street_pool``, the cells campaigns drive;
+    paved cells when not given) and anywhere in the city.  The canopy part of every generator is
+    deterministic, so this is computed once per generator, layout and street population."""
     if kind == "null":
         z = {f"within_{r}": 0.0 for r in REACHES} | {"total": 0.0}
         return {"street": dict(z), "city": dict(z)}
-    key = (kind, _layout_key(layout))
+    pool_key = None if street_pool is None else (int(street_pool.size), int(np.sum(street_pool, dtype=np.int64)))
+    key = (kind, _layout_key(layout), pool_key)
     if key not in _TRUTH:
         rng = np.random.default_rng(20201)
         paved = np.flatnonzero(layout.col("impervious") > 40.0)
         street = rng.choice(paved, min(n_cells, paved.size), replace=False)
         city = rng.choice(gen.C0.size, min(n_cells, gen.C0.size), replace=False)
+        if street_pool is not None:
+            street = np.random.default_rng(20202).choice(street_pool, min(n_cells, street_pool.size), replace=False)
         _TRUTH[key] = {"street": reach_profile(gen, layout, street), "city": reach_profile(gen, layout, city)}
     return _TRUTH[key]
 
@@ -107,7 +123,7 @@ def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, whi
     t0 = time.time()
     T, gen = plant(kind, layout, real, rng)
     camp = simulate(layout, T, rng, features, routes=routes)
-    truth = truth_for(kind, gen, layout)
+    truth = truth_for(kind, gen, layout, street_pool=street_population(layout, routes))
     rows = []
     for r in run_all(camp.samples, camp.product, L, layout.grid, which):
         est = ESTIMAND[r["estimator"]]
@@ -119,6 +135,28 @@ def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, whi
         r["seconds"] = round(time.time() - t0, 1)
         rows.append(r)
     return rows
+
+
+def rescore(rows: list[dict], layout, real, routes=None) -> list[dict]:
+    """Stored lab rows with their truths recomputed for the current street population
+    (:func:`street_population`).  A replicate's estimates do not depend on the truth (it has its own fixed
+    seed), so this gives exactly what a re-run would."""
+    out, truths = [], {}
+    pool = street_population(layout, routes)
+    for r in rows:
+        r = dict(r)
+        kind = r["generator"]
+        if kind not in truths:
+            _, gen = plant(kind, layout, real, np.random.default_rng(0))
+            truths[kind] = truth_for(kind, gen, layout, street_pool=pool)
+        truth = truths[kind]
+        est = ESTIMAND[r["estimator"]]
+        r.update(truth=None if est == "contrast" else truth[r["where"]][est], truth_total=truth["city"]["total"],
+                 truth_street_total=truth["street"]["total"])
+        if "city_estimate" in r:
+            r["truth_city"] = truth["city"][est]
+        out.append(r)
+    return out
 
 
 # --------------------------------------------------------------------------- #
