@@ -48,6 +48,24 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A3 (decision 8): a candidate fix for the rest of Burlington's idealised-lab gap, screened on
+  held-out cities before adoption.**
+  - **Evidence so far.** Burlington, 12 replicates, P2 truth. Base street_100 overstates `additive` by
+    −0.133 °F and `confounded` by −0.161 °F.
+    - Removing `validate.plant`'s per-cell noise does not help (−0.121 °F).
+    - Knots (15, 40, 70) do not help.
+    - Knots (25, 50, 75) cut the bias to −0.046 and −0.076 °F, within tolerance, and the SE from 0.138 to
+      0.082 °F.
+  - **Candidate.** Change the flexible canopy knots from (15, 40) to (25, 50, 75).
+  - **Why test before adopting.** The candidate was found on Burlington, so Burlington cannot judge it.
+  - **Screen.** The idealised street_100 verdict on Providence, Seattle and Albuquerque: all six worlds, 12
+    replicates, the same seeds, P2 truth, current knots against candidate knots. The verdict rules are
+    unchanged.
+  - **Adopt only if** no held-out city's verdict gets worse and Burlington's improves. Then every city's
+    idealised and real-route labs are re-run at 36 replicates and reported before and after.
+  - **What would show it wrong:** a held-out city's verdict worsens, or its bias grows in any world. In that
+    case the knots stay at (15, 40), and the Burlington gap is reported as open.
+
 - **2026-10-24, A2: the "after" side of decision 7 for the real-route labs is a deterministic rescoring of the
   36-replicate labs already run, checked against true re-runs.**
   - **What.** The replicate's random stream feeds the planted field, the campaign and the estimate. The
