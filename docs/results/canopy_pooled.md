@@ -3,19 +3,26 @@
 Phase 3 of `docs/agent/ROADMAP.md`. The status table comes from `scripts/run_canopy_cities.py`; its full
 output is in `output/core/pooled/` (not committed). Updated by the `sparc-steward` agent on 2026-10-24.
 
-**Pool-entry rule** (owner decision 2, 2026-10-24): a run enters the pool only if the block-scale design
-(street_100) is **Trustworthy** on that run's own real routes and noise, in a lab with 36 replicates per
-world (owner decision 3). Runs that fail are reported, not pooled.
+**What is pooled.** The pooled effect is **the effect at the streets campaigns drive**: the mean change in
+street air at the street points the vehicles sampled, when canopy rises by +10 pp within 100 m of them. It
+is not the effect at an average point of the city. The labs score every design against exactly that
+estimand since P2 (owner decision 7). Streets that vans drive are not a random sample of a city's paved
+cells. In Seattle and Burlington they are leafier, with 31–41% canopy against 8–14% at random paved cells.
+Applying the pooled number elsewhere is an extrapolation.
 
-## Status
+**Pool-entry rule** (owner decisions 2 and 3): a run enters the pool only if street_100 is **Trustworthy**
+on that run's own real routes and noise, in a lab with 36 replicates per world. Runs that fail are reported,
+not pooled.
 
-| City (campaign) | Status | Idealised lab, street_100 | All runs, +10 pp within 100 m (95% CI) | Runs pooled |
-|---|---|---|---|---|
-| Providence, RI (2020-07-29) | ok | Trustworthy | −0.027 °F (−0.073 to +0.019) | 3 of 4 |
-| Albuquerque, NM (2021-07-09) | ok | Trustworthy | −0.167 °F (−0.453 to +0.118) | 0 of 2 |
-| Burlington, VT (2020-08-10) | ok | Direction only | −0.012 °F (−0.047 to +0.022) | 0 of 3 |
-| Seattle, WA (2020-07-27) | ok | Conservative | −0.045 °F (−0.122 to +0.033) | 0 of 3 |
-| Scranton, PA (2023) | failed at setup: the traverses carry no timestamps (proposal P3) | — | — | — |
+## Status (after P2)
+
+| City (campaign) | Idealised lab, street_100 | All runs, +10 pp within 100 m (95% CI) | Runs pooled |
+|---|---|---|---|
+| Providence, RI (2020-07-29) | Trustworthy | −0.027 °F (−0.073 to +0.019) | 3 of 4 |
+| Albuquerque, NM (2021-07-09) | Trustworthy | −0.167 °F (−0.453 to +0.118) | 0 of 2 |
+| Burlington, VT (2020-08-10) | Direction only | −0.012 °F (−0.047 to +0.022) | **2 of 3** |
+| Seattle, WA (2020-07-27) | Conservative | −0.045 °F (−0.122 to +0.033) | **1 of 3** |
+| Scranton, PA (2023) | traverses carry no timestamps; skipped (owner decision 9) | — | — |
 
 | City | Run | Cell visits | Within 100 m (SE) | Real-route verdict (36 reps) | Pooled |
 |---|---|---|---|---|---|
@@ -26,78 +33,102 @@ world (owner decision 3). Runs that fail are reported, not pooled.
 | Albuquerque | morning 06–07 | 8,194 | −0.174 (0.184) | Partial | no |
 | Albuquerque | afternoon 15–16 | 13,722 | −0.151 (0.189) | Direction only | no |
 | Burlington | morning 06–07 | 4,063 | +0.005 (0.016) | Not trustworthy | no |
-| Burlington | afternoon 15–16 | 3,383 | −0.017 (0.041) | Conservative | no |
-| Burlington | evening 19–20 | 2,879 | −0.044 (0.037) | Conservative | no |
-| Seattle | morning 06–07 | 4,787 | −0.072 (0.048) | Conservative | no |
-| Seattle | afternoon 15–16 | 5,177 | −0.034 (0.061) | Conservative | no |
-| Seattle | evening 19–20 | 5,261 | −0.033 (0.053) | Conservative | no |
+| Burlington | afternoon 15–16 | 3,383 | −0.017 (0.041) | Trustworthy | yes |
+| Burlington | evening 19–20 | 2,879 | −0.044 (0.037) | Trustworthy | yes |
+| Seattle | morning 06–07 | 4,787 | −0.072 (0.048) | Partial | no |
+| Seattle | afternoon 15–16 | 5,177 | −0.034 (0.061) | Direction only | no |
+| Seattle | evening 19–20 | 5,261 | −0.033 (0.053) | Trustworthy | yes |
 
-Re-running the batch driver over all five cities only refreshes the estimates, because every lab already
-exists. The labs themselves took:
+## Verdicts before and after P2 (owner decision 7)
 
-| City | Idealised lab | Each real-route lab (36 reps) |
+**Real-route labs** (36 replicates, verdict rules unchanged).
+
+The "after" column is the stored replicates rescored against the truth at the run's own cells (agent
+decision A2). A true re-run gives the same numbers to within 9e-16 (checked on Providence's 4 labs and
+Burlington's afternoon one).
+
+| City | Run | street_100 before | street_100 after | street_300 before | street_300 after |
+|---|---|---|---|---|---|
+| Providence | morning | Trustworthy (floor not valid) | Trustworthy (floor valid) | Direction only | Direction only |
+| Providence | afternoon | Direction only | Direction only | Conservative | Direction only |
+| Providence | evening | Trustworthy | Trustworthy | Trustworthy | Trustworthy |
+| Providence | night | Trustworthy (floor valid) | Trustworthy (floor not valid) | Conservative | Conservative |
+| Albuquerque | morning | Partial | Partial | Conservative | Not trustworthy |
+| Albuquerque | afternoon | Direction only | Direction only | Not trustworthy | Not trustworthy |
+| Burlington | morning | Not trustworthy | Not trustworthy | Conservative | Trustworthy |
+| Burlington | afternoon | Conservative | **Trustworthy** | Conservative | Trustworthy |
+| Burlington | evening | Conservative | **Trustworthy** | Conservative | Trustworthy |
+| Seattle | morning | Conservative | **Partial** (misses `additive`) | Conservative | Trustworthy |
+| Seattle | afternoon | Conservative | **Direction only** (misses `additive`, `confounded`) | Trustworthy | Trustworthy |
+| Seattle | evening | Conservative | **Trustworthy** | Conservative | Trustworthy |
+
+- **Providence** is unchanged at block scale, as expected: its driven streets and its paved cells have the
+  same canopy. Floor validity flips in two runs (morning becomes valid, night invalid). The afternoon's 300 m
+  reading drops from Conservative to Direction only.
+- **Burlington and Seattle** lose the `own_only` miss that P2 was written to remove.
+  - **Burlington's** afternoon and evening runs now pass.
+  - **Seattle's** evening run passes.
+  - **Seattle's** morning and afternoon now miss `additive` (and the afternoon also `confounded`). The
+    design overstates them slightly, as it does in Seattle's idealised lab.
+- **Burlington's** morning still fails on false positives (14% with no effect).
+
+**Idealised labs.** Owner decision 7 and agent decision A1 call for 36 replicates under P2. These runs are in
+progress; the 12-replicate labs rescored under P2:
+
+| City | street_100, 12 reps before P2 | 12 reps after P2 (rescored) |
 |---|---|---|
-| Providence | 3 min | about 3 min |
-| Burlington | 4.4 min | about 6 min |
-| Albuquerque | 27 min | 21–26 min |
-| Seattle | about 12 min | 15–20 min |
+| Providence | Trustworthy | Trustworthy |
+| Albuquerque | Trustworthy | Trustworthy |
+| Burlington | Direction only | Direction only (misses `additive`, `confounded`) |
+| Seattle | Conservative | Conservative (misses `additive`, which it overstates by 14%) |
 
-## What can be pooled today
+**Burlington's idealised gap (owner decision 8).** In the idealised lab Burlington still overstates
+`additive` (bias −0.133 °F against the route-cell truth of −0.310 °F) and `confounded` (−0.161 °F).
 
-- **Only one city.** Providence's morning, evening and night runs pass. That is no basis for a cross-city
-  model, so the random-effects meta-analysis (`pool.py`) has nothing to combine yet.
-- **Albuquerque fails on precision.** Its SE is about 0.19 °F per run: the city has almost no street canopy
-  and noisy air.
-- **Burlington and Seattle fail on scoring.** Their real-route verdicts fail only through the `own_only`
-  world. In Burlington this is the opposite direction to its idealised lab. The vans drove leafier streets
-  (31–41% canopy) than the paved cells the lab's truth uses (8–14%). In Providence the two agree (19–21%
-  against 21%), and Providence passes. Both trace to the lab computing its truth at random paved
-  cells, not at the streets campaigns drive: proposal P2
-  (`docs/agent/proposals/P2_lab_truth_at_sampled_cells.md`), awaiting approval.
-  - **If P2 is approved,** the real-route labs of Burlington, Seattle and Providence are re-run under the new scoring, at
-    36 replicates and with the same verdict rules, and this table is updated whatever the result.
-- **The block-scale readings agree, pooled or not.**
-  - The day-averaged intervals exclude block-scale cooling stronger than 0.07 °F per +10 pp within 100 m in
-    Providence, 0.05 °F in Burlington and 0.12 °F in Seattle. Albuquerque's interval is too wide to say.
-  - In all three leafy cities the 300 m reading is more negative than the 100 m one, and strongest in the
-    evening.
+- **Per-cell noise is not the cause:** removing it from `validate.plant` leaves the bias at −0.121 °F.
+- **Different canopy knots, (25, 50, 75), close the gap in Burlington.** That knot set was found on
+  Burlington, so it was screened on held-out cities before adoption (agent decision A3).
+- **Seattle rejects it:** its `own_only` bias rises from +0.022 to +0.052 °F (coverage 33%), and its 300 m
+  design falls to Not trustworthy.
+- **The knots stay (15, 40). The gap is open.** Knot placement trades error between worlds, city by city.
+  A response that does not depend on knots is the next candidate.
 
 ## The pooled model (`python -m sparc.core.identify pool`)
 
-`sparc/core/identify/pool.py` is the random-effects model the roadmap asks for:
+`sparc/core/identify/pool.py`:
+- REML random effects, with DerSimonian–Laird as the start and the fallback;
+- the prediction interval for a new city, μ ± t(k−2)·√(τ² + se(μ)²);
+- leave-one-city-out scoring, which is the Phase 3 gate;
+- Stouffer's combination for the kilometre test;
+- pooling per time window.
 
-- **Fit:** REML for the between-city variance τ², with DerSimonian–Laird as the start and the fallback.
-- **Prediction interval** for a new city: μ ± t(k−2)·√(τ² + se(μ)²).
-- **Leave-one-city-out scoring** (the Phase 3 gate): each city's own estimate must fall inside the prediction
-  from the others, widened by its own sampling error.
-- **Stouffer's combination** for the kilometre test.
-- **Pooling is per time window.**
+On synthetic cities it recovers μ and τ, with leave-one-city-out coverage of 95.6% for 12 cities
+(`tests/core/test_pool.py`).
 
-On synthetic cities (true effect −0.10 °F, τ = 0.05 °F, SEs 0.02–0.08 °F) it recovers μ and τ to within
-0.01 °F with 400 cities. Leave-one-city-out coverage is 95.6% with 12 cities and 98% with 6 (nominal 95%;
-`tests/core/test_pool.py`).
+**The first cross-city pooled estimate:**
 
-On today's pool it has only Providence:
+| Window | Cities pooled | Pooled effect, +10 pp within 100 m (95% CI) | τ | Prediction interval, new city |
+|---|---|---|---|---|
+| **evening 19–20** | 3 (Providence −0.077, Burlington −0.044, Seattle −0.033) | **−0.066 °F (−0.098 to −0.035)** | 0.000 | −0.27 to +0.14 |
+| afternoon | 1 (Burlington) | −0.017 °F (−0.098 to +0.064) | — | needs 3 cities |
+| morning | 1 (Providence) | −0.029 °F (−0.093 to +0.035) | — | needs 3 cities |
+| night | 1 (Providence) | −0.016 °F (−0.044 to +0.012) | — | needs 3 cities |
 
-| Window | Cities | Pooled effect (95% CI) | Prediction interval, new city |
-|---|---|---|---|
-| morning | 1 (Providence) | −0.029 (−0.093 to +0.035) | needs 3 cities |
-| afternoon | 0 | — | — |
-| evening | 1 (Providence) | −0.077 (−0.115 to −0.039) | needs 3 cities |
-| night | 1 (Providence) | −0.016 (−0.044 to +0.012) | needs 3 cities |
+- **In the evening**, streets with 10 pp more canopy within 100 m are about 0.07 °F cooler in the three leafy
+  northern cities pooled. The three cities agree (τ estimated at 0).
+- **The prediction interval for a new city is wide** (−0.27 to +0.14 °F), because three cities leave one
+  degree of freedom.
+- **Daytime remains a null.** The only city in the afternoon pool (Burlington) is −0.02 °F (−0.10 to +0.06).
+- **The Phase 3 gate** (leave-one-city-out coverage) needs at least 4 cities in a window. It is not met.
 
 **Not built yet:**
-- the meta-regression on city covariates: canopy and impervious means, dewpoint, wind, Köppen class;
+- the meta-regression on city covariates (canopy and impervious means, dewpoint, wind, Köppen class);
 - the pooled city-wide floor.
-
-Both need several pooled cities to mean anything.
 
 ## Next
 
-- **The second dimension of Phase 3:** more cities through `run_canopy_cities.py`. Each city costs 15 min
-  (small, like Burlington) to 2 h (large, like Albuquerque) of lab time on 4 cores.
-- **Single-tile northern cities so far:**
-  - **Seattle** (`mz79p`): done, above.
-  - **Scranton** (`8cnq4`): blocked. Its 2023 traverses carry no timestamps or sensor ids (P3).
-  - **Portland** (`e7js9`): its OSF listing returned HTTP 401 (private).
-  - **Other 2022+ campaigns** may share Scranton's layout. That makes P3 matter beyond one city.
+- **More cities with timestamps** (owner decision 9):
+  - Atlanta (`r74h2`, 2021-09-04, 3 runs × 13 sensors) and Raleigh (`rwjnx`, 2021-07-23, 3 runs × 15–17
+    sensors) are set up.
+  - Houston (`yqh5u`) is set up but has a 641,785-cell grid, so its labs will take several hours.
+- **Each city's labs take** 15 min (Burlington) to 2 h (Albuquerque) on 4 cores.
