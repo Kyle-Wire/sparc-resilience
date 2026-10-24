@@ -68,6 +68,30 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A8 (decision 14, Phase 3b): the variable list and primary analyses, fixed before any real-data
+  run.**
+  - **Levers, in this order:**
+    1. **impervious**: −10 pp within 100 m and within 300 m of a street point;
+    2. **albedo**: +0.05 at the cell and within 100 m.
+
+    `water_distance` and `elevation` stay controls: they are not levers a planner can move. `ndvi` stays out
+    as a lever, because it is a mediator of canopy and impervious.
+  - **Joint design.** Each lever is read from the same street-difference fit as canopy, which already
+    differences canopy rings, impervious rings, albedo, elevation and water distance. Each estimate is
+    therefore mutually adjusted.
+  - **Lab worlds.** The planted worlds will get a second axis: impervious (and later albedo) with no effect,
+    a local effect, and a correlated confounder, each crossed with the canopy worlds. Correlations are kept
+    as in each city's real layout.
+  - **Pool entry.** A lever's reading is reported as an effect only if its design is Trustworthy on the
+    city's real routes at 36 replicates.
+  - **Primary set:** impervious street_100 and albedo street_100, each in the afternoon and evening windows,
+    pooled across cities. That is 4 tests, adjusted with Holm. Everything else run (300 m, other windows,
+    single cities) is reported as secondary and exploratory.
+  - **What would show this wrong:** a lever whose lab verdict cannot be Trustworthy on any city's routes. It
+    is then reported as not identifiable from street differences, with no fallback design.
+  - **Not built yet:** the impervious and albedo worlds and estimands. They come first in the next run's
+    Phase 3b work.
+
 - **2026-10-24, A7 outcome: P3 fails its check and is not used. The untimed cities stay out.**
   - **The check.** Providence's and Atlanta's real layers were stripped to `t_f`, `rh`, `hi_f` and positions
     and rebuilt in row order. The per-run street_100 and street_300 estimates differ from the timed ones by
