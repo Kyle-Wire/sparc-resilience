@@ -48,6 +48,26 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A4: add a second pool, for street_300 (canopy within 300 m), under the same entry rule. It is
+  applied to its own verdict and sits beside the street_100 pool, which it does not replace.**
+  - **What.** A run's street_300 reading enters the street_300 pool only if street_300 is Trustworthy on
+    that run's own real routes at 36 replicates. The rules are the same and so is every city.
+  - **Why.**
+    - In the leafy cities the block-scale design tends to give the 100–300 m ring's cooling to the 0–100 m
+      ring. The two rings' canopy moves together, and the idealised labs overstate `additive` and
+      `confounded` in Burlington, Seattle and Atlanta.
+    - street_300 sums both rings, so it is immune to that split. It is also the scale at which planting
+      programmes act.
+  - **Caution.** I saw street_300's real-route verdicts before writing this. To guard against having chosen
+    it for the answer, both pools are reported for every city, and street_100 remains the primary pool and
+    the one the Phase 3 gate is judged on.
+  - **What would show it wrong:**
+    - street_300's leave-one-city-out coverage falls clearly below nominal once 4 or more cities are pooled;
+      or
+    - its pooled effect is driven by a city whose street_300 idealised lab is Not trustworthy.
+
+    Either is reported if it happens.
+
 - **2026-10-24, A3 outcome: candidate rejected; the knots stay at (15, 40).** Screen results: 12 replicates,
   P2 truth, all six worlds.
 
