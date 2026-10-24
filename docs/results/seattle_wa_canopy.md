@@ -77,6 +77,22 @@ visited cells averages 31%.
     cooling" in 17% of `own_only` campaigns. A one-sided p of 0.06 is therefore no evidence. **Underpowered;
     not detected.**
 
+## After P2 (owner decision 7, 2026-10-24)
+
+The labs now score street designs against the truth at the streets the campaign drives. On Seattle's real
+routes (36 replicates; the stored replicates rescored, which equals a re-run):
+
+| Run | street_100 before → after | street_300 before → after |
+|---|---|---|
+| Morning | Conservative → **Partial** (misses `additive`, overstated) | Conservative → Trustworthy |
+| Afternoon | Conservative → **Direction only** (misses `additive`, `confounded`) | Trustworthy → Trustworthy |
+| Evening | Conservative → **Trustworthy** | Conservative → Trustworthy |
+
+- **The `own_only` miss is gone.** It was the scoring mismatch.
+- **Seattle's design overstates `additive`** slightly in the morning and afternoon, as it does in the
+  idealised lab (bias about −0.04 °F).
+- **Pooled:** the evening run, −0.033 °F (SE 0.053).
+
 ## Reproduce
 
 ```

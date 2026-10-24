@@ -117,6 +117,22 @@ up for approval and not built. The verdicts above stand until the owner decides.
 - **The lab's scoring needs the change P2 proposes** before a city's real-route verdict can decide pool entry
   fairly. Today a correct design can fail in a leafy city because its truth is computed on the wrong streets.
 
+## After P2 (owner decision 7, 2026-10-24)
+
+The labs now score street designs against the truth at the streets the campaign drives. On Burlington's real
+routes (36 replicates; the stored replicates rescored, which equals a re-run):
+
+| Run | street_100 before → after | street_300 before → after |
+|---|---|---|
+| Morning | Not trustworthy → Not trustworthy (14% false positives with no effect) | Conservative → Trustworthy |
+| Afternoon | Conservative → **Trustworthy** | Conservative → Trustworthy |
+| Evening | Conservative → **Trustworthy** | Conservative → Trustworthy |
+
+- **Pooled:** the afternoon and evening runs (owner decision 2).
+- **The idealised lab is still Direction only:** it overstates `additive` by −0.13 °F against the route-cell
+  truth. The knot change that closed this gap in Burlington harmed Seattle and was rejected (agent decision
+  A3). The gap stays open. See `docs/results/canopy_pooled.md`.
+
 Reproduce:
 
 ```
