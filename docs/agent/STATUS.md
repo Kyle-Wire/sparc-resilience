@@ -176,7 +176,11 @@ next step.
   - **Lab scoring:** a truth-population mismatch was diagnosed and written up as proposal P2 (not built).
   - **Phase 3:** batch driver, pool status.
   - **Tests:** `pytest tests/core/test_identify.py tests/core -m "not slow"` gave 310 passed, 9 deselected
-    (10 min 48 s).
+    (10 min 48 s). On the final tree, after Seattle and the cumulative-status fix: 311 passed, 9 deselected
+    (10 min 54 s).
+    - That run also logged 16,600 scikit-learn `delayed`/`Parallel` UserWarnings in
+      `test_models_pipeline.py`, against 33 warnings in earlier runs.
+    - They appeared after the sandbox restart. No code they touch changed this session.
   - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, `307d20f`.
   - **Later in the session:**
     - Seattle ran through the driver.
