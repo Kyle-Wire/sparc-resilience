@@ -48,6 +48,17 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A5: the Phase 3 gate is judged only in a time window with at least 8 pooled cities.** Until
+  then, leave-one-city-out coverage is reported as uninformative.
+  - **Why.** The roadmap's gate is "leave-one-city-out prediction intervals cover close to nominal". With
+    k cities, each held-out prediction uses k − 1 cities and a t distribution with k − 3 degrees of freedom.
+    - With 4 cities that is t(1). The 95% intervals are ±0.9 °F, so they cover anything. "100% of 4" is no
+      evidence.
+    - With 8 cities (t(5)) a miss rate far from 5% starts to be visible.
+  - **This tightens the gate, it does not weaken it.**
+  - **What would show it wrong:** if the owner reads the roadmap's gate as already met by any coverage
+    figure, this delays Phase 4. In that case the owner can say so here.
+
 - **2026-10-24, A4: add a second pool, for street_300 (canopy within 300 m), under the same entry rule. It is
   applied to its own verdict and sits beside the street_100 pool, which it does not replace.**
   - **What.** A run's street_300 reading enters the street_300 pool only if street_300 is Trustworthy on
