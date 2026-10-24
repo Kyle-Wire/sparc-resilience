@@ -593,17 +593,36 @@ def test_albuquerque_layout_reads_the_cut_datetime_and_numeric_sensor_ids(tmp_pa
 
 
 def test_run_winds_reports_a_variable_station_wind_instead_of_a_nan_direction(providence, monkeypatch):
-    """Albuquerque's afternoon run: KABQ reports the wind as variable in every report, so the run has no wind
-    direction; it must say so (and the kilometre design wait for --wind), not carry NaN into the rotation."""
+    """Albuquerque's afternoon run: KABQ reports the wind as variable in every report; Burlington's morning:
+    calm in every report (speed 0, which used to come out as "from 180°").  Neither has a direction: the run
+    takes ERA5's wind at the forcing site, and says so; without a site it waits for --wind."""
+    import datetime as dt
+
     from sparc.core import forcing as F
     from sparc.core.identify.traverses import run_winds
 
     cfg, _ = providence
-    monkeypatch.setattr(F, "station_obs", lambda *a, **k: {"wind_from_deg": float("nan"), "wind_speed": 2.1})
     pts = pd.DataFrame({"time": pd.to_datetime(["2020-07-29 15:00", "2020-07-29 15:30"]), "run": "2020-07-29 midday",
                         "window": "midday"})
-    w = run_winds(cfg, pts, fetch=True)
-    assert "error" in w["2020-07-29 midday"] and "variable" in w["2020-07-29 midday"]["error"]
+    calls = []
+
+    def era5(lat, lon, times, analyses, accumulations):
+        calls.append((lat, lon, times, sorted(analyses), accumulations))
+        return {"values": {"u10": 3.0, "v10": 4.0}}
+
+    for obs in ({"wind_from_deg": float("nan"), "wind_speed": 2.1, "u": float("nan"), "v": float("nan")},
+                {"wind_from_deg": 180.0, "wind_speed": 0.0, "u": 0.0, "v": 0.0, "n_reports": 2}):
+        monkeypatch.setattr(F, "station_obs", lambda *a, obs=obs, **k: obs)
+        w = run_winds(cfg, pts, fetch=True, era5=era5)["2020-07-29 midday"]
+        assert w["from_deg"] == pytest.approx(F.wind_from(3.0, 4.0)) and w["speed"] == pytest.approx(5.0)
+        assert w["source"].startswith("ERA5") and "no direction" in w["source"]
+    lat, lon, times, names, acc = calls[0]
+    assert (lat, lon) == (41.826, -71.403) and names == ["u10", "v10"] and acc == {}
+    assert times[0] == dt.datetime(2020, 7, 29, 19, tzinfo=dt.timezone.utc) and len(times) == 2
+    nosite = cfg.raw["physics"]["forcing"]
+    monkeypatch.setitem(cfg.raw["physics"], "forcing", None)
+    assert "error" in run_winds(cfg, pts, fetch=True, era5=era5)["2020-07-29 midday"]
+    monkeypatch.setitem(cfg.raw["physics"], "forcing", nosite)
     assert run_winds(cfg, pts, {"midday": (240.0, 0.5)})["2020-07-29 midday"]["from_deg"] == 240.0
 
 

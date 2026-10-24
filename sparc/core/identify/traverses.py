@@ -438,10 +438,13 @@ def campaign_csv(samples: pd.DataFrame, cfg, layout, start: str = "2020-07-29 15
 TRAVERSE_DESIGNS = ("street_100", "street_300", "reach_1000", "updown", "levels")
 
 
-def run_winds(cfg, points: pd.DataFrame, overrides: dict | None = None, cache_dir=None, fetch: bool = True) -> dict:
+def run_winds(cfg, points: pd.DataFrame, overrides: dict | None = None, cache_dir=None, fetch: bool = True,
+              era5=None) -> dict:
     """Wind of every run: ``run → {"from_deg", "speed", "source"}`` (or ``{"error"}``).  ``overrides`` maps a
     run name or a window name (morning / midday / evening / night) to ``(from_deg, speed)``; otherwise the
-    station named in the project's forcing file is read for the run's hours (NOAA Global Hourly)."""
+    station named in the project's forcing file is read for the run's hours (NOAA Global Hourly).  When the
+    station gives no direction (every report variable or calm), ERA5's 10 m wind at the forcing file's site
+    is used instead (``era5``: the reader, :func:`sparc.core.forcing.era5_site` by default)."""
     import datetime as dt
     import json as _json
 
@@ -455,6 +458,7 @@ def run_winds(cfg, points: pd.DataFrame, overrides: dict | None = None, cache_di
             forcing = _json.loads(p.read_text(encoding="utf-8"))
     station = ((forcing or {}).get("station") or {}).get("station")
     tz = (forcing or {}).get("tz")
+    site = (forcing or {}).get("site")
     out = {}
     for run, part in points.groupby("run", sort=False):
         win = str(part["window"].iloc[0])
@@ -468,19 +472,28 @@ def run_winds(cfg, points: pd.DataFrame, overrides: dict | None = None, cache_di
         try:
             from zoneinfo import ZoneInfo
 
-            from sparc.core.forcing import station_obs
+            from sparc.core import forcing as F
 
             t0, t1 = pd.Timestamp(part["time"].min()), pd.Timestamp(part["time"].max())
             if t0.tzinfo is None:
                 t0, t1 = t0.tz_localize(ZoneInfo(tz)), t1.tz_localize(ZoneInfo(tz))
-            obs = station_obs(station, t0.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc),
-                              t1.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc), cache_dir=cache_dir)
-            if not np.isfinite(obs["wind_from_deg"]):
-                out[run] = {"error": f"station {station}: wind variable in every report "
-                                     f"({obs['wind_speed']:.1f} m/s, no direction); give it with --wind"}
+            u0 = t0.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc)
+            u1 = t1.tz_convert("UTC").to_pydatetime().replace(tzinfo=dt.timezone.utc)
+            obs = F.station_obs(station, u0, u1, cache_dir=cache_dir)
+            if np.isfinite(obs["wind_from_deg"]) and np.hypot(obs["u"], obs["v"]) > 0:
+                out[run] = {"from_deg": float(obs["wind_from_deg"]), "speed": float(obs["wind_speed"]),
+                            "source": f"station {station} ({obs['n_reports']} reports)"}
                 continue
-            out[run] = {"from_deg": float(obs["wind_from_deg"]), "speed": float(obs["wind_speed"]),
-                        "source": f"station {station} ({obs['n_reports']} reports)"}
+            why = f"station {station}: wind variable or calm in every report ({obs['wind_speed']:.1f} m/s, no direction)"
+            if not site:
+                out[run] = {"error": why + "; give it with --wind"}
+                continue
+            hours = pd.date_range(pd.Timestamp(u0).floor("h"), pd.Timestamp(u1).ceil("h"), freq="h")
+            e = (era5 or F.era5_site)(float(site[0]), float(site[1]), [t.to_pydatetime() for t in hours],
+                                      analyses={"u10": F.ANALYSES["u10"], "v10": F.ANALYSES["v10"]},
+                                      accumulations={})["values"]
+            out[run] = {"from_deg": float(F.wind_from(e["u10"], e["v10"])), "speed": float(np.hypot(e["u10"], e["v10"])),
+                        "source": f"ERA5 at the forcing site ({why})"}
         except Exception as exc:  # noqa: BLE001 - a missing wind only disables the kilometre design
             out[run] = {"error": f"station {station}: {str(exc).splitlines()[0][:160]}"}
     return out
