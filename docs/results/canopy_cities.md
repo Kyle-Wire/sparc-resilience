@@ -54,3 +54,29 @@ Readings are +10 pp canopy within 100 m (street_100) or 300 m (street_300) of a 
 
 - **Summary:** no canopy effect is detected.
 - **Kilometre test:** +0.08 (−0.01 to +0.17), rotation p = 0.39. Underpowered.
+
+## Las Cruces, NM (`zd5mb`, 2020-07-10)
+
+| Item | Value |
+|---|---|
+| Campaign | 2020 "All Data" bundle; 38,807 readings, 5 sensors per run, 100% on the grid |
+| Grid | 107,525 cells; open canopy **0.6%**, impervious 51%; station KLRU |
+| Driver time | 17 min |
+| Idealised lab | street_100 and street_300 Not trustworthy (null +0.10 and +0.18 °F) |
+
+| Run | Within 100 m | Real-route verdict |
+|---|---|---|
+| Morning | −0.51 (−1.58 to +0.57) | Not trustworthy |
+| Afternoon | −0.07 (−0.96 to +0.83) | Direction only |
+| Evening | −1.13 (−1.79 to −0.47) | Not trustworthy |
+| All runs | −0.57 (−1.10 to −0.04) | |
+
+- **There is almost no canopy to compare.** Canopy averages 0.6% of the city. The design then estimates
+  "+10 pp of canopy" from a handful of cells with any trees. The readings are implausibly large and their
+  intervals are an order of magnitude wider than in leafy cities.
+- **Not pooled, and not to be read as an effect.**
+- **A misleading floor.** The estimate's report still prints a "city-wide floor" of 0.98 °F of cooling: the
+  idealised lab rates street_300 Not trustworthy, but marks its floor valid. In a city this treeless that
+  floor is not meaningful.
+- **A lesson for the batch:** an arid city with almost no canopy, like Albuquerque, tells us nothing about
+  canopy's effect at block scale. (Not used; recorded as a finding.)
