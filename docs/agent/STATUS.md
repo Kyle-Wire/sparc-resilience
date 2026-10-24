@@ -48,6 +48,23 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A3 outcome: candidate rejected; the knots stay at (15, 40).** Screen results: 12 replicates,
+  P2 truth, all six worlds.
+
+  | City | street_100, knots (15, 40) → (25, 50, 75) | street_300 |
+  |---|---|---|
+  | Burlington (development) | Direction only → **Trustworthy**; floors become valid | Not trustworthy → Conservative |
+  | Providence (held out) | Trustworthy → Trustworthy (`own_only` bias +0.024 → +0.032 °F) | Direction only → Direction only |
+  | Seattle (held out) | Conservative → Conservative, but the miss moves to `own_only`: bias +0.022 → +0.052 °F, coverage 92% → 33% | Conservative → **Not trustworthy**; floor becomes invalid |
+
+  - **Why rejected.** Seattle meets the rejection condition written in advance: its bias grows in a world,
+    and its 300 m verdict worsens.
+  - **Albuquerque's screen was stopped** once Seattle had settled the decision.
+  - **What this means.** Knot placement trades error between worlds, city by city. No fixed knots fix
+    Burlington without harming a held-out city. Burlington's remaining gap is reported as open
+    (`docs/results/canopy_pooled.md`).
+  - **Possible later work:** a canopy response that does not depend on knots, such as a monotone spline
+    chosen by cross-validation inside each campaign. It would be screened the same way.
 - **2026-10-24, A3 (decision 8): a candidate fix for the rest of Burlington's idealised-lab gap, screened on
   held-out cities before adoption.**
   - **Evidence so far.** Burlington, 12 replicates, P2 truth. Base street_100 overstates `additive` by
