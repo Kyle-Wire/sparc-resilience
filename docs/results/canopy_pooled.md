@@ -22,6 +22,7 @@ not pooled.
 | Albuquerque, NM (2021-07-09) | Trustworthy | −0.167 °F (−0.453 to +0.118) | 0 of 2 |
 | Burlington, VT (2020-08-10) | Direction only | −0.012 °F (−0.047 to +0.022) | **2 of 3** |
 | Seattle, WA (2020-07-27) | Conservative | −0.045 °F (−0.122 to +0.033) | **1 of 3** |
+| Atlanta, GA (2021-09-04) | Not trustworthy | −0.074 °F (−0.144 to −0.005) | **2 of 3** |
 | Scranton, PA (2023) | traverses carry no timestamps; skipped (owner decision 9) | — | — |
 
 | City | Run | Cell visits | Within 100 m (SE) | Real-route verdict (36 reps) | Pooled |
@@ -38,6 +39,9 @@ not pooled.
 | Seattle | morning 06–07 | 4,787 | −0.072 (0.048) | Partial | no |
 | Seattle | afternoon 15–16 | 5,177 | −0.034 (0.061) | Direction only | no |
 | Seattle | evening 19–20 | 5,261 | −0.033 (0.053) | Trustworthy | yes |
+| Atlanta | morning 06–07 | 10,067 | −0.033 (0.037) | Direction only | no |
+| Atlanta | afternoon 15–16 | 8,879 | −0.003 (0.063) | Trustworthy | yes |
+| Atlanta | evening 19–20 | 9,345 | −0.185 (0.062) | Trustworthy | yes |
 
 ## Verdicts before and after P2 (owner decision 7)
 
@@ -121,21 +125,31 @@ The 12-replicate labs rescored under P2 (same replicates, new truth):
 On synthetic cities it recovers μ and τ, with leave-one-city-out coverage of 95.6% for 12 cities
 (`tests/core/test_pool.py`).
 
-**The first cross-city pooled estimate:**
+**Pooled estimates, street_100** (`python -m sparc.core.identify pool`):
 
-| Window | Cities pooled | Pooled effect, +10 pp within 100 m (95% CI) | τ | Prediction interval, new city |
-|---|---|---|---|---|
-| **evening 19–20** | 3 (Providence −0.077, Burlington −0.044, Seattle −0.033) | **−0.066 °F (−0.098 to −0.035)** | 0.000 | −0.27 to +0.14 |
-| afternoon | 1 (Burlington) | −0.017 °F (−0.098 to +0.064) | — | needs 3 cities |
-| morning | 1 (Providence) | −0.029 °F (−0.093 to +0.035) | — | needs 3 cities |
-| night | 1 (Providence) | −0.016 °F (−0.044 to +0.012) | — | needs 3 cities |
+| Window | Cities pooled | Pooled effect, +10 pp within 100 m (95% CI) | τ | Prediction interval, new city | Leave-one-city-out |
+|---|---|---|---|---|---|
+| **evening 19–20** | 4 (Providence −0.077, Burlington −0.044, Seattle −0.033, Atlanta −0.185) | **−0.074 °F (−0.105 to −0.043)** | 0.000 (I² 33%) | **−0.141 to −0.007** | 4 of 4 covered (uninformative: t with 1 df; see A5) |
+| afternoon 15–16 | 2 (Burlington −0.017, Atlanta −0.003) | −0.013 °F (−0.081 to +0.055) | 0.000 | needs 3 cities | — |
+| morning 06–07 | 1 (Providence) | −0.029 °F (−0.093 to +0.035) | — | needs 3 cities | — |
+| night 00–01 | 1 (Providence) | −0.016 °F (−0.044 to +0.012) | — | needs 3 cities | — |
 
-- **In the evening**, streets with 10 pp more canopy within 100 m are about 0.07 °F cooler in the three leafy
-  northern cities pooled. The three cities agree (τ estimated at 0).
-- **The prediction interval for a new city is wide** (−0.27 to +0.14 °F), because three cities leave one
-  degree of freedom.
-- **Daytime remains a null.** The only city in the afternoon pool (Burlington) is −0.02 °F (−0.10 to +0.06).
-- **The Phase 3 gate** (leave-one-city-out coverage) needs at least 4 cities in a window. It is not met.
+- **The evening effect is consistent across four cities.** In the evening, a street with 10 pp more canopy
+  within 100 m is about 0.07 °F cooler. Even the prediction interval for a city not yet measured excludes
+  zero.
+- **Afternoon: still a null.** The two afternoon cities agree on about zero.
+- **The Phase 3 gate is not judged yet.** It needs at least 8 cities in a window (agent decision A5).
+
+**Pooled estimates, street_300** (agent decision A4: a second pool with the same entry rule applied to
+street_300's own verdict; street_100 stays the primary pool):
+
+| Window | Cities pooled | Pooled effect, +10 pp within 300 m (95% CI) | τ |
+|---|---|---|---|
+| evening | 3 (Providence −0.167, Burlington −0.087, Seattle −0.178) | **−0.136 °F (−0.198 to −0.075)** | 0.008 |
+| afternoon | 2 (Burlington +0.010, Seattle −0.102) | −0.028 °F (−0.131 to +0.076) | 0.047 |
+| morning | 3 (Burlington −0.007, Seattle −0.091, Atlanta −0.037) | −0.016 °F (−0.049 to +0.016) | 0.000 |
+
+At 300 m too, the evening is when canopy cools streets measurably, at about twice the 100 m effect.
 
 **Not built yet:**
 - the meta-regression on city covariates (canopy and impervious means, dewpoint, wind, Köppen class);
@@ -144,7 +158,7 @@ On synthetic cities it recovers μ and τ, with leave-one-city-out coverage of 9
 ## Next
 
 - **More cities with timestamps** (owner decision 9):
-  - Atlanta (`r74h2`, 2021-09-04, 3 runs × 13 sensors) and Raleigh (`rwjnx`, 2021-07-23, 3 runs × 15–17
-    sensors) are set up.
+  - Atlanta is done (`docs/results/atlanta_ga_canopy.md`).
+  - Raleigh (`rwjnx`, 2021-07-23, 3 runs × 15–17 sensors) is running.
   - Houston (`yqh5u`) is set up but has a 641,785-cell grid, so its labs will take several hours.
 - **Each city's labs take** 15 min (Burlington) to 2 h (Albuquerque) on 4 cores.
