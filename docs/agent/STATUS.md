@@ -83,6 +83,9 @@ was wrong.
   - **What would show it wrong:** a held-out city's verdict worsens, or its bias grows in any world. In that
     case the knots stay at (15, 40), and the Burlington gap is reported as open.
 
+- **2026-10-24, A2 outcome: confirmed.** Rescoring and a true 36-replicate re-run under P2 agree to within
+  9e-16 on every number (432 per lab), and the verdicts are identical. Checked on Providence's 4 real-route
+  labs and Burlington's afternoon one.
 - **2026-10-24, A2: the "after" side of decision 7 for the real-route labs is a deterministic rescoring of the
   36-replicate labs already run, checked against true re-runs.**
   - **What.** The replicate's random stream feeds the planted field, the campaign and the estimate. The
