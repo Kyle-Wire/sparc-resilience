@@ -19,6 +19,8 @@ Each criterion is graded on its own.
    timings, what to do next).
 8. All commits are pushed to `origin/sparc-steward`; nothing was pushed to any
    other branch.
-9. No phase was started before the previous phase's gate was recorded as met,
-   and no Phase 4 or beyond-heat work was built without owner approval in
-   STATUS.md.
+9. No phase was started before the previous phase's gate was recorded as met.
+   Every significant decision (method change, rule change, new phase or field)
+   has an entry under "Agent decisions" in `docs/agent/STATUS.md` written
+   before acting, and any change to a rule that judges results was followed by
+   re-running and reporting every affected city, before and after.

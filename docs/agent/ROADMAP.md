@@ -8,7 +8,7 @@ steer it; it is the agent's source of truth for scope and gates.
 **Vision.** An ROI planner whose numbers rest on measured effects, used by
 climate planners everywhere. Extreme heat (canopy cooling) comes first. Other
 fields come only after the heat work is proved (Phase 3 gate), and only through
-a written proposal the owner approves (see "Beyond heat" at the end).
+a written decision (see "Beyond heat" at the end).
 
 ---
 
@@ -115,5 +115,5 @@ In `scripts/train_multicity_jepa.py`: swap raster labels (`:1080-1090`, `:1957-1
 Write `docs/agent/proposals/<field>.md` for the next field (candidates in
 `docs/roadmap/SPARC_Domain_Atlas.md`, `docs/roadmap/AIR_QUALITY_PLAN.md`): what
 would be measured, which public ground-truth data exists, which identification
-test would prove the effect, and the cost. Mark it `Status: awaiting owner
-approval` in `STATUS.md` and do not build it until the owner changes that line.
+test would prove the effect, and the cost. Record the choice under "Agent decisions" in `STATUS.md`, then build
+it (owner decision 10, 2026-10-24).

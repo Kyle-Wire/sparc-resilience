@@ -12,10 +12,47 @@ edit any line; the agent treats owner edits as instructions.
 4. **Before starting Phase 3, re-run Albuquerque's real-route labs (both runs) at 36 replicates**, so both
    cities face the same test. Update `docs/results/albuquerque_nm_canopy.md` and the pool status with the
    result, whatever it is.
-5. **Proposals:** write them up and wait for approval in this file before building them. A proposal counts
-   as approved only when the owner writes so here.
+5. *(Replaced by decision 10.)* ~~Proposals wait for approval in this file before being built.~~
 6. **Sandbox install:** add `rasterio` and `mgrs` to `requirements-core.txt` (with the versions the sandbox
    used), since `setup_core_city.py` needs them.
+
+**Owner decisions (2026-10-24, second set):**
+7. **P2 approved, as written.** Re-run every city's labs under the new scoring (idealised and real-route, 36
+   replicates, unchanged verdict rules), Providence included, and report verdicts before and after in
+   `docs/results/canopy_pooled.md` whatever they are. State in the pooled docs that the pooled effect is the
+   effect at the streets campaigns drive.
+8. **Investigate the rest of Burlington's idealised-lab gap** (the part P2 does not explain; suspects: the
+   canopy knots set on Providence, the per-cell noise in `validate.plant`). Fix it if the evidence supports a
+   fix, under decision 10's rules; do not change verdict rules.
+9. **P3 not approved for now.** Skip cities without timestamps or sensor ids; prioritise cities that have
+   them (Atlanta, Raleigh, Houston, then others). You may revisit P3 under decision 10 if many cities turn
+   out to need it.
+10. **You decide; no owner approval needed.** This branch is yours, so make the wise call yourself and keep
+    going instead of waiting. That covers proposals, method changes, the order of work, Phase 4 and, once
+    the Phase 3 gate is met, fields beyond heat. The owner reviews the branch and merges. Rules that still
+    hold:
+    - **Write the decision down before acting:** a short entry under "Agent decisions" below with what,
+      why, and what result would show it was wrong. Rules that judge results (verdict rules, replicate
+      counts, pool-entry, gates) may change only this way, before the re-run, and every affected city is
+      re-run and reported before and after, whatever the outcome.
+    - **Never weaken a test, gate or verdict rule to pass a result,** and report nulls and failures as
+      findings.
+    - **Stay on `sparc-steward`;** never push to `main` or `pi-jepa-dev`, never force-push.
+    - **Ask the owner (a line under "Questions for the owner") only** for things outside the repo: money,
+      accounts, private data, publishing, or anything that can't be undone.
+11. **Budget:** runs are scheduled daily until the month's $100 is spent. Spend it on the highest-value next
+    step; there's no need to stop early to save money.
+
+## Agent decisions
+
+Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
+was wrong.
+
+- (none yet)
+
+## Questions for the owner
+
+- (none)
 
 **Current phase:** 3 (many cities and the pooled effect model). Phase 2 gate accepted by the owner on
 2026-10-24 (decisions above).
@@ -122,12 +159,8 @@ edit any line; the agent treats owner edits as instructions.
 - **Lab cost per city:** 15 min (small, like Burlington) to 2 h (like Albuquerque) on 4 cores.
 
 **Blockers:** none.
-**Proposals awaiting owner approval:**
-- **P2:** score the lab's street designs against the streets the campaign drives
-  (`docs/agent/proposals/P2_lab_truth_at_sampled_cells.md`). Not built.
-- **P3:** read traverse layers with no timestamps or sensor ids, taking row order as time at 1 Hz
-  (`docs/agent/proposals/P3_timestampless_traverses.md`). Scranton's 2023 layout needs it. Not built. The Phase 2 gate and the pool-entry
-  rule were accepted on 2026-10-24.
+**Proposals awaiting owner approval:** none. P2 approved and P3 deferred (decisions 7 and 9); from now on
+the agent decides under decision 10.
 
 **For the owner:** done 2026-10-24: the Oracle storage host is now in
 `ops/managed-agents/sparc-steward/environment.yaml`, matching the live environment. `rasterio` and `mgrs`

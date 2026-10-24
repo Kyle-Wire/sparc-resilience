@@ -5,7 +5,8 @@ README.md. This script is the runtime side:
 
     python steward.py burst --total 95 --per-run 48   # back-to-back runs until $95 is spent
     python steward.py run --budget 24                  # one run
-    python steward.py schedule                         # create the recurring deployment (left paused)
+    python steward.py schedule                         # create the recurring deployment (left paused),
+                                                       # or update it when DEPLOYMENT_ID is set
     python steward.py sweep                            # deny calls left waiting in scheduled runs
 
 Needs: `pip install anthropic`, an Anthropic credential (`ant auth login` or
@@ -28,8 +29,8 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parents[2]
 REPO_URL = "https://github.com/kyle-wire/sparc-resilience"
 BRANCH = "sparc-steward"
-SCHEDULE = {"type": "cron", "expression": "13 22 1,8,15,22 * *", "timezone": "America/New_York"}
-SCHEDULED_BUDGET_CENTS = 2400  # 4 runs a month x $24 = $96
+SCHEDULE = {"type": "cron", "expression": "13 22 * * *", "timezone": "America/New_York"}  # daily
+SCHEDULED_BUDGET_CENTS = 2400  # per run; the workspace's $100 monthly spend limit ends the month's runs
 
 DESCRIPTION = (
     "Advance the SPARC roadmap. Read docs/agent/STATUS.md, docs/agent/ROADMAP.md "
@@ -154,6 +155,16 @@ def burst(client: anthropic.Anthropic, total_cents: int, per_run_cents: int) -> 
 def schedule(client: anthropic.Anthropic) -> None:
     if not hasattr(client.beta, "deployments"):
         sys.exit("This anthropic SDK has no deployments API; `pip install -U anthropic`.")
+    existing = os.getenv("DEPLOYMENT_ID")
+    if existing:
+        deployment = client.beta.deployments.update(
+            existing,
+            schedule=SCHEDULE,
+            budget=_budget(SCHEDULED_BUDGET_CENTS),
+            initial_events=[_outcome()],
+        )
+        print(f"Updated {existing}. Next fire times: {deployment.schedule.upcoming_runs_at}")
+        return
     agent_id, env_id, store_id = _ids()
     deployment = client.beta.deployments.create(
         name="sparc-steward",

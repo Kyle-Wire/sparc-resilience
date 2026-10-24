@@ -17,9 +17,10 @@ steer it by editing `ROADMAP.md` and `STATUS.md` on that branch.
 - **Hard monthly stop:** in the Claude Console, set the workspace's monthly spend
   limit to $100. The per-run caps below are per session; the workspace limit is
   what holds the month.
-- **Schedule:** 22:13 New York time on the 1st, 8th, 15th and 22nd, $24 cap per
-  run (at most $96 a month). Edit `SCHEDULE` / `SCHEDULED_BUDGET_CENTS` in
-  `steward.py` and recreate the deployment to change it.
+- **Schedule:** daily at 22:13 New York time, $24 cap per run. The workspace's
+  $100 monthly limit is what stops the month's runs; they start again when it
+  resets. Edit `SCHEDULE` / `SCHEDULED_BUDGET_CENTS` in `steward.py`, then run
+  `python steward.py schedule` with `DEPLOYMENT_ID` set to update the deployment.
 - **A run that hits its cap pauses**; it doesn't lose anything it already pushed.
 
 ## One-time setup (run from the repo root)

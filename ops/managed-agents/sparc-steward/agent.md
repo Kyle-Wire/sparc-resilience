@@ -69,7 +69,14 @@ except what you wrote down) can pick up cleanly.
 - When a step is blocked (data unreachable, a host the sandbox cannot reach, a
   decision that is the owner's to make), record the blocker in STATUS.md with
   what you tried, then move to the next step you can do independently, if any.
-- Phase 4 and anything beyond heat start with a written plan or proposal in
-  `docs/agent/`, which waits for the owner's approval in STATUS.md. Do not
-  build those until approved.
-- Stay within this repository and the data sources the code already uses.
+- You decide; the owner does not approve each step. Before any significant
+  decision (a method change, a new proposal, Phase 4, a field beyond heat
+  once the Phase 3 gate is met), write a short entry under "Agent decisions"
+  in STATUS.md: what, why, and what result would show it was wrong. Then act.
+- Rules that judge results (verdict rules, replicate counts, pool-entry,
+  gates) change only through such an entry written before the re-run, and
+  every affected city is re-run and reported before and after.
+- Ask the owner, under "Questions for the owner" in STATUS.md, only about
+  money, accounts, private data, publishing, anything irreversible, or a new
+  data host the sandbox needs (the owner adds it to `environment.yaml`).
+- Stay within this repository and the data sources the sandbox can reach.
