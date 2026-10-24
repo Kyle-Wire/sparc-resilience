@@ -48,7 +48,25 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
-- (none yet)
+- **2026-10-24, A2: the "after" side of decision 7 for the real-route labs is a deterministic rescoring of the
+  36-replicate labs already run, checked against true re-runs.**
+  - **What.** The replicate's random stream feeds the planted field, the campaign and the estimate. The
+    truth is computed separately (its own fixed seed). So under P2 a re-run would produce exactly the same
+    estimates and standard errors; only the truth columns change. Recomputing the truths for the new street
+    population and re-summarising the stored rows therefore gives the re-run's results. It skips the
+    estimated 4 h of lab time (Albuquerque and Seattle take most of it).
+  - **Check.** Every real-route lab of Providence and one of Burlington's is also truly re-run under P2, and
+    the two results are compared value for value.
+  - **What would show it wrong:** any difference between a rescored and a re-run summary beyond floating-point
+    noise (1e-9). In that case every lab is truly re-run.
+- **2026-10-24, A1: decision 7's idealised labs are re-run at 36 replicates under P2.** "Before" stays the
+  12-replicate labs already reported. To separate the two changes, the 12-replicate labs are also rescored
+  under P2 and reported.
+  - **Why.** Decision 7 asks for 36 replicates, and 12 proved too noisy to judge in Providence's real-route
+    labs.
+  - **The verdict rules are unchanged.**
+  - **What would show it wrong:** nothing about this choice can bias a verdict towards passing. Both counts
+    are reported, and the idealised lab is not part of the pool-entry rule.
 
 ## Questions for the owner
 
