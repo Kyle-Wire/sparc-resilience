@@ -18,8 +18,9 @@ The intervals are about six times wider than Providence's. The city has almost n
 2.4% on average at the visited cells, and only 8% of those cells have any. Its street air is also noisier
 than Providence's.
 
-The lab replayed both of Albuquerque's real runs (routes and noise). With 12 replicates per world, the design
-rates **Not trustworthy** in both runs. Albuquerque's numbers are therefore reported, not used. This is a
+The lab replayed both of Albuquerque's real runs (routes and noise), with 36 replicates per world. The design
+rates **Direction only** in the afternoon and **Partial** in the morning, so it is not Trustworthy in either run.
+Under the owner's pool-entry rule, Albuquerque's numbers are reported, not pooled. This is a
 finding about what one campaign in an arid, nearly treeless city can measure, not a failure of the reader.
 
 ## The city as built
@@ -84,21 +85,26 @@ reproduces the Providence verdict on a second, very different layout: arid, grid
 
 ### The lab on the real routes
 
-`lab --routes <raw> --window <run>`, with 12 replicates per world (about 20 and 14 minutes):
+`lab --routes <raw> --window <run>`. Owner decision 4 (2026-10-24) fixed the replicate count at 36 per world
+for every city and run, so both runs were re-run at 36: 216 campaigns per run, 26 and 21 minutes on 4 cores.
+The verdict rules are unchanged.
 
-| Run | Within 100 m | Null: mean, false positives, sd / mean SE | Within 300 m |
-|---|---|---|---|
-| Afternoon | **Not trustworthy** (null +0.125 °F; misses `coarse_scale` and `confounded`, bias −0.24 °F) | +0.125, 0%, 0.17 / 0.22 | Not trustworthy |
-| Morning | **Not trustworthy** (25% false positives; misses `physics`, `coarse_scale`, `confounded`) | −0.010, 25%, 0.35 / 0.23 | Not trustworthy |
+| Run | Within 100 m, 36 replicates | Null: mean, false positives, sd / mean SE | Within 300 m | Floor (300 m) |
+|---|---|---|---|---|
+| Afternoon | **Direction only**: misses `coarse_scale` (bias −0.092 °F) and `confounded` (−0.085 °F) | +0.024, 3%, 0.23 / 0.22 | Not trustworthy | valid |
+| Morning | **Partial**: misses `coarse_scale` only (bias −0.039 °F, just past the 0.03 °F tolerance) | +0.006, 8%, 0.26 / 0.23 | Conservative | not valid (100 m and 300 m) |
 
-- **Size.** With an SE near 0.22 °F per replicate, effects of the size the worlds plant (0.15–0.26 °F) cannot
-  be told apart, and the design's means drift by more than the 0.05 °F tolerance.
-- **The morning SE is understated** (spread 0.35 against 0.23).
-- **The replicates are not independent draws of the noise.** All twelve reuse the run's own along-pass noise,
-  only shifted. Twelve replicates are therefore a weaker test than they look, and the morning's 3 of 12 false
-  positives may partly reflect that. In Providence, going from 12 to 36 replicates changed several verdicts.
-- **Conclusion:** on Albuquerque's campaign as driven, the block-scale design cannot be trusted for size or
-  sign. The pooled −0.17 °F is reported, not used.
+The earlier 12-replicate runs rated both Not trustworthy: afternoon null +0.125 °F; morning 3 of 12 false
+positives with spread 0.35 against SE 0.23. With 36 replicates the null is clean in both runs and the SEs are
+about calibrated. That earlier reading was replicate noise.
+
+- **Size.** With an SE near 0.22 °F per campaign, the design's mean misses the truth by up to 0.09 °F in the
+  kilometre-scale worlds. That is more than the 0.03 °F tolerance.
+- **The replicates are not independent draws of the noise.** They all reuse the run's own along-pass noise,
+  only shifted.
+- **Pool entry** (owner decision 2: street_100 Trustworthy on the city's real routes): **Albuquerque does not
+  enter the pool.** Its numbers are reported, not used: pooled −0.17 °F per +10 pp within 100 m (−0.45 to
+  +0.12).
 
 ### Kilometre scale
 
@@ -128,7 +134,7 @@ pip install rasterio mgrs                       # not in requirements-core.txt
 python scripts/setup_core_city.py albuquerque_nm
 python -m sparc.core.identify inspect  -p configs/core_albuquerque_nm.yml --traverses output/core/albuquerque_nm/identify/raw
 python -m sparc.core.identify lab      -p configs/core_albuquerque_nm.yml --workers 4
-python -m sparc.core.identify lab      -p configs/core_albuquerque_nm.yml --workers 4 --routes output/core/albuquerque_nm/identify/raw --window midday   # and morning
+python -m sparc.core.identify lab      -p configs/core_albuquerque_nm.yml --workers 4 --reps 36 --routes output/core/albuquerque_nm/identify/raw --window midday   # and morning
 python -m sparc.core.identify kmlab    -p configs/core_albuquerque_nm.yml --workers 4 --winds 140:1.0 244:0.5
 python -m sparc.core.identify estimate -p configs/core_albuquerque_nm.yml --traverses output/core/albuquerque_nm/identify/raw --window all --wind midday=244:0.5
 ```
