@@ -76,8 +76,10 @@ city's status table says whether its numbers can enter the pool.
   3 min for Providence's 55k cells. A full catalog batch will need `--margin-km` tightened, or 60 m cells.
 
 **Blockers:** none.
-**Proposals awaiting owner approval:** none (the Phase 2 gate and the pool-entry rule were accepted on
-2026-10-24).
+**Proposals awaiting owner approval:**
+- **P2:** score the lab's street designs against the streets the campaign drives
+  (`docs/agent/proposals/P2_lab_truth_at_sampled_cells.md`). Not built. The Phase 2 gate and the pool-entry
+  rule were accepted on 2026-10-24.
 
 **For the owner:** done 2026-10-24: the Oracle storage host is now in
 `ops/managed-agents/sparc-steward/environment.yaml`, matching the live environment. `rasterio` and `mgrs`
