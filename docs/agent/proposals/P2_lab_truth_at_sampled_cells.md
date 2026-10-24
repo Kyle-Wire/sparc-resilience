@@ -30,8 +30,13 @@ Evidence: the true effect of +10 pp within 100 m, for the same planted world, at
   - About a third of that gap is the mismatch in where the truth is computed.
   - The rest is unexplained. A second suspect is the canopy knots (15%, 40%), which were set on Providence.
 - **The real-route labs** show the mismatch in the other direction. On Burlington's real routes the design
-  "understates" `own_only` (about 61% of it). Real routes run along leafier residential streets than random
-  paved cells, so the truth there is smaller.
+  "understates" `own_only`: it recovers 63–68% of it in all three runs, at 36 replicates, and recovers the
+  other four worlds. Real routes run along leafier residential streets than random paved cells: canopy is 41%
+  at the visited cells against 14% at random paved cells. The truth there is smaller.
+
+**Consequence under the pool-entry rule.** No Burlington run can enter the pool under the current scoring,
+although its block-scale reading is the tightest of the three cities (−0.012 °F, −0.047 to +0.022). See
+`docs/results/burlington_vt_canopy.md`.
 
 ## The change
 

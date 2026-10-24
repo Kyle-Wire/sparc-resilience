@@ -69,11 +69,38 @@ edit any line; the agent treats owner edits as instructions.
 | City chosen | Albuquerque (`np4q9`). It is the first in the roadmap's list whose OSF listing shows traverses, single-tile and arid. Atlanta `r74h2`, Raleigh `rwjnx` and Houston `yqh5u` also hold traverses. |
 | Albuquerque: `inspect` → `lab` → `lab --routes` → `kmlab` → `estimate`; `docs/results/albuquerque_nm_canopy.md` | done (this commit) |
 
-**Next step:** re-run Albuquerque's real-route labs at 36 replicates (owner decision 4). Then Phase 3's first
-item, the batch driver `scripts/run_canopy_cities.py`. It should include `lab --routes` per run, so that each
-city's status table says whether its numbers can enter the pool.
-- **Cost to plan for:** Albuquerque's 439k-cell layout made each lab take about 20–27 min on 4 cores, against
-  3 min for Providence's 55k cells. A full catalog batch will need `--margin-km` tightened, or 60 m cells.
+**Owner decisions: done.**
+
+| Decision | What was done |
+|---|---|
+| 3 and 4 | Albuquerque's real-route labs re-run at 36 replicates (`fd4618f`): afternoon **Direction only**, morning **Partial**. Not pooled. |
+| 6 | `rasterio>=1.4.4` and `mgrs>=1.6.0` added to `requirements-core.txt` (`e767165`). |
+| 5 | Proposal P2 is written and was not built. A trial version was reverted before commit when decision 5 was read. |
+
+**Phase 3 progress**
+- **Batch driver:** `scripts/run_canopy_cities.py` (`116569f`). It runs setup → lab → estimate → 36-replicate
+  real-route labs → kmlab → estimate. It writes one status row per city and per run and never aborts.
+  Tests: `tests/core/test_run_canopy_cities.py`.
+- **Third city:** Burlington, VT (`tezb9`), at the owner's request for a northern, leafy city.
+  - `setup_core_city.py` built it unattended on the first try in 1 min 55 s.
+  - **Results** (`docs/results/burlington_vt_canopy.md`): a tight block-scale null, −0.012 °F per +10 pp
+    within 100 m (−0.047 to +0.022).
+  - **Idealised lab:** Direction only (it overstates).
+  - **Real-route labs** (36 reps): Conservative, Not trustworthy, Conservative (they understate `own_only`).
+  - **Pooled:** no.
+- **Pool status** (`docs/results/canopy_pooled.md`): only Providence's morning, evening and night runs pass the
+  pool-entry rule. That is too few for `pool.py`'s meta-analysis.
+- **Phase 3 gate** (leave-one-city-out coverage): not started. It needs several pooled cities.
+
+**Next step:** depends on P2.
+- **If the owner approves P2:**
+  1. Build it.
+  2. Re-run the real-route labs for Providence and Burlington, and the idealised labs, at 36 replicates with
+     unchanged verdict rules.
+  3. Update the pool status whatever the result.
+- **Either way:** add more single-tile northern cities through `run_canopy_cities.py`: Seattle `mz79p` (2020
+  "All Data" bundle) and Scranton `8cnq4` (2023). Portland `e7js9` returned HTTP 401.
+- **Lab cost per city:** 15 min (small, like Burlington) to 2 h (like Albuquerque) on 4 cores.
 
 **Blockers:** none.
 **Proposals awaiting owner approval:**
@@ -127,6 +154,16 @@ go into `requirements-core.txt` per owner decision 6.
 
 Newest first. One entry per run: date, what was done, commit(s), result,
 next step.
+
+- **2026-10-24 (session 3, after the owner's decisions):** owner decisions 3, 4, 5 and 6 carried out; Phase 3
+  started.
+  - **Burlington:** the third city, set up and analysed.
+  - **Fix:** a calm or variable station wind takes ERA5's wind for the run (`83eb106`).
+  - **Lab scoring:** a truth-population mismatch was diagnosed and written up as proposal P2 (not built).
+  - **Phase 3:** batch driver, pool status.
+  - **Tests:** `pytest tests/core/test_identify.py tests/core -m "not slow"` gave 310 passed, 9 deselected
+    (10 min 48 s).
+  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, COMMIT_S3.
 
 - **2026-10-23 (run 1, session 2, continued):** setup script and Albuquerque.
   - **Setup:** `bc3cd34` adds `scripts/setup_core_city.py` and its tests, the forcing fallback to ERA5 on

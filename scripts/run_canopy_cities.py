@@ -97,7 +97,8 @@ def status_markdown(cities: list[dict], runs: list[dict]) -> str:
                      f"{c['runs_pooled']}/{c['runs']} | {c['minutes']} |")
     lines += ["", "| city | run | visits | within 100 m (SE) | real-route verdict (reps) | pooled |", "|---|---|---|---|---|---|"]
     for r in runs:
-        lines.append(f"| {r['city']} | {r['run']} | {r['visits'] or '—'} | {f(r['street_100'])} ({f(r['street_100_se'])}) | "
+        se = "—" if r["street_100_se"] is None or r["street_100_se"] != r["street_100_se"] else f"{r['street_100_se']:.3f}"
+        lines.append(f"| {r['city']} | {r['run']} | {r['visits'] or '—'} | {f(r['street_100'])} ({se}) | "
                      f"{r['route_verdict']} ({r['route_reps']}) | {'yes' if r['pooled'] else 'no'} |")
     return "\n".join(lines) + "\n"
 
