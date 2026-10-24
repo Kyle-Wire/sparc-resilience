@@ -34,6 +34,19 @@ Evidence: the true effect of +10 pp within 100 m, for the same planted world, at
   other four worlds. Real routes run along leafier residential streets than random paved cells: canopy is 41%
   at the visited cells against 14% at random paved cells. The truth there is smaller.
 
+**The same pattern in Seattle and Burlington, but not in Providence** (canopy where the truth is computed
+against where the real vans drove, and the real-route verdict for street_100 at 36 replicates):
+
+| City | Canopy at random paved cells (truth) | Canopy at cells the real runs visited | Real-route verdict |
+|---|---|---|---|
+| Providence | 21.2% | 19–21% | Trustworthy (morning, evening, night); afternoon Direction only, through imprecision |
+| Seattle | 7.7% | 31% | Conservative: misses only `own_only`, recovering 70–73% of it |
+| Burlington | 14.2% | 41% | Conservative or Not trustworthy: misses `own_only`, recovering 63–68% of it |
+
+Where the two populations agree, the design passes. Where the vans drove leafier streets than the paved cells
+the truth is computed on, the design is scored as understating the one world whose effect depends most on a
+cell's own canopy.
+
 **Consequence under the pool-entry rule.** No Burlington run can enter the pool under the current scoring,
 although its block-scale reading is the tightest of the three cities (−0.012 °F, −0.047 to +0.022). See
 `docs/results/burlington_vt_canopy.md`.

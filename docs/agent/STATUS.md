@@ -88,8 +88,17 @@ edit any line; the agent treats owner edits as instructions.
   - **Idealised lab:** Direction only (it overstates).
   - **Real-route labs** (36 reps): Conservative, Not trustworthy, Conservative (they understate `own_only`).
   - **Pooled:** no.
+- **Fourth city:** Seattle, WA (`mz79p`), run end to end by the batch driver
+  (`docs/results/seattle_wa_canopy.md`).
+  - **Estimate:** −0.045 °F per +10 pp within 100 m (−0.122 to +0.033). Within 300 m, −0.124 (−0.231 to
+    −0.017). City-wide floor 0.03 °F.
+  - **Real-route labs:** Conservative in all three runs; the only miss is `own_only`. **Pooled:** no.
+- **Scranton, PA (`8cnq4`):** blocked. Its 2023 traverses have no timestamps or sensor ids. Proposal P3.
 - **Pool status** (`docs/results/canopy_pooled.md`): only Providence's morning, evening and night runs pass the
   pool-entry rule. That is too few for `pool.py`'s meta-analysis.
+  - **Why the leafy cities fail:** Burlington and Seattle fail only through the lab's truth-population
+    mismatch, which P2 addresses (P2 now has the Seattle evidence too).
+  - **Decision for the owner:** P2 is the decision that most changes what can be pooled.
 - **Phase 3 gate** (leave-one-city-out coverage): not started. It needs several pooled cities.
 
 **Next step:** depends on P2.
@@ -101,7 +110,7 @@ edit any line; the agent treats owner edits as instructions.
 - **Either way:** add more single-tile northern cities through `run_canopy_cities.py`.
   - **Scranton (`8cnq4`)** was tried. Its 2023 traverses carry only `t_f`, `rh`, `hi_f` and positions (no
     time, no sensor), so no runs form. It is recorded as "failed at setup", and P3 is written.
-  - **Seattle (`mz79p`, 2020 "All Data" bundle)** is running.
+  - **Seattle (`mz79p`, 2020 "All Data" bundle)** is done.
   - **Portland (`e7js9`)** returned HTTP 401.
 - **Lab cost per city:** 15 min (small, like Burlington) to 2 h (like Albuquerque) on 4 cores.
 
@@ -168,7 +177,14 @@ next step.
   - **Phase 3:** batch driver, pool status.
   - **Tests:** `pytest tests/core/test_identify.py tests/core -m "not slow"` gave 310 passed, 9 deselected
     (10 min 48 s).
-  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`.
+  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, COMMIT_S4.
+  - **Later in the session:**
+    - Seattle ran through the driver.
+    - Scranton is blocked (P3).
+    - The driver's status table is now cumulative, so running one city no longer erases the others; a test
+      covers it.
+  - **Sandbox:** the VM restarted once mid-lab, after a tool call slept about 5 min. The driver resumed: it
+    skips finished steps.
 
 - **2026-10-23 (run 1, session 2, continued):** setup script and Albuquerque.
   - **Setup:** `bc3cd34` adds `scripts/setup_core_city.py` and its tests, the forcing fallback to ERA5 on

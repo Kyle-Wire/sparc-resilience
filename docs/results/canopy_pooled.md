@@ -14,6 +14,8 @@ world (owner decision 3). Runs that fail are reported, not pooled.
 | Providence, RI (2020-07-29) | ok | Trustworthy | −0.027 °F (−0.073 to +0.019) | 3 of 4 |
 | Albuquerque, NM (2021-07-09) | ok | Trustworthy | −0.167 °F (−0.453 to +0.118) | 0 of 2 |
 | Burlington, VT (2020-08-10) | ok | Direction only | −0.012 °F (−0.047 to +0.022) | 0 of 3 |
+| Seattle, WA (2020-07-27) | ok | Conservative | −0.045 °F (−0.122 to +0.033) | 0 of 3 |
+| Scranton, PA (2023) | failed at setup: the traverses carry no timestamps (proposal P3) | — | — | — |
 
 | City | Run | Cell visits | Within 100 m (SE) | Real-route verdict (36 reps) | Pooled |
 |---|---|---|---|---|---|
@@ -26,15 +28,19 @@ world (owner decision 3). Runs that fail are reported, not pooled.
 | Burlington | morning 06–07 | 4,063 | +0.005 (0.016) | Not trustworthy | no |
 | Burlington | afternoon 15–16 | 3,383 | −0.017 (0.041) | Conservative | no |
 | Burlington | evening 19–20 | 2,879 | −0.044 (0.037) | Conservative | no |
+| Seattle | morning 06–07 | 4,787 | −0.072 (0.048) | Conservative | no |
+| Seattle | afternoon 15–16 | 5,177 | −0.034 (0.061) | Conservative | no |
+| Seattle | evening 19–20 | 5,261 | −0.033 (0.053) | Conservative | no |
 
-The batch driver over the three cities took 3.6 min, because every lab already existed. The labs themselves
-took:
+Re-running the batch driver over all five cities only refreshes the estimates, because every lab already
+exists. The labs themselves took:
 
 | City | Idealised lab | Each real-route lab (36 reps) |
 |---|---|---|
 | Providence | 3 min | about 3 min |
 | Burlington | 4.4 min | about 6 min |
 | Albuquerque | 27 min | 21–26 min |
+| Seattle | about 12 min | 15–20 min |
 
 ## What can be pooled today
 
@@ -42,21 +48,26 @@ took:
   model, so the random-effects meta-analysis (`pool.py`) has nothing to combine yet.
 - **Albuquerque fails on precision.** Its SE is about 0.19 °F per run: the city has almost no street canopy
   and noisy air.
-- **Burlington fails on scoring.** Its real-route verdicts fail only through the `own_only` world, and in
-  the opposite direction to its idealised lab. Both trace to the lab computing its truth at random paved
+- **Burlington and Seattle fail on scoring.** Their real-route verdicts fail only through the `own_only`
+  world. In Burlington this is the opposite direction to its idealised lab. The vans drove leafier streets
+  (31–41% canopy) than the paved cells the lab's truth uses (8–14%). In Providence the two agree (19–21%
+  against 21%), and Providence passes. Both trace to the lab computing its truth at random paved
   cells, not at the streets campaigns drive: proposal P2
   (`docs/agent/proposals/P2_lab_truth_at_sampled_cells.md`), awaiting approval.
-  - **If P2 is approved,** Burlington's real-route labs and Providence's are re-run under the new scoring, at
+  - **If P2 is approved,** the real-route labs of Burlington, Seattle and Providence are re-run under the new scoring, at
     36 replicates and with the same verdict rules, and this table is updated whatever the result.
-- **The block-scale readings agree, pooled or not.** Providence's and Burlington's day-averaged intervals
-  exclude block-scale cooling stronger than 0.07 and 0.05 °F per +10 pp within 100 m. Albuquerque's interval
-  is too wide to say.
+- **The block-scale readings agree, pooled or not.**
+  - The day-averaged intervals exclude block-scale cooling stronger than 0.07 °F per +10 pp within 100 m in
+    Providence, 0.05 °F in Burlington and 0.12 °F in Seattle. Albuquerque's interval is too wide to say.
+  - In all three leafy cities the 300 m reading is more negative than the 100 m one, and strongest in the
+    evening.
 
 ## Next
 
 - **The second dimension of Phase 3:** more cities through `run_canopy_cities.py`. Each city costs 15 min
   (small, like Burlington) to 2 h (large, like Albuquerque) of lab time on 4 cores.
-- **The two other single-tile northern cities whose OSF listings show traverses:**
-  - Seattle `mz79p`: a 2020 "All Data" bundle.
-  - Scranton `8cnq4`: 2023 traverses.
-- **Portland `e7js9`:** its OSF listing returned HTTP 401 (private).
+- **Single-tile northern cities so far:**
+  - **Seattle** (`mz79p`): done, above.
+  - **Scranton** (`8cnq4`): blocked. Its 2023 traverses carry no timestamps or sensor ids (P3).
+  - **Portland** (`e7js9`): its OSF listing returned HTTP 401 (private).
+  - **Other 2022+ campaigns** may share Scranton's layout. That makes P3 matter beyond one city.

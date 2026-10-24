@@ -73,3 +73,22 @@ def test_a_failing_city_is_recorded_and_the_batch_goes_on(drv, monkeypatch, tmp_
     assert "boom" in st["error"].iloc[0]
     runs = pd.read_csv(tmp_path / "output" / "core" / "pooled" / "run_status.csv")
     assert runs["pooled"].tolist() == [True, False, False]
+
+
+def test_the_status_table_is_cumulative_across_batches(drv, monkeypatch, tmp_path):
+    """Running one city must not erase the others' rows (Seattle's batch overwrote three cities' status)."""
+    def run_city(slug, args):
+        rows = drv.run_rows(slug, _estimate(), {"morning": _lab("trustworthy")})
+        return drv.city_row(slug, {}, _lab("trustworthy"), _estimate(), rows), rows
+
+    monkeypatch.setattr(drv, "run_city", run_city)
+    monkeypatch.setattr(drv, "REPO", tmp_path)
+    drv.main(["providence_ri", "burlington_vt"])
+    drv.main(["seattle_wa", "burlington_vt"])
+    import pandas as pd
+
+    st = pd.read_csv(tmp_path / "output" / "core" / "pooled" / "city_status.csv")
+    assert st["city"].tolist() == ["providence_ri", "seattle_wa", "burlington_vt"]
+    runs = pd.read_csv(tmp_path / "output" / "core" / "pooled" / "run_status.csv")
+    assert runs.groupby("city").size().to_dict() == {"burlington_vt": 3, "providence_ri": 3, "seattle_wa": 3}
+    assert "| providence_ri |" in (tmp_path / "output" / "core" / "pooled" / "city_status.md").read_text()

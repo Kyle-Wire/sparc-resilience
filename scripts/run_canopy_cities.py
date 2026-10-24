@@ -103,6 +103,19 @@ def status_markdown(cities: list[dict], runs: list[dict]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def previous_status(pooled: Path, replacing: list[str]) -> tuple[list[dict], list[dict]]:
+    """Rows already in ``city_status.csv`` / ``run_status.csv`` for cities not in this batch."""
+    out = []
+    for name in ("city_status.csv", "run_status.csv"):
+        p = pooled / name
+        rows = []
+        if p.is_file() and p.stat().st_size:
+            df = pd.read_csv(p)
+            rows = df[~df["city"].isin(replacing)].astype(object).where(df.notna(), None).to_dict("records")
+        out.append(rows)
+    return out[0], out[1]
+
+
 # --------------------------------------------------------------------------- #
 # Running                                                                      #
 # --------------------------------------------------------------------------- #
@@ -211,7 +224,7 @@ def main(argv=None) -> int:
         ap.error("name cities or pass --all")
     pooled = REPO / "output" / "core" / "pooled"
     pooled.mkdir(parents=True, exist_ok=True)
-    cities, runs = [], []
+    cities, runs = previous_status(pooled, slugs)          # the table is cumulative: other cities' rows are kept
     for slug in slugs:
         try:
             c, rr = run_city(slug, args)
