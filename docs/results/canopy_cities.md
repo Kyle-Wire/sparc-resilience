@@ -35,3 +35,22 @@ Readings are +10 pp canopy within 100 m (street_100) or 300 m (street_300) of a 
 
 - **Summary:** no canopy effect is detected at any scale or time.
 - **Kilometre test:** −0.05 (−0.15 to +0.06), rotation p = 0.44. Underpowered.
+
+## Richmond, VA (`3xvmg`, 2021-07-15)
+
+| Item | Value |
+|---|---|
+| Campaign | the same day as Arlington; 86,455 readings, 11–12 sensors per run, 93–95% on the grid |
+| Grid | 274,648 cells; open canopy 55%, impervious 29%; station KRIC |
+| Driver time | 44 min |
+| Idealised lab | street_100 Direction only (misses `additive`, `physics`, `confounded`); street_300 Conservative |
+
+| Run | Within 100 m | Real-route verdict | Within 300 m | Real-route verdict |
+|---|---|---|---|---|
+| Morning | +0.016 (−0.028 to +0.059) | Direction only | −0.012 (−0.059 to +0.035) | **Trustworthy (pooled, 300 m)** |
+| Afternoon | +0.007 (−0.103 to +0.117) | Not trustworthy (14% false positives) | −0.023 (−0.145 to +0.099) | Not trustworthy |
+| Evening | −0.019 (−0.117 to +0.079) | **Trustworthy (pooled)** | −0.065 (−0.167 to +0.038) | Conservative |
+| All runs | +0.002 (−0.057 to +0.061) | | −0.030 (−0.093 to +0.033) | |
+
+- **Summary:** no canopy effect is detected.
+- **Kilometre test:** +0.08 (−0.01 to +0.17), rotation p = 0.39. Underpowered.
