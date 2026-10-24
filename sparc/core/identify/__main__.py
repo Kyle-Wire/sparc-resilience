@@ -6,6 +6,7 @@
   estimate  run the designs on a real campaign's traverse points (CSV / GeoJSON / shapefile / zip / folder)
   map       what the map itself says under each design (for comparison; the lab shows why not to trust it)
   simulate  write a simulated campaign as a CAPA-style CSV (to try ``estimate`` end to end)
+  pool      random-effects pooling of the cities' block-scale effects (from scripts/run_canopy_cities.py)
 """
 
 from __future__ import annotations
@@ -209,6 +210,23 @@ def cmd_simulate(args) -> int:
     return 0
 
 
+def cmd_pool(args) -> int:
+    import pandas as pd
+
+    from sparc.core.identify.pool import pool_markdown, pool_runs
+
+    status = Path(args.status)
+    rows = pd.read_csv(status).astype(object).where(lambda d: d.notna(), None).to_dict("records")
+    res = pool_runs(rows)
+    out = Path(args.out) if args.out else status.parent
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "pool.json").write_text(json.dumps(res, indent=2), encoding="utf-8")
+    md = pool_markdown(res)
+    (out / "pool.md").write_text(md, encoding="utf-8")
+    print(md)
+    return 0
+
+
 def main(argv=None) -> int:
     from sparc.core.identify.validate import GENERATORS
 
@@ -280,6 +298,12 @@ def main(argv=None) -> int:
     p.add_argument("--world", default="additive", choices=GENERATORS)
     p.add_argument("--seed", type=int, default=0)
     p.set_defaults(func=cmd_simulate)
+
+    p = sub.add_parser("pool", help="random-effects pooling of the cities' block-scale effects (Phase 3)")
+    p.add_argument("--status", default="output/core/pooled/run_status.csv",
+                   help="run_status.csv from scripts/run_canopy_cities.py")
+    p.add_argument("--out", default=None, help="folder for pool.json / pool.md (default: next to --status)")
+    p.set_defaults(func=cmd_pool)
 
     args = ap.parse_args(argv)
     if args.cmd == "simulate" and not args.out:

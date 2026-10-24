@@ -99,7 +99,14 @@ edit any line; the agent treats owner edits as instructions.
   - **Why the leafy cities fail:** Burlington and Seattle fail only through the lab's truth-population
     mismatch, which P2 addresses (P2 now has the Seattle evidence too).
   - **Decision for the owner:** P2 is the decision that most changes what can be pooled.
-- **Phase 3 gate** (leave-one-city-out coverage): not started. It needs several pooled cities.
+- **`pool.py`:** `sparc/core/identify/pool.py` plus the `python -m sparc.core.identify pool` subcommand.
+  - **What it does:** REML random effects (DerSimonian–Laird fallback), the prediction interval for a new
+    city, leave-one-city-out scoring and Stouffer's combination, per time window.
+  - **Synthetic tests:** it recovers μ and τ, and LOCO coverage is 95.6% with 12 cities.
+  - **On real data:** today it pools only Providence's runs.
+  - **Not built:** the meta-regression and the pooled floor.
+- **Phase 3 gate** (leave-one-city-out coverage near nominal): not met. It needs at least 4 pooled cities per
+  window; there is 1.
 
 **Next step:** depends on P2.
 - **If the owner approves P2:**
@@ -181,7 +188,8 @@ next step.
     - That run also logged 16,600 scikit-learn `delayed`/`Parallel` UserWarnings in
       `test_models_pipeline.py`, against 33 warnings in earlier runs.
     - They appeared after the sandbox restart. No code they touch changed this session.
-  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, `307d20f`.
+    - They did not recur. With `pool.py` added: 318 passed, 9 deselected, 33 warnings (10 min 15 s).
+  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, `307d20f`, COMMIT_POOL.
   - **Later in the session:**
     - Seattle ran through the driver.
     - Scranton is blocked (P3).

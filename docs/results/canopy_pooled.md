@@ -62,6 +62,36 @@ exists. The labs themselves took:
   - In all three leafy cities the 300 m reading is more negative than the 100 m one, and strongest in the
     evening.
 
+## The pooled model (`python -m sparc.core.identify pool`)
+
+`sparc/core/identify/pool.py` is the random-effects model the roadmap asks for:
+
+- **Fit:** REML for the between-city variance τ², with DerSimonian–Laird as the start and the fallback.
+- **Prediction interval** for a new city: μ ± t(k−2)·√(τ² + se(μ)²).
+- **Leave-one-city-out scoring** (the Phase 3 gate): each city's own estimate must fall inside the prediction
+  from the others, widened by its own sampling error.
+- **Stouffer's combination** for the kilometre test.
+- **Pooling is per time window.**
+
+On synthetic cities (true effect −0.10 °F, τ = 0.05 °F, SEs 0.02–0.08 °F) it recovers μ and τ to within
+0.01 °F with 400 cities. Leave-one-city-out coverage is 95.6% with 12 cities and 98% with 6 (nominal 95%;
+`tests/core/test_pool.py`).
+
+On today's pool it has only Providence:
+
+| Window | Cities | Pooled effect (95% CI) | Prediction interval, new city |
+|---|---|---|---|
+| morning | 1 (Providence) | −0.029 (−0.093 to +0.035) | needs 3 cities |
+| afternoon | 0 | — | — |
+| evening | 1 (Providence) | −0.077 (−0.115 to −0.039) | needs 3 cities |
+| night | 1 (Providence) | −0.016 (−0.044 to +0.012) | needs 3 cities |
+
+**Not built yet:**
+- the meta-regression on city covariates: canopy and impervious means, dewpoint, wind, Köppen class;
+- the pooled city-wide floor.
+
+Both need several pooled cities to mean anything.
+
 ## Next
 
 - **The second dimension of Phase 3:** more cities through `run_canopy_cities.py`. Each city costs 15 min
