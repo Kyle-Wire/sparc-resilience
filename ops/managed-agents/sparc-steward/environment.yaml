@@ -11,6 +11,7 @@ config:
       - api.osf.io
       - files.osf.io
       - storage.googleapis.com
+      - idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com   # OSF per-file downloads redirect here
       - heat.gov
       # Weather and campaign forcing (sparc/core/forcing.py, station lookups)
       - mesonet.agron.iastate.edu

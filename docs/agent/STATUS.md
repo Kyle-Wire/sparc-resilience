@@ -3,9 +3,22 @@
 Updated by the `sparc-steward` agent at the end of every run. The owner can
 edit any line; the agent treats owner edits as instructions.
 
-**Current phase:** 2 (a second city). The gate's three conditions are met (evidence below). It is recorded as
-**met, pending the owner's read of one caveat**: on Albuquerque's real routes the lab does not trust the
-block-scale design (see "Phase 2 gate").
+**Owner decisions (2026-10-24):**
+1. **Phase 2 gate accepted** with the Albuquerque caveat. Phase 3 may start.
+2. **Pool-entry rule accepted:** a city enters the Phase 3 pool only if street_100 is Trustworthy on its own
+   real routes (`lab --routes`). Cities that fail are reported, not pooled.
+3. **Real-route labs always use 36 replicates per world.** This is fixed in advance for every city and run; do
+   not change the replicate count or the verdict rules after seeing a result.
+4. **Before starting Phase 3, re-run Albuquerque's real-route labs (both runs) at 36 replicates**, so both
+   cities face the same test. Update `docs/results/albuquerque_nm_canopy.md` and the pool status with the
+   result, whatever it is.
+5. **Proposals:** write them up and wait for approval in this file before building them. A proposal counts
+   as approved only when the owner writes so here.
+6. **Sandbox install:** add `rasterio` and `mgrs` to `requirements-core.txt` (with the versions the sandbox
+   used), since `setup_core_city.py` needs them.
+
+**Current phase:** 3 (many cities and the pooled effect model). Phase 2 gate accepted by the owner on
+2026-10-24 (decisions above).
 **Phase gate (Phase 1):** **met** on 2026-10-23.
 - **Reader:** it handles the real files with no reader change: 4 shapefiles read, 24 rasters skipped with
   reasons, 62,084 readings, 4 runs × 6 sensors on the local clock.
@@ -56,23 +69,19 @@ block-scale design (see "Phase 2 gate").
 | City chosen | Albuquerque (`np4q9`). It is the first in the roadmap's list whose OSF listing shows traverses, single-tile and arid. Atlanta `r74h2`, Raleigh `rwjnx` and Houston `yqh5u` also hold traverses. |
 | Albuquerque: `inspect` → `lab` → `lab --routes` → `kmlab` → `estimate`; `docs/results/albuquerque_nm_canopy.md` | done (this commit) |
 
-**Next step:** Phase 3 can start once the owner accepts the Phase 2 gate with the caveat above. Its first item
-is the batch driver `scripts/run_canopy_cities.py`. It should include `lab --routes` per run, so that each
+**Next step:** re-run Albuquerque's real-route labs at 36 replicates (owner decision 4). Then Phase 3's first
+item, the batch driver `scripts/run_canopy_cities.py`. It should include `lab --routes` per run, so that each
 city's status table says whether its numbers can enter the pool.
 - **Cost to plan for:** Albuquerque's 439k-cell layout made each lab take about 20–27 min on 4 cores, against
   3 min for Providence's 55k cells. A full catalog batch will need `--margin-km` tightened, or 60 m cells.
 
 **Blockers:** none.
-**Proposals awaiting owner approval:**
-- accept the Phase 2 gate with the Albuquerque caveat;
-- optionally, the pool-entry condition above.
+**Proposals awaiting owner approval:** none (the Phase 2 gate and the pool-entry rule were accepted on
+2026-10-24).
 
-**For the owner:** per-file OSF downloads work in the sandbox since your environment change. But
-`ops/managed-agents/sparc-steward/environment.yaml` in the repo still lists only `osf.io`, `api.osf.io`,
-`files.osf.io`. If you added the Oracle storage host
-(`idvyorynw6xy.compat.objectstorage.us-ashburn-1.oraclecloud.com`) outside the repo, add it to the file too.
-Also add `rasterio` and `mgrs` to the sandbox install: `setup_core_city.py` needs them and
-`requirements-core.txt` does not list them.
+**For the owner:** done 2026-10-24: the Oracle storage host is now in
+`ops/managed-agents/sparc-steward/environment.yaml`, matching the live environment. `rasterio` and `mgrs`
+go into `requirements-core.txt` per owner decision 6.
 
 ## Findings the roadmap should know about
 
