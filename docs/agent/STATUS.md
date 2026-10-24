@@ -68,6 +68,35 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A7 (decision 9 allows revisiting P3): build P3, reading untimed traverse layers in row order,
+  but use it only after it passes a check on cities whose layers do carry time.**
+  - **Why now.** A survey of every pilot city's OSF files found 19 of 43 untimed: 2022–2023 layers with only
+    `t_f`/`temp_f`, `rh`, `hi_f` and positions (Philadelphia, Chicago, Milwaukee, Brooklyn, Charlotte,
+    Jacksonville, Columbia SC, Oklahoma City, Boulder, Las Vegas, Brockton, Scranton, Kansas City KS, Omaha,
+    Columbia MO, Iowa City, Cedar Rapids, San Francisco). Boston 2019 has a `time_n` field, HHMMSS in UTC
+    with no date. Growing the pool is the top priority (decision 13).
+  - **Evidence for the assumption.** In every timed layer checked (Providence 2020, Burlington 2020, Atlanta
+    2021, Raleigh 2021), rows come in one contiguous block per sensor, in time order, mostly at 1 s steps
+    (median step 1 s; 88–91% exactly 1 s, except Burlington's duplicated timestamps). The untimed layers look
+    like the same export with the time and sensor columns dropped. Consecutive rows are about 12 m apart
+    (Scranton).
+  - **Method.**
+    - A file with no usable time gets time = row index at 1 s, its run from the file's window
+      (`am`/`af`/`pm`), and one vehicle per file.
+    - Passes break at jumps over 200 m. Sensor blocks begin elsewhere in the city, so a new sensor starts a
+      new pass.
+    - The run is flagged "time from row order".
+    - No station wind is fetched, because the date is unknown.
+  - **Check, before any untimed city is run.**
+    - Strip the time and sensor columns from Providence's and Atlanta's real layers.
+    - Rebuild them with P3 and run `estimate` on both versions.
+    - P3 is adopted only if every run's street_100 and street_300 estimates agree with the timed ones to
+      within 0.25 of their SE.
+    - It is also adopted only if one run's real-route lab (36 replicates) gives the same street_100 verdict
+      both ways.
+  - **What would show it wrong:** a larger disagreement on either city. P3 is then not used, and the
+    untimed cities stay out.
+
 - **2026-10-24, A6 outcome: confirmed.** Burlington's evening real-route lab (36 replicates) was re-run with
   the traverse designs only. All 314 numbers match the full lab to within 4e-16, and every verdict is the
   same. A replicate's cost drops from about 21 s to about 3 s (Atlanta's evening routes, profiled).
