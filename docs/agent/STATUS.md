@@ -68,6 +68,23 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A7 outcome: P3 fails its check and is not used. The untimed cities stay out.**
+  - **The check.** Providence's and Atlanta's real layers were stripped to `t_f`, `rh`, `hi_f` and positions
+    and rebuilt in row order. The per-run street_100 and street_300 estimates differ from the timed ones by
+    −1.52 to +0.69 SE. The criterion set in advance was 0.25 SE.
+
+    | Run | street_100 difference (in SE) | street_300 difference (in SE) |
+    |---|---|---|
+    | Providence afternoon | −1.01 | −1.52 |
+    | Atlanta afternoon | +0.69 | +0.62 |
+    | the four other runs | −0.45 to +0.36 | −0.50 to +0.09 |
+  - **Why it fails.** The rows lose the time gaps that split passes. Providence's runs fall from 19–29
+    passes to 3–4, Atlanta's from 85–142 to 27–45. Most gaps over 30 s show no position jump (only 4% of
+    Providence's and 27% of Atlanta's do), so row order cannot recover them.
+  - **What was kept.** The reader change was reverted before commit. The 19 untimed cities, Boston's 2019
+    `time_n` layer among them, remain out of the pool.
+  - **What could revive it:** the timestamps themselves. CAPA's raw per-sensor CSVs, if published elsewhere,
+    or a request to CAPA. That is a question for the owner (see below).
 - **2026-10-24, A7 (decision 9 allows revisiting P3): build P3, reading untimed traverse layers in row order,
   but use it only after it passes a check on cities whose layers do carry time.**
   - **Why now.** A survey of every pilot city's OSF files found 19 of 43 untimed: 2022–2023 layers with only
@@ -202,7 +219,10 @@ was wrong.
 
 ## Questions for the owner
 
-- (none)
+- **Untimed Heat Watch layers (2022–2023).** 19 pilot cities publish traverses without timestamps or sensor
+  ids. Agent decision A7 shows they cannot be rebuilt reliably from row order. If CAPA (or NOAA's NIHHIS
+  program) could share the per-sensor raw CSVs with timestamps, these cities could enter the pool. Asking
+  them is outside the repo, so it is your call.
 
 **Current phase:** 3 (many cities and the pooled effect model). Phase 2 gate accepted by the owner on
 2026-10-24 (decisions above).
