@@ -89,3 +89,16 @@ def test_street_300_has_its_own_pool_entry_flag():
     r3 = P.pool_runs(rows, "street_300")
     assert r3["windows"]["evening"]["cities"] == ["b"] and r3["windows"]["evening"]["fit"]["mu"] == pytest.approx(-0.12)
     assert P.pool_markdown(r3).startswith("# Pooled canopy effect (+10 pp within 300 m")
+
+
+def test_leave_one_out_sensitivity_and_exclusions():
+    """Owner decision 12: every pooled result with each city left out in turn, and pooled without named cities."""
+    rows = [{"city": c, "window": "evening", "pooled": True, "street_100": e, "street_100_se": 0.03}
+            for c, e in (("a", -0.08), ("b", -0.05), ("c", -0.02))]
+    res = P.pool_runs(rows)
+    lo = res["windows"]["evening"]["leave_one_out"]
+    assert [r["left_out"] for r in lo] == ["a", "b", "c"] and all(r["k"] == 2 for r in lo)
+    assert lo[0]["mu"] == pytest.approx(-0.035) and lo[2]["mu"] == pytest.approx(-0.065)
+    assert "## Each city left out in turn" in P.pool_markdown(res)
+    ex = P.pool_runs(rows, exclude=("a", "c"))
+    assert ex["windows"]["evening"]["cities"] == ["b"] and "Excluded from every window: a, c." in P.pool_markdown(ex)

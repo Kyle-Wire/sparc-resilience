@@ -678,3 +678,16 @@ def test_rescoring_stored_rows_equals_a_rerun(layout, L, monkeypatch):
         assert a["estimate"] == b["estimate"] and a["truth"] == pytest.approx(b["truth"], abs=1e-12)
         assert a["truth_street_total"] == pytest.approx(b["truth_street_total"], abs=1e-12)
     assert pool.size and any(r["truth"] != 0.0 for r in new if r["generator"] == "additive")
+
+
+def test_skipping_the_map_leaves_traverse_designs_unchanged(layout, L):
+    """Agent decision A6: without map designs the forest-made map is not drawn, and every traverse design's
+    replicate is exactly what the full lab produces."""
+    feats = S._product_features(layout)
+    real = {"mean": 88.0, "sd": 1.5, "residual_range_m": 400.0}
+    full = V.replicate("additive", 0, layout, L, feats, real)
+    fast = V.replicate("additive", 0, layout, L, feats, real, which=("street_100", "street_300", "updown"))
+    by = {r["estimator"]: r for r in full}
+    assert {r["estimator"] for r in fast} == {"street_100", "street_300", "updown"}
+    for r in fast:
+        assert r["estimate"] == by[r["estimator"]]["estimate"] and r["se"] == by[r["estimator"]]["se"]

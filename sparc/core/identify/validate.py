@@ -122,7 +122,8 @@ def replicate(kind: str, rep: int, layout, L, features, real, seed: int = 0, whi
     rng = np.random.default_rng([seed, rep, GENERATORS.index(kind) if kind in GENERATORS else 99])
     t0 = time.time()
     T, gen = plant(kind, layout, real, rng)
-    camp = simulate(layout, T, rng, features, routes=routes)
+    # the forest-made map is drawn after the samples, so skipping it leaves every traverse design unchanged
+    camp = simulate(layout, T, rng, features, routes=routes, product=bool({"map_footprint", "map_street_300"} & set(which)))
     truth = truth_for(kind, gen, layout, street_pool=street_population(layout, routes))
     rows = []
     for r in run_all(camp.samples, camp.product, L, layout.grid, which):

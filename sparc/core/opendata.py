@@ -73,6 +73,33 @@ def read_window(url: str, bounds: tuple[float, float, float, float]):
         return arr, src.window_transform(w), src.nodata
 
 
+def read_mosaic(urls: list[str], bounds: tuple[float, float, float, float]):
+    """(array, affine transform, nodata) of a lon/lat window that spans several tiles of one product
+    (WorldCover's 3° tiles, the Copernicus DEM's 1° tiles), mosaicked on the tiles' common pixel grid.  One
+    tile is read exactly as :func:`read_window` reads it.  Tiles that do not exist (open sea) are skipped."""
+    if len(urls) == 1:
+        return read_window(urls[0], bounds)
+    import rasterio
+    from rasterio.merge import merge
+
+    with gdal_env():
+        srcs = []
+        for u in urls:
+            try:
+                srcs.append(rasterio.open("/vsicurl/" + u if u.startswith("http") else u))
+            except rasterio.errors.RasterioIOError as exc:
+                log.warning("tile %s unavailable (%s): skipped", u.rsplit("/", 1)[-1], exc)
+        if not srcs:
+            raise FileNotFoundError(f"none of the tiles {urls} could be opened")
+        try:
+            nodata = srcs[0].nodata
+            arr, tr = merge(srcs, bounds=bounds, nodata=nodata if nodata is not None else 0)
+        finally:
+            for src in srcs:
+                src.close()
+    return arr[0], tr, nodata
+
+
 def raster_to_points(arr: np.ndarray, transform, data, cfg, mode: str = "sum", classes: dict | None = None,
                      sub: int = 3, nodata=None, src_crs: str = "EPSG:4326") -> dict[str, np.ndarray]:
     """Aggregate a raster (in ``src_crs``) onto the study grid and sample at the points.
@@ -150,11 +177,9 @@ def fetch_layers(data, cfg, hrsl=HRSL_LAYERS, worldcover: bool = True) -> pd.Dat
         log.info("layers: %s total %.0f", name, out[name].sum())
     if worldcover:
         tiles = worldcover_tiles(b)
-        if len(tiles) != 1:
-            raise NotImplementedError(f"study area spans several WorldCover tiles {tiles}")
         progress.check_cancel()
-        with progress.task("remote_object", key=f"worldcover:{tiles[0]}", unit="remote_object"):
-            arr, tr, nod = read_window(WORLDCOVER.format(tile=tiles[0]), b)
+        with progress.task("remote_object", key=f"worldcover:{'+'.join(tiles)}", unit="remote_object"):
+            arr, tr, nod = read_mosaic([WORLDCOVER.format(tile=t) for t in tiles], b)
         fr = raster_to_points(arr, tr, data, cfg, mode="fractions", classes=WC_CLASSES, sub=1, nodata=0)
         for k, v in fr.items():
             out[f"lc_{k}"] = v

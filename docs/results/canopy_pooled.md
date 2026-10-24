@@ -140,6 +140,32 @@ On synthetic cities it recovers μ and τ, with leave-one-city-out coverage of 9
 - **Afternoon: still a null.** The two afternoon cities agree on about zero.
 - **The Phase 3 gate is not judged yet.** It needs at least 8 cities in a window (agent decision A5).
 
+**Sensitivity: each city left out in turn** (owner decision 12; `pool.md` and `pool_street_300.md` in
+`output/core/pooled/` carry the full tables for every window):
+
+| Evening, street_100 | Cities | Pooled effect (95% CI) |
+|---|---|---|
+| all four | 4 | −0.074 (−0.105 to −0.043) |
+| without Providence | 3 | −0.078 (−0.162 to +0.006) |
+| without Burlington | 3 | −0.085 (−0.138 to −0.032) |
+| without Seattle | 3 | −0.078 (−0.110 to −0.046) |
+| without Atlanta | 3 | −0.066 (−0.098 to −0.035) |
+| **Providence and Seattle only** (the two cities whose idealised labs do not fail at block scale; `--exclude burlington_vt atlanta_ga`) | 2 | **−0.072 (−0.107 to −0.037)** |
+
+- **No single city carries the evening effect.** Every leave-one-out estimate lies between −0.066 and
+  −0.085 °F.
+- **Without Providence,** the most precise city, the interval just reaches zero (+0.006).
+- **The concern behind decision 12** was that Burlington's idealised no-effect world reads −0.066 °F, the
+  size of the pooled effect. The evening effect holds without Burlington, and without both cities whose
+  idealised labs fail (Burlington and Atlanta): −0.072 °F on Providence and Seattle alone.
+
+| Evening, street_300 | Cities | Pooled effect (95% CI) |
+|---|---|---|
+| all three | 3 | −0.136 (−0.198 to −0.075) |
+| without Providence | 2 | −0.118 (−0.203 to −0.033) |
+| without Burlington | 2 | −0.171 (−0.249 to −0.092) |
+| without Seattle | 2 | −0.126 (−0.205 to −0.048) |
+
 **Pooled estimates, street_300** (agent decision A4: a second pool with the same entry rule applied to
 street_300's own verdict; street_100 stays the primary pool):
 

@@ -52,3 +52,24 @@ def test_gdal_env_hands_the_ca_bundle_to_gdal_3_10(monkeypatch):
     monkeypatch.setenv("SSL_CERT_FILE", "/etc/ssl/certs/ca-certificates.crt")
     opts = gdal_env().options
     assert opts["GDAL_CURL_CA_BUNDLE"] == opts["CURL_CA_BUNDLE"] == "/etc/ssl/certs/ca-certificates.crt"
+
+
+def test_read_mosaic_joins_tiles_on_their_common_grid(tmp_path):
+    """Multi-tile support (owner decision 13): a window spanning two WorldCover-style tiles is read from both,
+    on their shared pixel grid; a missing tile (open sea) is skipped."""
+    rasterio = pytest.importorskip("rasterio")
+    from rasterio.transform import from_origin
+
+    from sparc.core.opendata import read_mosaic
+
+    px = 0.01
+    paths = []
+    for k, (west, val) in enumerate(((-72.0, 10), (-71.0, 50))):           # two 1°×1° tiles side by side
+        p = tmp_path / f"tile{k}.tif"
+        with rasterio.open(p, "w", driver="GTiff", height=100, width=100, count=1, dtype="uint8",
+                           crs="EPSG:4326", transform=from_origin(west, 42.0, px, px), nodata=0) as dst:
+            dst.write(np.full((1, 100, 100), val, dtype="uint8"))
+        paths.append(str(p))
+    arr, tr, nod = read_mosaic(paths + [str(tmp_path / "missing.tif")], (-71.2, 41.5, -70.8, 41.7))
+    assert arr.shape == (20, 40) and tr.a == pytest.approx(px) and tr.c == pytest.approx(-71.2)
+    assert (arr[:, :20] == 10).all() and (arr[:, 20:] == 50).all() and nod == 0

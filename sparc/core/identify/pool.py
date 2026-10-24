@@ -97,6 +97,20 @@ def loco(y, se, labels=None, method: str = "reml") -> dict:
     return {"rows": rows, "coverage": cov, "mae": float(np.mean([r["abs_error"] for r in rows])) if rows else None}
 
 
+def leave_one_out(y, se, labels, method: str = "reml") -> list[dict]:
+    """The pooled estimate refitted with each city left out in turn (owner decision 12): does the pooled
+    result rest on one city?"""
+    y, se = np.asarray(y, float), np.asarray(se, float)
+    out = []
+    for i in range(y.size):
+        keep = np.arange(y.size) != i
+        if not keep.any():
+            continue
+        f = random_effects(y[keep], se[keep], method)
+        out.append({"left_out": labels[i], "k": f["k"], "mu": f["mu"], "lo": f["lo"], "hi": f["hi"], "tau": f["tau"]})
+    return out
+
+
 def stouffer(z) -> dict:
     """Combined evidence from the cities' z values (unweighted Stouffer); negative z is cooling, so
     ``p_cooling`` is the lower-tail p-value."""
@@ -105,14 +119,14 @@ def stouffer(z) -> dict:
     return {"k": int(z.size), "z": zc, "p_cooling": float(stats.norm.cdf(zc))}
 
 
-def pool_runs(rows: list[dict], estimate: str = "street_100") -> dict:
+def pool_runs(rows: list[dict], estimate: str = "street_100", exclude=()) -> dict:
     """Per time window: random-effects pooling and leave-one-city-out over the runs that entered the pool
     (``rows`` as ``scripts/run_canopy_cities.py`` writes them to ``run_status.csv``).  ``street_100`` uses the
     ``pooled`` flag; ``street_300`` its own ``pooled_300`` flag (agent decision A4)."""
     flag = "pooled" if estimate == "street_100" else f"pooled_{estimate.rsplit('_', 1)[-1]}"
-    out: dict = {"estimate": estimate, "windows": {}}
+    out: dict = {"estimate": estimate, "excluded": list(exclude), "windows": {}}
     for win in sorted({r["window"] for r in rows}):
-        rs = [r for r in rows if r["window"] == win and r.get(flag) in (True, "True", 1)
+        rs = [r for r in rows if r["window"] == win and r.get(flag) in (True, "True", 1) and r["city"] not in exclude
               and r.get(estimate) is not None and r.get(f"{estimate}_se")]
         entry: dict = {"cities": [r["city"] for r in rs], "k": len(rs)}
         if rs:
@@ -120,6 +134,7 @@ def pool_runs(rows: list[dict], estimate: str = "street_100") -> dict:
             se = [float(r[f"{estimate}_se"]) for r in rs]
             entry["fit"] = random_effects(y, se)
             entry["loco"] = loco(y, se, [r["city"] for r in rs]) if len(rs) >= 4 else None
+            entry["leave_one_out"] = leave_one_out(y, se, [r["city"] for r in rs]) if len(rs) >= 2 else []
         out["windows"][win] = entry
     return out
 
@@ -139,4 +154,15 @@ def pool_markdown(res: dict) -> str:
         cov = f"{lc['coverage']:.0%} of {len(lc['rows'])}" if lc and lc["coverage"] is not None else "needs 4 cities"
         lines.append(f"| {win} | {f['k']} ({', '.join(e['cities'])}) | {f['mu']:+.3f} ({f['lo']:+.3f} to {f['hi']:+.3f}) | "
                      f"{f['tau']:.3f} | {pi} | {cov} |")
+    sens = [(w, e) for w, e in res["windows"].items() if e.get("leave_one_out")]
+    if sens:
+        lines += ["", "## Each city left out in turn", "", "| window | left out | cities | pooled effect (95% CI) |",
+                  "|---|---|---|---|"]
+        for win, e in sens:
+            f = e["fit"]
+            lines.append(f"| {win} | none | {f['k']} | {f['mu']:+.3f} ({f['lo']:+.3f} to {f['hi']:+.3f}) |")
+            for r in e["leave_one_out"]:
+                lines.append(f"| {win} | {r['left_out']} | {r['k']} | {r['mu']:+.3f} ({r['lo']:+.3f} to {r['hi']:+.3f}) |")
+    if res.get("excluded"):
+        lines += ["", f"Excluded from every window: {', '.join(res['excluded'])}."]
     return "\n".join(lines) + "\n"

@@ -35,6 +35,8 @@ if str(REPO) not in sys.path:
 import pandas as pd
 
 ROUTE_REPS = 36          # owner decision 3: fixed in advance for every city and run
+# agent decision A6: real-route labs score the traverse designs only (no forest-made map: ~7x faster)
+TRAVERSE_DESIGNS = ("street_100", "street_300", "reach_1000", "updown", "levels")
 HAND_CONFIGS = {"providence_ri": ("configs/core_providence.yml", "wu9v7")}   # slug → (hand-made config, traverse node)
 
 
@@ -183,7 +185,8 @@ def run_city(slug: str, args, py=sys.executable) -> tuple[dict, list[dict]]:
         have = _load(f)
         if args.force or not have or min((have.get("n_reps") or {}).values(), default=0) < ROUTE_REPS:
             steps[f"routes {tag}"] = _sh(ident + ["lab", *p, "--workers", str(args.workers), "--reps", str(ROUTE_REPS),
-                                                  "--routes", str(raw), "--window", tag], log, args.timeout_h)
+                                                  "--routes", str(raw), "--window", tag, "--designs", *TRAVERSE_DESIGNS],
+                                         log, args.timeout_h)
         labs[tag] = _load(f) or {}
     winds = {r: w for r, w in ((est.get("kilometre") or {}).get("winds") or {}).items() if "from_deg" in w}
     if len(winds) >= 2:

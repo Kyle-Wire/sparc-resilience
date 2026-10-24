@@ -101,7 +101,7 @@ def cmd_lab(args) -> int:
         if not args.append:
             (out / f"{name}.jsonl").unlink(missing_ok=True)
         run_lab(cfg, generators=gens, reps=args.reps, seed=args.seed, out_dir=out, workers=args.workers,
-                routes=routes, name=name)
+                routes=routes, name=name, **({"which": tuple(args.designs)} if args.designs else {}))
     rows = [json.loads(line) for line in (out / f"{name}.jsonl").read_text(encoding="utf-8").splitlines() if line]
     summ = summarize(rows)
     summ["config"] = str(args.project)
@@ -227,10 +227,11 @@ def cmd_pool(args) -> int:
 
     status = Path(args.status)
     rows = pd.read_csv(status).astype(object).where(lambda d: d.notna(), None).to_dict("records")
-    res = pool_runs(rows, args.estimate)
+    res = pool_runs(rows, args.estimate, exclude=tuple(args.exclude or ()))
     out = Path(args.out) if args.out else status.parent
     out.mkdir(parents=True, exist_ok=True)
-    stem = "pool" if args.estimate == "street_100" else f"pool_{args.estimate}"
+    stem = ("pool" if args.estimate == "street_100" else f"pool_{args.estimate}") + \
+        ("_without_" + "_".join(args.exclude) if args.exclude else "")
     (out / f"{stem}.json").write_text(json.dumps(res, indent=2), encoding="utf-8")
     md = pool_markdown(res)
     (out / f"{stem}.md").write_text(md, encoding="utf-8")
@@ -239,6 +240,7 @@ def cmd_pool(args) -> int:
 
 
 def main(argv=None) -> int:
+    from sparc.core.identify.estimators import ESTIMATORS
     from sparc.core.identify.validate import GENERATORS
 
     ap = argparse.ArgumentParser(prog="python -m sparc.core.identify", description=__doc__,
@@ -270,6 +272,8 @@ def main(argv=None) -> int:
     p.add_argument("--window", default="midday", help="with --routes: the run to replay (morning, midday, evening, "
                                                       "night or a run name; default midday)")
     p.add_argument("--timezone", default=None, help="with --routes: local time zone of tz-aware timestamps")
+    p.add_argument("--designs", nargs="*", choices=ESTIMATORS,
+                   help="designs to score (default all); without the map designs the forest-made map is skipped")
     p.add_argument("--rescore", action="store_true",
                    help="re-score the stored replicates against truths at the current street population, without "
                         "re-simulating (the previous summary is kept as <name>_before_rescore.json)")
@@ -319,6 +323,7 @@ def main(argv=None) -> int:
     p.add_argument("--out", default=None, help="folder for pool.json / pool.md (default: next to --status)")
     p.add_argument("--estimate", default="street_100", choices=["street_100", "street_300"],
                    help="which reading to pool (street_300: its own pool-entry flag, agent decision A4)")
+    p.add_argument("--exclude", nargs="*", metavar="CITY", help="cities to leave out of every window (sensitivity)")
     p.set_defaults(func=cmd_pool)
 
     args = ap.parse_args(argv)
