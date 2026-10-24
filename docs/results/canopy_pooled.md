@@ -23,6 +23,7 @@ not pooled.
 | Burlington, VT (2020-08-10) | Direction only | −0.012 °F (−0.047 to +0.022) | **2 of 3** |
 | Seattle, WA (2020-07-27) | Conservative | −0.045 °F (−0.122 to +0.033) | **1 of 3** |
 | Atlanta, GA (2021-09-04) | Not trustworthy | −0.074 °F (−0.144 to −0.005) | **2 of 3** |
+| Raleigh, NC (2021-07-23) | Conservative | +0.003 °F (−0.047 to +0.053) | **1 of 3** |
 | Scranton, PA (2023) | traverses carry no timestamps; skipped (owner decision 9) | — | — |
 
 | City | Run | Cell visits | Within 100 m (SE) | Real-route verdict (36 reps) | Pooled |
@@ -42,6 +43,9 @@ not pooled.
 | Atlanta | morning 06–07 | 10,067 | −0.033 (0.037) | Direction only | no |
 | Atlanta | afternoon 15–16 | 8,879 | −0.003 (0.063) | Trustworthy | yes |
 | Atlanta | evening 19–20 | 9,345 | −0.185 (0.062) | Trustworthy | yes |
+| Raleigh | morning 06–07 | 7,920 | −0.000 (0.029) | Direction only | no |
+| Raleigh | afternoon 15–16 | 6,031 | −0.008 (0.048) | Trustworthy | yes |
+| Raleigh | evening 19–20 | 7,760 | +0.016 (0.044) | Partial | no |
 
 ## Verdicts before and after P2 (owner decision 7)
 
@@ -130,14 +134,17 @@ On synthetic cities it recovers μ and τ, with leave-one-city-out coverage of 9
 | Window | Cities pooled | Pooled effect, +10 pp within 100 m (95% CI) | τ | Prediction interval, new city | Leave-one-city-out |
 |---|---|---|---|---|---|
 | **evening 19–20** | 4 (Providence −0.077, Burlington −0.044, Seattle −0.033, Atlanta −0.185) | **−0.074 °F (−0.105 to −0.043)** | 0.000 (I² 33%) | **−0.141 to −0.007** | 4 of 4 covered (uninformative: t with 1 df; see A5) |
-| afternoon 15–16 | 2 (Burlington −0.017, Atlanta −0.003) | −0.013 °F (−0.081 to +0.055) | 0.000 | needs 3 cities | — |
+| afternoon 15–16 | 3 (Burlington −0.017, Atlanta −0.003, Raleigh −0.008) | −0.011 °F (−0.066 to +0.043) | 0.000 | −0.367 to +0.344 | — |
 | morning 06–07 | 1 (Providence) | −0.029 °F (−0.093 to +0.035) | — | needs 3 cities | — |
 | night 00–01 | 1 (Providence) | −0.016 °F (−0.044 to +0.012) | — | needs 3 cities | — |
 
 - **The evening effect is consistent across four cities.** In the evening, a street with 10 pp more canopy
   within 100 m is about 0.07 °F cooler. Even the prediction interval for a city not yet measured excludes
   zero.
-- **Afternoon: still a null.** The two afternoon cities agree on about zero.
+- **Afternoon: still a null.** The three afternoon cities agree on about zero.
+- **Raleigh's evening run** reads +0.016 °F (−0.070 to +0.102). It is not pooled: its lab verdict is
+  Partial. A well-measured evening null is still a caution that the evening cooling may not hold in every
+  city.
 - **The Phase 3 gate is not judged yet.** It needs at least 8 cities in a window (agent decision A5).
 
 **Sensitivity: each city left out in turn** (owner decision 12; `pool.md` and `pool_street_300.md` in
