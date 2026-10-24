@@ -72,8 +72,24 @@ Burlington's afternoon one).
     design overstates them slightly, as it does in Seattle's idealised lab.
 - **Burlington's** morning still fails on false positives (14% with no effect).
 
-**Idealised labs.** Owner decision 7 and agent decision A1 call for 36 replicates under P2. These runs are in
-progress; the 12-replicate labs rescored under P2:
+**Idealised labs.** Owner decision 7 and agent decision A1 call for 36 replicates under P2.
+
+| City | street_100, 12 reps before P2 | 36 reps after P2 | Floors (100 m / 300 m) after |
+|---|---|---|---|
+| Providence | Trustworthy | **Trustworthy** (null −0.005 °F, 11%) | not valid / valid |
+| Burlington | Direction only | **Not trustworthy**: null mean −0.066 °F (above the 0.05 °F limit); misses `confounded` (bias −0.152 °F, coverage 69%) | not valid / not valid |
+| Seattle | Conservative | pending (queued after the new cities) | |
+| Albuquerque | Trustworthy | pending (queued after the new cities) | |
+
+- **Burlington's simulated campaigns** run on a street grid cut into short pieces by the unpaved
+  (forested) cells: 2,190 route cells against 19,210 paved ones. On those campaigns even the no-effect
+  world comes out at −0.066 °F.
+- **The real routes do not show this.** On the routes the vans actually drove, Burlington's no-effect world
+  is clean in all three runs (+0.010, −0.004, +0.013 °F).
+- **So the idealised lab is a poor model of Burlington's campaign.** Pool entry uses the real-route labs.
+  The idealised failure is reported and kept as a warning on Burlington's numbers.
+
+The 12-replicate labs rescored under P2 (same replicates, new truth):
 
 | City | street_100, 12 reps before P2 | 12 reps after P2 (rescored) |
 |---|---|---|
