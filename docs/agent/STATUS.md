@@ -189,7 +189,7 @@ next step.
       `test_models_pipeline.py`, against 33 warnings in earlier runs.
     - They appeared after the sandbox restart. No code they touch changed this session.
     - They did not recur. With `pool.py` added: 318 passed, 9 deselected, 33 warnings (10 min 15 s).
-  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, `307d20f`, COMMIT_POOL.
+  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, `307d20f`, `c126354`.
   - **Later in the session:**
     - Seattle ran through the driver.
     - Scranton is blocked (P3).
