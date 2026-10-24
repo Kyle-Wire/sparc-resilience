@@ -56,6 +56,7 @@ def run_rows(slug: str, estimate: dict, route_labs: dict[str, dict]) -> list[dic
         lab = route_labs.get(tag) or {}
         d = (lab.get("designs") or {}).get("street_100") or {}
         verdict = (d.get("verdict") or {}).get("status")
+        v300 = (((lab.get("designs") or {}).get("street_300") or {}).get("verdict") or {}).get("status")
         reps = min((lab.get("n_reps") or {}).values(), default=0)
         s100 = r["street"].get("street_100") or {}
         s300 = r["street"].get("street_300") or {}
@@ -65,7 +66,10 @@ def run_rows(slug: str, estimate: dict, route_labs: dict[str, dict]) -> list[dic
                     "street_300": s300.get("estimate"), "street_300_se": s300.get("se"),
                     "route_verdict": verdict or "not run", "route_reps": reps,
                     "floor_valid": bool((d.get("floor") or {}).get("valid", False)),
-                    "pooled": bool(verdict == "trustworthy" and reps >= ROUTE_REPS)})
+                    "pooled": bool(verdict == "trustworthy" and reps >= ROUTE_REPS),
+                    # agent decision A4: a second pool for street_300, same rule applied to its own verdict
+                    "route_verdict_300": v300 or "not run",
+                    "pooled_300": bool(v300 == "trustworthy" and reps >= ROUTE_REPS)})
     return out
 
 

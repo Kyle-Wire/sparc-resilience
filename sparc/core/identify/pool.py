@@ -107,10 +107,12 @@ def stouffer(z) -> dict:
 
 def pool_runs(rows: list[dict], estimate: str = "street_100") -> dict:
     """Per time window: random-effects pooling and leave-one-city-out over the runs that entered the pool
-    (``rows`` as ``scripts/run_canopy_cities.py`` writes them to ``run_status.csv``)."""
+    (``rows`` as ``scripts/run_canopy_cities.py`` writes them to ``run_status.csv``).  ``street_100`` uses the
+    ``pooled`` flag; ``street_300`` its own ``pooled_300`` flag (agent decision A4)."""
+    flag = "pooled" if estimate == "street_100" else f"pooled_{estimate.rsplit('_', 1)[-1]}"
     out: dict = {"estimate": estimate, "windows": {}}
     for win in sorted({r["window"] for r in rows}):
-        rs = [r for r in rows if r["window"] == win and r.get("pooled") in (True, "True", 1)
+        rs = [r for r in rows if r["window"] == win and r.get(flag) in (True, "True", 1)
               and r.get(estimate) is not None and r.get(f"{estimate}_se")]
         entry: dict = {"cities": [r["city"] for r in rs], "k": len(rs)}
         if rs:
@@ -123,7 +125,8 @@ def pool_runs(rows: list[dict], estimate: str = "street_100") -> dict:
 
 
 def pool_markdown(res: dict) -> str:
-    lines = ["# Pooled canopy effect (+10 pp within 100 m, °F)", "",
+    reach = res.get("estimate", "street_100").rsplit("_", 1)[-1]
+    lines = [f"# Pooled canopy effect (+10 pp within {reach} m, °F)", "",
              "| window | cities | pooled effect (95% CI) | tau | prediction interval, new city | LOCO coverage |",
              "|---|---|---|---|---|---|"]
     for win, e in res["windows"].items():

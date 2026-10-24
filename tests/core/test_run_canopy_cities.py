@@ -92,3 +92,11 @@ def test_the_status_table_is_cumulative_across_batches(drv, monkeypatch, tmp_pat
     runs = pd.read_csv(tmp_path / "output" / "core" / "pooled" / "run_status.csv")
     assert runs.groupby("city").size().to_dict() == {"burlington_vt": 3, "providence_ri": 3, "seattle_wa": 3}
     assert "| providence_ri |" in (tmp_path / "output" / "core" / "pooled" / "city_status.md").read_text()
+
+
+def test_rows_carry_the_street_300_verdict_and_its_pool_flag(drv):
+    lab = _lab("direction only")
+    lab["designs"]["street_300"] = {"verdict": {"status": "trustworthy"}}
+    rows = drv.run_rows("x", _estimate(), {"morning": lab})
+    assert rows[0]["pooled"] is False and rows[0]["pooled_300"] is True and rows[0]["route_verdict_300"] == "trustworthy"
+    assert rows[1]["pooled_300"] is False and rows[1]["route_verdict_300"] == "not run"

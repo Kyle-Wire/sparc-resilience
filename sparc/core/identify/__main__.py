@@ -227,12 +227,13 @@ def cmd_pool(args) -> int:
 
     status = Path(args.status)
     rows = pd.read_csv(status).astype(object).where(lambda d: d.notna(), None).to_dict("records")
-    res = pool_runs(rows)
+    res = pool_runs(rows, args.estimate)
     out = Path(args.out) if args.out else status.parent
     out.mkdir(parents=True, exist_ok=True)
-    (out / "pool.json").write_text(json.dumps(res, indent=2), encoding="utf-8")
+    stem = "pool" if args.estimate == "street_100" else f"pool_{args.estimate}"
+    (out / f"{stem}.json").write_text(json.dumps(res, indent=2), encoding="utf-8")
     md = pool_markdown(res)
-    (out / "pool.md").write_text(md, encoding="utf-8")
+    (out / f"{stem}.md").write_text(md, encoding="utf-8")
     print(md)
     return 0
 
@@ -316,6 +317,8 @@ def main(argv=None) -> int:
     p.add_argument("--status", default="output/core/pooled/run_status.csv",
                    help="run_status.csv from scripts/run_canopy_cities.py")
     p.add_argument("--out", default=None, help="folder for pool.json / pool.md (default: next to --status)")
+    p.add_argument("--estimate", default="street_100", choices=["street_100", "street_300"],
+                   help="which reading to pool (street_300: its own pool-entry flag, agent decision A4)")
     p.set_defaults(func=cmd_pool)
 
     args = ap.parse_args(argv)

@@ -77,3 +77,15 @@ def test_cli_pool_reads_the_driver_table(tmp_path):
     assert main(["pool", "--status", str(tmp_path / "run_status.csv")]) == 0
     res = json.loads((tmp_path / "pool.json").read_text())
     assert res["windows"]["evening"]["fit"]["mu"] == pytest.approx(-0.077) and res["windows"]["evening"]["k"] == 1
+
+
+def test_street_300_has_its_own_pool_entry_flag():
+    """Agent decision A4: street_300 is pooled under the same rule applied to its own verdict."""
+    rows = [{"city": "a", "window": "evening", "pooled": True, "pooled_300": False, "street_100": -0.05,
+             "street_100_se": 0.02, "street_300": -0.10, "street_300_se": 0.03},
+            {"city": "b", "window": "evening", "pooled": False, "pooled_300": True, "street_100": -0.01,
+             "street_100_se": 0.03, "street_300": -0.12, "street_300_se": 0.04}]
+    assert P.pool_runs(rows)["windows"]["evening"]["cities"] == ["a"]
+    r3 = P.pool_runs(rows, "street_300")
+    assert r3["windows"]["evening"]["cities"] == ["b"] and r3["windows"]["evening"]["fit"]["mu"] == pytest.approx(-0.12)
+    assert P.pool_markdown(r3).startswith("# Pooled canopy effect (+10 pp within 300 m")
