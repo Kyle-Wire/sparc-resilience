@@ -177,7 +177,7 @@ next step.
   - **Phase 3:** batch driver, pool status.
   - **Tests:** `pytest tests/core/test_identify.py tests/core -m "not slow"` gave 310 passed, 9 deselected
     (10 min 48 s).
-  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, COMMIT_S4.
+  - **Commits:** `83eb106`, `e767165`, `4cd39cf`, `fd4618f`, `116569f`, `7b8500b`, `b3c7d49`, `307d20f`.
   - **Later in the session:**
     - Seattle ran through the driver.
     - Scranton is blocked (P3).
