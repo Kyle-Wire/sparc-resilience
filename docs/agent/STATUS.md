@@ -68,6 +68,17 @@ edit any line; the agent treats owner edits as instructions.
 Newest first. One entry per decision made under owner decision 10: date, decision, why, what would show it
 was wrong.
 
+- **2026-10-24, A6 (decision 13: a cheaper lab): skip the forest-made map in campaigns whose designs do not
+  use it.** The driver's real-route labs request only the traverse designs.
+  - **What.** The idealised lab, which reports the map designs, is unchanged.
+  - **Why.** On Atlanta's evening routes a replicate takes about 21 s. About 18 s of that is the
+    random-forest map product and the two map designs, which the real-route labs do not need: the
+    pool-entry rule reads street_100 only. The traverse designs take 1–2 s.
+  - **It cannot change what the lab measures.** The product draws its random numbers after the campaign's
+    samples, so the planted field, the samples and every traverse design's estimate are the same.
+  - **Check.** Burlington's evening real-route lab is re-run both ways and compared value for value.
+  - **What would show it wrong:** any difference in a traverse design's numbers or verdict.
+
 - **2026-10-24, A5: the Phase 3 gate is judged only in a time window with at least 8 pooled cities.** Until
   then, leave-one-city-out coverage is reported as uninformative.
   - **Why.** The roadmap's gate is "leave-one-city-out prediction intervals cover close to nominal". With
