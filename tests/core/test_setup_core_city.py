@@ -36,8 +36,10 @@ def test_pilot_entry_and_campaign_from_the_traverse_clock(setup_mod):
     camp = setup_mod.campaign_from_traverses(_pts())
     assert camp["date"] == "2021-07-09" and camp["hours"] == [15, 16]
     assert camp["runs"] == ["2021-07-09 midday", "2021-07-09 morning"]
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="no afternoon run"):
         setup_mod.campaign_from_traverses(_pts().query("window == 'morning'"))
+    with pytest.raises(ValueError, match="no timestamps"):      # Scranton 2023: t_f, rh, hi_f and positions only
+        setup_mod.campaign_from_traverses(_pts().assign(time=pd.NaT))
 
 
 def test_study_bbox_is_the_pilot_bbox_clipped_to_the_traverses(setup_mod):

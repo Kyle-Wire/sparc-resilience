@@ -68,6 +68,8 @@ def pilot_entry(slug: str, pilot_path: Path) -> dict:
 
 def campaign_from_traverses(pts: pd.DataFrame) -> dict:
     """Date, local hours and centre of the afternoon run (the run CAPA's afternoon map is made from)."""
+    if not pts["time"].notna().any():
+        raise ValueError("the traverse files carry no timestamps (runs and passes cannot be formed)")
     mid = pts[pts["window"] == "midday"].dropna(subset=["time"])
     if not len(mid):
         raise ValueError("no afternoon run among the traverses")

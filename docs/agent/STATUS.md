@@ -98,14 +98,19 @@ edit any line; the agent treats owner edits as instructions.
   2. Re-run the real-route labs for Providence and Burlington, and the idealised labs, at 36 replicates with
      unchanged verdict rules.
   3. Update the pool status whatever the result.
-- **Either way:** add more single-tile northern cities through `run_canopy_cities.py`: Seattle `mz79p` (2020
-  "All Data" bundle) and Scranton `8cnq4` (2023). Portland `e7js9` returned HTTP 401.
+- **Either way:** add more single-tile northern cities through `run_canopy_cities.py`.
+  - **Scranton (`8cnq4`)** was tried. Its 2023 traverses carry only `t_f`, `rh`, `hi_f` and positions (no
+    time, no sensor), so no runs form. It is recorded as "failed at setup", and P3 is written.
+  - **Seattle (`mz79p`, 2020 "All Data" bundle)** is running.
+  - **Portland (`e7js9`)** returned HTTP 401.
 - **Lab cost per city:** 15 min (small, like Burlington) to 2 h (like Albuquerque) on 4 cores.
 
 **Blockers:** none.
 **Proposals awaiting owner approval:**
 - **P2:** score the lab's street designs against the streets the campaign drives
-  (`docs/agent/proposals/P2_lab_truth_at_sampled_cells.md`). Not built. The Phase 2 gate and the pool-entry
+  (`docs/agent/proposals/P2_lab_truth_at_sampled_cells.md`). Not built.
+- **P3:** read traverse layers with no timestamps or sensor ids, taking row order as time at 1 Hz
+  (`docs/agent/proposals/P3_timestampless_traverses.md`). Scranton's 2023 layout needs it. Not built. The Phase 2 gate and the pool-entry
   rule were accepted on 2026-10-24.
 
 **For the owner:** done 2026-10-24: the Oracle storage host is now in
